@@ -1,0 +1,613 @@
+// ==UserScript==
+// @name         Danbooru Grass
+// @namespace    http://tampermonkey.net/
+// @version      1.0
+// @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
+// @author       AkaringoP with Antigravity
+// @match        https://danbooru.donmai.us/users/*
+// @match        https://danbooru.donmai.us/profile
+// @grant        none
+// @homepageURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/tree/main/DanbooruGrass
+// @updateURL    https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @downloadURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @require      https://d3js.org/d3.v7.min.js
+// @require      https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // --- Configuration & Constants ---
+    const CONFIG = {
+        STORAGE_PREFIX: 'danbooru_contrib_',
+        CLEANUP_THRESHOLD_MS: 7 * 24 * 60 * 60 * 1000, // 7 Days
+        SELECTORS: {
+            STATISTICS_SECTION: 'div.user-statistics',
+        }
+    };
+
+    // --- 1. Context & Identity ---
+    class ProfileContext {
+        constructor() {
+            try {
+                this.currentUserId = this.getCurrentUserId();
+                this.targetUser = this.getTargetUserInfo();
+            } catch (e) {
+                console.error("[Danbooru Grass] Context Init Failed:", e);
+                this.targetUser = null;
+            }
+        }
+
+        getCurrentUserId() {
+            return document.body.getAttribute('data-current-user-id');
+        }
+
+        getTargetUserInfo() {
+            let name = null;
+            let joinDate = new Date().toISOString();
+
+            try {
+                // User Specific Selectors (Primary)
+                const nameEl = document.querySelector('#a-show > div:nth-child(1) > h1 > a');
+                if (nameEl) name = nameEl.textContent.trim();
+                else {
+                    const h1 = document.querySelector('h1');
+                    if (h1) name = h1.textContent.trim().replace(/^User: /, '');
+                }
+
+                if (!name) return null;
+
+                // Join Date
+                const ths = Array.from(document.querySelectorAll('th'));
+                const joinHeader = ths.find(el => el.textContent.trim() === 'Join Date');
+                if (joinHeader && joinHeader.nextElementSibling) {
+                    const val = joinHeader.nextElementSibling;
+                    const d = val.getAttribute('datetime') || val.textContent.trim();
+                    if (d) joinDate = d;
+                }
+
+            } catch (e) {
+                console.warn("[Danbooru Grass] Extraction error:", e);
+                return null;
+            }
+
+            return { name: name || 'Unknown', joinDate: new Date(joinDate) };
+        }
+
+        isValidProfile() {
+            return !!this.targetUser;
+        }
+    }
+
+    // --- 2. Data Manager (API) ---
+    class DataManager {
+        constructor() {
+            this.baseUrl = 'https://danbooru.donmai.us';
+        }
+
+        async getMetricData(metric, userInfo, year) {
+            try {
+                return await this.fetchReportData(metric, userInfo, year);
+            } catch (e) {
+                console.error("[Danbooru Grass] Report fetch failed:", e);
+                alert(`[Danbooru Grass] Load Failed: ${e.message}`);
+                return {};
+            }
+        }
+
+        async fetchReportData(metric, userInfo, year) {
+            const startDate = `${year}-01-01`;
+            const endDate = `${year}-12-31`;
+
+            let tagQuery = '';
+            const sanitizedName = userInfo.name.replace(/ /g, '_');
+            switch (metric) {
+                case 'uploads': tagQuery = `user:${sanitizedName}`; break;
+                case 'approvals': tagQuery = `approver:${sanitizedName}`; break;
+                case 'notes': tagQuery = `noteupdater:${sanitizedName}`; break; // Using noteupdater as discussed
+            }
+
+            const params = new URLSearchParams({
+                'search[tags]': tagQuery,
+                'search[from]': startDate,
+                'search[to]': endDate,
+                'search[period]': 'day',
+                'search[mode]': 'table', // We need table mode to parse counts
+                'commit': 'Search'
+            });
+
+            const url = `${this.baseUrl}/reports/posts?${params.toString()}`;
+            console.log("[Danbooru Grass] Fetching Report:", url);
+
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const html = await resp.text();
+
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            // Selector for the report table rows
+            const rows = doc.querySelectorAll('table.striped tbody tr');
+
+            const results = {};
+            rows.forEach(row => {
+                const cols = row.querySelectorAll('td');
+                if (cols.length >= 2) {
+                    const dateText = cols[0].textContent.trim(); // e.g., "2025-01-01"
+                    const countText = cols[1].textContent.trim(); // e.g., "14"
+                    const count = parseInt(countText, 10);
+
+                    if (dateText && !isNaN(count) && count > 0) {
+                        results[dateText] = count;
+                    }
+                }
+            });
+
+            return results;
+        }
+    }
+
+    // --- 4. Graph Renderer (UI) ---
+    class GraphRenderer {
+        constructor() {
+            this.containerId = 'danbooru-grass-container';
+            this.cal = null;
+        }
+
+        injectSkeleton() {
+            const existing = document.getElementById(this.containerId);
+            if (existing) existing.remove();
+
+            // Try Finding Injection Point
+            let stats = document.querySelector(CONFIG.SELECTORS.STATISTICS_SECTION);
+            if (!stats) {
+                // Selector Fallback
+                const table = document.querySelector('#a-show > div:nth-child(1) > div:nth-child(2) > table');
+                if (table) stats = table.parentElement;
+            }
+            if (!stats) {
+                // Text Fallback
+                const all = document.querySelectorAll('*');
+                for (let el of all) {
+                    if (el.textContent === 'Statistics' && (el.tagName === 'H1' || el.tagName === 'H2')) {
+                        stats = el.parentElement;
+                        break;
+                    }
+                }
+            }
+
+            if (!stats) {
+                console.error("[Danbooru Grass] Injection point not found.");
+                return false;
+            }
+
+            // Wrapper Logic
+            let wrapper = document.getElementById('danbooru-grass-wrapper');
+            if (!wrapper) {
+                if (stats.parentNode.id === 'danbooru-grass-wrapper') {
+                    wrapper = stats.parentNode;
+                } else {
+                    wrapper = document.createElement('div');
+                    wrapper.id = 'danbooru-grass-wrapper';
+                    wrapper.style.display = 'flex';
+                    wrapper.style.alignItems = 'flex-start';
+                    wrapper.style.gap = '20px';
+                    wrapper.style.flexWrap = 'wrap';
+                    wrapper.style.width = '100%';
+                    stats.parentNode.insertBefore(wrapper, stats);
+                    wrapper.appendChild(stats);
+                }
+            }
+
+            const container = document.createElement('div');
+            container.id = this.containerId;
+            container.style.flex = '1';
+            container.style.minWidth = '300px';
+            container.style.background = 'var(--card-background-color, #222)';
+            container.style.padding = '15px';
+            container.style.borderRadius = '8px';
+            container.style.minHeight = '180px';
+            container.style.color = 'var(--text-color, #eee)';
+            container.innerHTML = `
+                <div style="display:flex; justify-content:space-between; margin-bottom:10px; align-items:center;">
+                    <h2 style="font-size:1.2em; margin:0;">Contribution Graph</h2>
+                    <div id="grass-controls" style="gap:10px; display:flex;"></div>
+                </div>
+                <div id="cal-heatmap" style="overflow-x:auto; padding-bottom:5px;"></div>
+                <div id="grass-loading" style="text-align:center; padding:20px; color:#888;">Initializing...</div>
+            `;
+
+            wrapper.appendChild(container);
+
+            // Create Tooltip Element globally
+            if (!document.getElementById('danbooru-grass-tooltip')) {
+                const tooltip = document.createElement('div');
+                tooltip.id = 'danbooru-grass-tooltip';
+                tooltip.style.position = 'absolute';
+                tooltip.style.padding = '8px';
+                tooltip.style.background = '#222';
+                tooltip.style.color = '#fff';
+                tooltip.style.borderRadius = '4px';
+                tooltip.style.border = '1px solid #444';
+                tooltip.style.pointerEvents = 'none';
+                tooltip.style.opacity = '0';
+                tooltip.style.zIndex = '99999';
+                tooltip.style.fontSize = '12px';
+                document.body.appendChild(tooltip);
+            }
+
+            return true;
+        }
+
+        updateControls(availableYears, currentYear, currentMetric, onYearChange, onMetricChange) {
+            const controls = document.getElementById('grass-controls');
+            if (!controls) return;
+            controls.innerHTML = '';
+
+            const metricSel = document.createElement('select');
+            metricSel.className = 'ui-select';
+            ['uploads', 'approvals', 'notes'].forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.text = m.charAt(0).toUpperCase() + m.slice(1);
+                if (m === currentMetric) opt.selected = true;
+                metricSel.appendChild(opt);
+            });
+            metricSel.onchange = (e) => onMetricChange(e.target.value);
+            controls.appendChild(metricSel);
+        }
+
+        setLoading(isLoading) {
+            const el = document.getElementById('grass-loading');
+            if (el) el.style.display = isLoading ? 'block' : 'none';
+            const cal = document.getElementById('cal-heatmap');
+            if (cal) cal.style.opacity = isLoading ? '0.5' : '1';
+        }
+
+        renderGraph(dataMap, year, metric, userName, availableYears, onYearChange) {
+            // Update Header with Total Count and Embedded Year Selector
+            const total = Object.values(dataMap || {}).reduce((acc, v) => acc + v, 0);
+            const header = document.querySelector('#danbooru-grass-container h2');
+
+            if (header) {
+                header.innerHTML = ''; // Clear existing text
+
+                // 1. Text Part
+                const textSpan = document.createElement('span');
+                textSpan.textContent = `${total.toLocaleString()} contributions in `;
+                header.appendChild(textSpan);
+
+                // 2. Year Selector Part
+                if (availableYears && onYearChange) {
+                    const yearSelect = document.createElement('select');
+                    yearSelect.style.cssText = `
+                        font-family: inherit;
+                        font-size: inherit;
+                        font-weight: normal;
+                        color: #24292f;
+                        background-color: #f6f8fa;
+                        border: 1px solid #d0d7de;
+                        border-radius: 6px;
+                        padding: 2px 4px;
+                        margin-left: 6px;
+                        cursor: pointer;
+                        vertical-align: baseline;
+                    `;
+
+                    availableYears.forEach(y => {
+                        const opt = document.createElement('option');
+                        opt.value = y;
+                        opt.textContent = y;
+                        if (y === year) opt.selected = true;
+                        yearSelect.appendChild(opt);
+                    });
+
+                    yearSelect.onchange = (e) => onYearChange(parseInt(e.target.value, 10));
+                    header.appendChild(yearSelect);
+                } else {
+                    // Fallback if no controls passed (e.g. init)
+                    header.appendChild(document.createTextNode(year));
+                }
+            }
+
+            if (window.cal && typeof window.cal.destroy === 'function') {
+                try {
+                    window.cal.destroy();
+                } catch (e) {
+                    console.warn("[Danbooru Grass] Failed to destroy previous instance:", e);
+                }
+            }
+            window.cal = new CalHeatmap();
+
+            const source = Object.entries(dataMap || {}).map(([k, v]) => ({ date: k, value: v }));
+            const getUrl = (date, count) => {
+                if (!date) return null; // Allow count 0
+                let q = '';
+                switch (metric) {
+                    case 'uploads': q = `user:${userName} date:${date}`; break;
+                    case 'approvals': q = `approver:${userName} date:${date}`; break;
+                    case 'notes': return `/note_versions?search[updater_id]=${userId}&search[created_at_le]=${date}T23:59&search[created_at_ge]=${date}T00:00`;
+                }
+                return `/posts?tags=${encodeURIComponent(q)}`;
+            };
+
+            // Inject Custom CSS
+            const styleId = 'danbooru-grass-styles';
+            if (!document.getElementById(styleId)) {
+                const style = document.createElement('style');
+                style.id = styleId;
+                style.textContent = `
+                    /* Container & Header Styling */
+                    #danbooru-grass-container {
+                        background-color: #fff !important;
+                        color: #24292f !important;
+                        border-radius: 6px;
+                    }
+                    #danbooru-grass-container h2 {
+                        color: #24292f !important;
+                        font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+                        font-weight: normal !important;
+                    }
+                    /* Controls */
+                    #grass-controls select {
+                        background-color: #f6f8fa !important;
+                        color: #24292f !important;
+                        border: 1px solid #d0d7de !important;
+                        border-radius: 6px;
+                        padding: 2px 2px;
+                    }
+                    /* Empty Cells & Domain Backgrounds */
+                    .ch-subdomain-bg { fill: #ebedf0; }
+                    .ch-domain-bg { fill: transparent !important; } /* Fix black bars */
+                    
+                    /* Month Labels */
+                    .ch-domain-text {
+                        fill: #24292f !important;
+                        font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+                        font-size: 10px;
+                    }
+                    
+                    /* Scrollable Area */
+                    #cal-heatmap-scroll {
+                        overflow-x: auto;
+                        overflow-y: hidden;
+                        flex: 1;
+                        white-space: nowrap;
+                    }
+                    #cal-heatmap-scroll::-webkit-scrollbar { height: 8px; }
+                    #cal-heatmap-scroll::-webkit-scrollbar-thumb {
+                        background: #d0d7de;
+                        border-radius: 4px;
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+
+            // Ensure our container structure supports the side-label + scrollable graph
+            const container = document.getElementById('cal-heatmap');
+            container.innerHTML = ''; // Reset
+            container.style.display = 'flex';
+            container.style.flexDirection = 'row';
+            container.style.alignItems = 'flex-start'; // Align Top to avoid Scrollbar offset issues
+            container.style.overflow = 'hidden';
+
+            // 1. Label Column
+            const labels = document.createElement('div');
+            labels.id = 'gh-day-labels';
+            labels.style.display = 'flex';
+            labels.style.flexDirection = 'column';
+            // Align padding-top: Month Header (20px)
+            labels.style.paddingTop = '20px';
+            labels.style.paddingRight = '5px';
+            labels.style.marginRight = '5px';
+            labels.style.textAlign = 'right';
+            labels.style.flexShrink = '0';
+            labels.style.color = '#24292f';
+            labels.style.fontSize = '9px';
+
+            // Align "Mon, Wed, Fri" to rows 1, 3, 5 (Sunday is Row 0)
+            // Grid Stride = Cell Height (11) + Gutter (2).
+            // To match perfectly, we use divs of Height 11px and Margin-Bottom 2px.
+            const rowStyle = 'height:11px; line-height:11px; margin-bottom:2px;';
+            const hiddenStyle = 'height:11px; visibility:hidden; margin-bottom:2px;';
+            const lastHiddenStyle = 'height:11px; visibility:hidden; margin-bottom:0;';
+
+            labels.innerHTML = `
+                <div style="${hiddenStyle}"></div> <!-- Sun (0) -->
+                <div style="${rowStyle}">Mon</div> <!-- Mon (1) -->
+                <div style="${hiddenStyle}"></div> <!-- Tue (2) -->
+                <div style="${rowStyle}">Wed</div> <!-- Wed (3) -->
+                <div style="${hiddenStyle}"></div> <!-- Thu (4) -->
+                <div style="${rowStyle}">Fri</div> <!-- Fri (5) -->
+                <div style="${lastHiddenStyle}"></div> <!-- Sat (6) -->
+            `;
+            container.appendChild(labels);
+
+            // 2. Scrollable Graph Wrapper
+            const scrollWrapper = document.createElement('div');
+            scrollWrapper.id = 'cal-heatmap-scroll';
+            scrollWrapper.style.minHeight = '140px'; // Ensure height for graph
+            container.appendChild(scrollWrapper);
+
+            // 3. Legend Injection
+            const mainContainer = document.getElementById('danbooru-grass-container');
+            if (!document.getElementById('danbooru-grass-legend')) {
+                const legend = document.createElement('div');
+                legend.id = 'danbooru-grass-legend';
+                legend.style.display = 'flex';
+                legend.style.justifyContent = 'flex-end';
+                legend.style.alignItems = 'center';
+                legend.style.padding = '5px 20px 10px 0'; // Right align padding
+                legend.style.fontSize = '10px';
+                legend.style.color = '#57606a';
+                legend.style.gap = '4px';
+
+                // Adjusted to 6 colors to support 5 thresholds: 1, 5, 10, 30, 50
+                const colors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39', '#0e4429'];
+                // Thresholds: <1 (Grey), 1-4, 5-9, 10-29, 30-49, 50+ (Darkest)
+                const rects = colors.map(c =>
+                    `<div style="width:10px; height:10px; background-color:${c}; border-radius:2px;"></div>`
+                ).join('');
+
+                legend.innerHTML = `
+                    <span style="margin-right:4px;">Less</span>
+                    ${rects}
+                    <span style="margin-left:4px;">More</span>
+                `;
+                mainContainer.appendChild(legend);
+            }
+
+            console.log(`[Danbooru Grass] Rendering graph for ${year}. Data points: ${source.length}`);
+
+            window.cal.paint({
+                itemSelector: '#cal-heatmap-scroll',
+                range: 12,
+                domain: {
+                    type: 'month',
+                    gutter: 3,
+                    label: { position: 'top', text: 'MMM', height: 20, textAlign: 'start' }
+                },
+                subDomain: {
+                    type: 'day',
+                    radius: 2,
+                    width: 11,
+                    height: 11,
+                    gutter: 2,
+                    label: null
+                },
+                // Align start date to Local Jan 1st 00:00, represented as UTC to match data
+                date: { start: new Date(new Date(year, 0, 1).getTime() - (new Date().getTimezoneOffset() * 60000)) },
+                data: { source: source, x: 'date', y: 'value' },
+                scale: {
+                    color: {
+                        range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39', '#0e4429'],
+                        domain: [1, 5, 10, 30, 50],
+                        type: 'threshold'
+                    }
+                },
+                theme: 'light',
+            })
+                .then(() => {
+                    console.log("[Danbooru Grass] Render complete.");
+                    // Re-apply Styles and Interaction
+                    setTimeout(() => {
+                        const tooltip = d3.select('#danbooru-grass-tooltip');
+
+                        // 1. Tooltips for Graph Cells
+                        d3.selectAll('#cal-heatmap-scroll rect')
+                            .attr('rx', 2).attr('ry', 2) // Apply border radius
+                            .on('mouseover', function (event, d) {
+                                // Fallback for datum if D3 binding is tricky
+                                const datum = d || d3.select(this).datum();
+                                if (!datum || !datum.t) return;
+
+                                const count = (datum.v !== null && datum.v !== undefined) ? datum.v : 0;
+                                const dateStr = new Date(datum.t).toISOString().split('T')[0];
+
+                                tooltip.style('opacity', 1)
+                                    .html(`<strong>${dateStr}</strong>, ${count} ${metric}`)
+                                    .style('left', (event.pageX + 10) + 'px')
+                                    .style('top', (event.pageY - 28) + 'px');
+                            })
+                            .on('mouseout', () => tooltip.style('opacity', 0))
+                            .on('click', function (event, d) {
+                                const datum = d || d3.select(this).datum();
+                                if (!datum || !datum.t) return;
+                                // Enable click even if value is 0
+                                const count = (datum.v !== null && datum.v !== undefined) ? datum.v : 0;
+                                const dateStr = new Date(datum.t).toISOString().split('T')[0];
+                                const link = getUrl(dateStr, count);
+                                if (link) window.open(link, '_blank');
+                            });
+
+                        // 2. Tooltips for Legend Cells
+                        const legendThresholds = ["0 (Less)", "1-4", "5-9", "10-29", "30-49", "50+ (More)"];
+
+                        // Select the 6 manual colored divs in the legend
+                        // We target > div because we built the legend with standard HTML divs, not SVG.
+                        const legendDivs = d3.selectAll('#danbooru-grass-legend > div');
+
+                        legendDivs.each(function (d, i) {
+                            if (i >= 0 && i < legendThresholds.length) {
+                                d3.select(this)
+                                    .on('mouseover', function (event) {
+                                        tooltip.style('opacity', 1)
+                                            .html(legendThresholds[i])
+                                            .style('left', (event.pageX + 10) + 'px')
+                                            .style('top', (event.pageY - 28) + 'px');
+                                    })
+                                    .on('mouseout', () => tooltip.style('opacity', 0));
+                            }
+                        });
+                    }, 300); // Increased timeout significantly to ensure render is done
+                })
+                .catch(err => {
+                    console.error("[Danbooru Grass] Render failed:", err);
+                });
+        }
+    }
+
+    // --- Main Execution ---
+    async function main() {
+        const context = new ProfileContext();
+        if (!context.isValidProfile()) {
+            console.log("[Danbooru Grass] Not a valid profile page or extraction failed.");
+            return;
+        }
+
+        console.log(`[Danbooru Grass] Initializing for ${context.targetUser.name}`);
+
+        const dataManager = new DataManager();
+        const renderer = new GraphRenderer();
+
+        const injected = renderer.injectSkeleton();
+        if (!injected) {
+            console.log("[Danbooru Grass] UI injection failed. Aborting.");
+            return;
+        }
+
+        let currentYear = new Date().getFullYear();
+        let currentMetric = 'uploads';
+
+        const joinYear = context.targetUser.joinDate.getFullYear();
+        const years = [];
+        const startYear = Math.max(joinYear, 2005);
+        for (let y = currentYear; y >= startYear; y--) years.push(y);
+
+        const updateView = async () => {
+            const onYearChange = (y) => { currentYear = y; updateView(); };
+
+            renderer.setLoading(true);
+            try {
+                // Initial render for layout (header updates here slightly prematurely but data fills in later)
+                // We pass the callback even here so the dropdown works during loading if clicked
+                await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser.name, years, onYearChange);
+
+                renderer.updateControls(years, currentYear, currentMetric,
+                    onYearChange,
+                    (m) => { currentMetric = m; updateView(); }
+                );
+
+                const data = await dataManager.getMetricData(currentMetric, context.targetUser, currentYear);
+
+                await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser.name, years, onYearChange);
+            } catch (e) {
+                console.error(e);
+            } finally {
+                renderer.setLoading(false);
+            }
+        };
+
+        // Initial Load
+        updateView();
+    }
+
+    // Run
+    // Wait for DOM
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', main);
+    } else {
+        main();
+    }
+
+})();

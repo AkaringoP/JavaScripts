@@ -1,0 +1,18 @@
+# OS junk files
+*.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE config
+.vscode/
+.idea/
+
+# Node/Logs (Just in case you use npm later)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
