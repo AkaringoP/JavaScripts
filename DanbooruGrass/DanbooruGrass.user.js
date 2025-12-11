@@ -7,9 +7,9 @@
 // @match        https://danbooru.donmai.us/users/*
 // @match        https://danbooru.donmai.us/profile
 // @grant        none
-// @homepageURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/tree/main/DanbooruGrass
-// @updateURL    https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
-// @downloadURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruGrass
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
 // @require      https://d3js.org/d3.v7.min.js
 // @require      https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js
 // ==/UserScript==
