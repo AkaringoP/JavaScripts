@@ -7,9 +7,9 @@
 // @match        https://danbooru.donmai.us/users/*
 // @match        https://danbooru.donmai.us/profile
 // @grant        none
-// @homepageURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/tree/main/DanbooruGrass
-// @updateURL    https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
-// @downloadURL  https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruGrass
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
 // @require      https://d3js.org/d3.v7.min.js
 // @require      https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js
 // ==/UserScript==
@@ -30,16 +30,11 @@
     class ProfileContext {
         constructor() {
             try {
-                this.currentUserId = this.getCurrentUserId();
                 this.targetUser = this.getTargetUserInfo();
             } catch (e) {
                 console.error("[Danbooru Grass] Context Init Failed:", e);
                 this.targetUser = null;
             }
-        }
-
-        getCurrentUserId() {
-            return document.body.getAttribute('data-current-user-id');
         }
 
         getTargetUserInfo() {
@@ -326,7 +321,7 @@
                 switch (metric) {
                     case 'uploads': q = `user:${userName} date:${date}`; break;
                     case 'approvals': q = `approver:${userName} date:${date}`; break;
-                    case 'notes': return `/note_versions?search[updater_id]=${userId}&search[created_at_le]=${date}T23:59&search[created_at_ge]=${date}T00:00`;
+                    case 'notes': q = `noteupdater:${userName} date:${date}`; break;
                 }
                 return `/posts?tags=${encodeURIComponent(q)}`;
             };
@@ -359,14 +354,14 @@
                     /* Empty Cells & Domain Backgrounds */
                     .ch-subdomain-bg { fill: #ebedf0; }
                     .ch-domain-bg { fill: transparent !important; } /* Fix black bars */
-                    
+
                     /* Month Labels */
                     .ch-domain-text {
                         fill: #24292f !important;
                         font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
                         font-size: 10px;
                     }
-                    
+
                     /* Scrollable Area */
                     #cal-heatmap-scroll {
                         overflow-x: auto;
