@@ -16,7 +16,7 @@
 ## Installation
 
 1.  Install a UserScript manager like **[Tampermonkey](https://www.tampermonkey.net/)**.
-2.  **[Click Here to Install](https://github.com/AkaringoP/Danbooru-Grass/raw/main/DanbooruGrass.user.js)** (Update this link after pushing).
+2.  **[Click Here to Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/DanbooruGrass/DanbooruGrass.user.js)** (Update this link after pushing).
 3.  Confirm the installation in Tampermonkey.
 
 ## Usage
