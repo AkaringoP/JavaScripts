@@ -2,7 +2,8 @@
 
 **Danbooru Grass** is a UserScript that injects a GitHub-style contribution graph into Danbooru profile pages. It allows you to visualize your upload, approval, and note editing history over the years.
 
-![Screenshot](https://github.com/user-attachments/assets/placeholder)
+<img width="1371" height="382" alt="image" src="https://github.com/user-attachments/assets/6768a5ca-6fff-47c0-a1f8-b6697d3f6664" />
+
 
 ## Features
 
