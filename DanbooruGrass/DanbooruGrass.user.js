@@ -99,7 +99,7 @@
             switch (metric) {
                 case 'uploads': tagQuery = `user:${sanitizedName}`; break;
                 case 'approvals': tagQuery = `approver:${sanitizedName}`; break;
-                case 'notes': tagQuery = `noteupdater:${sanitizedName}`; break; // Using noteupdater as discussed
+                case 'notes': tagQuery = `noteupdater:${sanitizedName}`; break;
             }
 
             const params = new URLSearchParams({
@@ -315,13 +315,14 @@
             window.cal = new CalHeatmap();
 
             const source = Object.entries(dataMap || {}).map(([k, v]) => ({ date: k, value: v }));
+            const sanitizedName = userName.replace(/ /g, '_');
             const getUrl = (date, count) => {
                 if (!date) return null; // Allow count 0
                 let q = '';
                 switch (metric) {
-                    case 'uploads': q = `user:${userName} date:${date}`; break;
-                    case 'approvals': q = `approver:${userName} date:${date}`; break;
-                    case 'notes': q = `noteupdater:${userName} date:${date}`; break;
+                    case 'uploads': q = `user:${sanitizedName} date:${date}`; break;
+                    case 'approvals': q = `approver:${sanitizedName} date:${date}`; break;
+                    case 'notes': q = `noteupdater:${sanitizedName} date:${date}`; break;
                 }
                 return `/posts?tags=${encodeURIComponent(q)}`;
             };
