@@ -302,6 +302,30 @@
             }
         }
 
+        async clearCache(metric, userInfo) {
+            try {
+                let storeName;
+                switch (metric) {
+                    case 'uploads': storeName = 'uploads'; break;
+                    case 'approvals': storeName = 'approvals'; break;
+                    case 'notes': storeName = 'notes'; break;
+                    default: return;
+                }
+                const table = this.db[storeName];
+                const userIdVal = userInfo.id || userInfo.name;
+
+                // Delete all entries for this user in this store
+                // We find them by userId index and delete
+                const items = await table.where('userId').equals(userIdVal).primaryKeys();
+                await table.bulkDelete(items);
+                console.log(`[Danbooru Grass] Cleared ${items.length} items from ${storeName} for ${userIdVal}`);
+                return true;
+            } catch (e) {
+                console.error("[Danbooru Grass] Clear cache failed:", e);
+                return false;
+            }
+        }
+
         async fetchAllPages(endpoint, params) {
             let allItems = [];
             let page = 1;
@@ -433,7 +457,7 @@
             return true;
         }
 
-        updateControls(availableYears, currentYear, currentMetric, onYearChange, onMetricChange) {
+        updateControls(availableYears, currentYear, currentMetric, onYearChange, onMetricChange, onRefresh) {
             const controls = document.getElementById('grass-controls');
             if (!controls) return;
             controls.innerHTML = '';
@@ -449,6 +473,27 @@
             });
             metricSel.onchange = (e) => onMetricChange(e.target.value);
             controls.appendChild(metricSel);
+
+            // Refresh Button
+            const refreshBtn = document.createElement('button');
+            refreshBtn.textContent = '↻';
+            refreshBtn.title = 'Clear Cache & Refresh';
+            refreshBtn.style.cssText = `
+                margin-left: 5px;
+                padding: 2px 8px;
+                border: 1px solid #d0d7de;
+                border-radius: 6px;
+                background-color: #f6f8fa;
+                cursor: pointer;
+                font-size: 1.1em;
+                color: #24292f;
+            `;
+            refreshBtn.onclick = () => {
+                if (confirm('Clear cache and re-fetch all data for this view?')) {
+                    onRefresh();
+                }
+            };
+            controls.appendChild(refreshBtn);
         }
 
         setLoading(isLoading) {
@@ -780,7 +825,12 @@
 
                 renderer.updateControls(years, currentYear, currentMetric,
                     onYearChange,
-                    (m) => { currentMetric = m; updateView(); }
+                    (m) => { currentMetric = m; updateView(); },
+                    async () => {
+                        renderer.setLoading(true);
+                        await dataManager.clearCache(currentMetric, context.targetUser);
+                        updateView();
+                    }
                 );
 
                 const data = await dataManager.getMetricData(currentMetric, context.targetUser, currentYear);
