@@ -246,6 +246,14 @@
                     items.forEach(item => {
                         const rawDate = item[dateKey] || item['created_at'];
                         if (!rawDate) return;
+
+                        // Validation: Strict User ID Check
+                        // post_events search by 'approver:NAME' returns all events for matched posts, 
+                        // which may include previous approvals by others. We must filter by creator_id.
+                        if (userInfo.id && item[idKey] && String(item[idKey]) !== String(userInfo.id)) {
+                            return;
+                        }
+
                         const dateStr = rawDate.slice(0, 10);
                         dailyCounts[dateStr] = (dailyCounts[dateStr] || 0) + 1;
                     });
@@ -503,7 +511,7 @@
             if (cal) cal.style.opacity = isLoading ? '0.5' : '1';
         }
 
-        renderGraph(dataMap, year, metric, userName, availableYears, onYearChange) {
+        async renderGraph(dataMap, year, metric, userInfo, availableYears, onYearChange) {
             // Update Header with Total Count and Embedded Year Selector
             const total = Object.values(dataMap || {}).reduce((acc, v) => acc + v, 0);
             const header = document.querySelector('#danbooru-grass-container h2');
@@ -558,18 +566,39 @@
             }
             window.cal = new CalHeatmap();
 
+            const userName = userInfo.name || userInfo;
+
+            // Ensure our container structure supports the side-label + scrollable graph
+            const container = document.getElementById('cal-heatmap');
+            if (!container) return;
+
             const source = Object.entries(dataMap || {}).map(([k, v]) => ({ date: k, value: v }));
             const sanitizedName = userName.replace(/ /g, '_');
+
             const getUrl = (date, count) => {
-                if (!date) return null; // Allow count 0
-                let q = '';
+                if (!date) return null;
+                const dateRange = `${date}..${date}`;
+
                 switch (metric) {
-                    case 'uploads': q = `user:${sanitizedName} date:${date}`; break;
-                    case 'approvals': q = `approver:${sanitizedName} date:${date}`; break;
-                    case 'notes': q = `noteupdater:${sanitizedName} date:${date}`; break;
+                    case 'uploads':
+                        return `/posts?tags=user:${sanitizedName}+date:${date}`;
+                    case 'approvals':
+                        return null; // Disable click for approvals (hover only)
+                    case 'notes':
+                        const noteParams = new URLSearchParams({
+                            'search[created_at]': dateRange
+                        });
+                        if (userInfo.id) {
+                            noteParams.set('search[updater_id]', userInfo.id);
+                        } else {
+                            noteParams.set('search[updater_name]', userName);
+                        }
+                        return `/note_versions?${noteParams.toString()}`;
+                    default:
+                        return null;
                 }
-                return `/posts?tags=${encodeURIComponent(q)}`;
             };
+
 
             // Inject Custom CSS
             const styleId = 'danbooru-grass-styles';
@@ -624,7 +653,7 @@
             }
 
             // Ensure our container structure supports the side-label + scrollable graph
-            const container = document.getElementById('cal-heatmap');
+
             container.innerHTML = ''; // Reset
             container.style.display = 'flex';
             container.style.flexDirection = 'row';
@@ -821,7 +850,7 @@
             try {
                 // Initial render for layout (header updates here slightly prematurely but data fills in later)
                 // We pass the callback even here so the dropdown works during loading if clicked
-                await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser.name, years, onYearChange);
+                await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser, years, onYearChange);
 
                 renderer.updateControls(years, currentYear, currentMetric,
                     onYearChange,
@@ -835,7 +864,7 @@
 
                 const data = await dataManager.getMetricData(currentMetric, context.targetUser, currentYear);
 
-                await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser.name, years, onYearChange);
+                await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser, years, onYearChange);
             } catch (e) {
                 console.error(e);
             } finally {
