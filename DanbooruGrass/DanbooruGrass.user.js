@@ -585,15 +585,7 @@
                     case 'approvals':
                         return null; // Disable click for approvals (hover only)
                     case 'notes':
-                        const noteParams = new URLSearchParams({
-                            'search[created_at]': dateRange
-                        });
-                        if (userInfo.id) {
-                            noteParams.set('search[updater_id]', userInfo.id);
-                        } else {
-                            noteParams.set('search[updater_name]', userName);
-                        }
-                        return `/note_versions?${noteParams.toString()}`;
+                        return `/posts?tags=noteupdater:${sanitizedName}+date:${date}`;
                     default:
                         return null;
                 }
