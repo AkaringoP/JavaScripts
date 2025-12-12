@@ -6,7 +6,7 @@ A collection of UserScripts developed by **AkaringoP** (with Antigravity).
 
 | Script Name | Description | Install |
 | :--- | :--- | :--- |
-| **[Danbooru Grass](./DanbooruGrass)** | Injects a GitHub-style contribution graph into Danbooru profile pages. | [Install](https://github.com/YOUR_GITHUB_USERNAME/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js) |
+| **[Danbooru Grass](./DanbooruGrass)** | Injects a GitHub-style contribution graph into Danbooru profile pages. | [Install](https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js) |
 
 ## How to Install
 
