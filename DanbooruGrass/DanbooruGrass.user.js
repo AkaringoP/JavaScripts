@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Grass
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      2.0
 // @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -12,6 +12,7 @@
 // @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruGrass/DanbooruGrass.user.js
 // @require      https://d3js.org/d3.v7.min.js
 // @require      https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js
+// @require      https://unpkg.com/dexie/dist/dexie.js
 // ==/UserScript==
 
 (function () {
@@ -27,6 +28,19 @@
     };
 
     // --- 1. Context & Identity ---
+    // --- 1.5 Database (Dexie.js) ---
+    class Database extends Dexie {
+        constructor() {
+            super('DanbooruGrassDB');
+            this.version(1).stores({
+                uploads: 'id, userId, date, count', // id: [userId]_[date]
+                approvals: 'id, userId, date, count',
+                notes: 'id, userId, date, count'
+            });
+        }
+    }
+
+    // --- 1. Context & Identity ---
     class ProfileContext {
         constructor() {
             try {
@@ -39,10 +53,17 @@
 
         getTargetUserInfo() {
             let name = null;
+            let id = null;
             let joinDate = new Date().toISOString();
 
             try {
-                // User Specific Selectors (Primary)
+                // 1. Try to get ID and Name from body attributes (Danbooru usually has these)
+                const body = document.body;
+                // On profile page, data-user-name might be the logged-in user, not target.
+                // But usually, there is a specific meta tag or current-user specific generic selector?
+                // Actually, Danbooru profile pages often put ID in the URL or a specific element.
+
+                // Strategy: Look for "User: [Name]" header
                 const nameEl = document.querySelector('#a-show > div:nth-child(1) > h1 > a');
                 if (nameEl) name = nameEl.textContent.trim();
                 else {
@@ -51,6 +72,39 @@
                 }
 
                 if (!name) return null;
+
+                // 2. Try to get User ID
+                // Option A: Link to "My Account" or similar might exist, but we need TARGET user ID.
+                // Option B: Look for 'User ID: X' in stats or data attributes.
+                // Inspecting Danbooru source: <div class="user-statistics"> ... </div> doesn't always have ID.
+                // Reliable: The "Messages" link usually contains /users/ID/messages
+                const messagesLink = document.querySelector('a[href*="/messages?search%5Bto_user_id%5D="]');
+                if (messagesLink) {
+                    const match = messagesLink.href.match(/to_user_id%5D=(\d+)/);
+                    if (match) id = match[1];
+                }
+
+                // Fallback: Look for any link to /users/ID/edit or similar if it's own profile,
+                // OR search for a link that looks like /users/ID/params...
+                if (!id) {
+                    const userLinks = document.querySelectorAll(`a[href^="/users/"]`);
+                    for (let link of userLinks) {
+                        const m = link.href.match(/\/users\/(\d+)/);
+                        // We must ensure this link isn't pointing to SOMEONE ELSE (e.g. inviter).
+                        // But usually the profile page links to itself in tabs.
+                        // Let's rely on the fact that we know the Name.
+                        if (m && link.textContent.includes(name)) {
+                            id = m[1];
+                            break;
+                        }
+                    }
+                }
+
+                if (!id) {
+                    // Last Resort: If we can't find ID, we might need it for some API calls (Notes).
+                    // Uploads/Approvals use Name. Notes use ID.
+                    console.warn("[Danbooru Grass] User ID not found directly.");
+                }
 
                 // Join Date
                 const ths = Array.from(document.querySelectorAll('th'));
@@ -66,79 +120,221 @@
                 return null;
             }
 
-            return { name: name || 'Unknown', joinDate: new Date(joinDate) };
+            return { name: name || 'Unknown', id: id, joinDate: new Date(joinDate) };
         }
 
         isValidProfile() {
-            return !!this.targetUser;
+            return !!this.targetUser && !!this.targetUser.name;
         }
     }
 
-    // --- 2. Data Manager (API) ---
+    // --- 2. Data Manager (API & Cache) ---
     class DataManager {
         constructor() {
             this.baseUrl = 'https://danbooru.donmai.us';
+            this.db = new Database();
         }
 
         async getMetricData(metric, userInfo, year) {
             try {
-                return await this.fetchReportData(metric, userInfo, year);
+                // Determine fetch configuration
+                let endpoint, params, storeName, dateKey, idKey;
+                const startDate = `${year}-01-01`;
+                const endDate = `${year}-12-31`;
+
+                // Params common to all
+                const baseParams = {
+                    limit: 200,
+                };
+
+                switch (metric) {
+                    case 'uploads':
+                        endpoint = '/posts.json';
+                        storeName = 'uploads';
+                        dateKey = 'created_at';
+                        idKey = 'uploader_id';
+                        params = {
+                            ...baseParams,
+                            only: 'uploader_id,created_at'
+                        };
+                        break;
+                    case 'approvals':
+                        endpoint = '/post_events.json';
+                        storeName = 'approvals';
+                        dateKey = 'event_at';
+                        idKey = 'creator_id';
+                        params = {
+                            ...baseParams,
+                            'search[category]': 'Approval',
+                            only: 'creator_id,event_at'
+                        };
+                        break;
+                    case 'notes':
+                        if (!userInfo.id) throw new Error("User ID required for Notes");
+                        endpoint = '/note_versions.json';
+                        storeName = 'notes';
+                        dateKey = 'created_at';
+                        idKey = 'updater_id';
+                        params = {
+                            ...baseParams,
+                            'search[updater_id]': userInfo.id,
+                            only: 'updater_id,created_at'
+                        };
+                        break;
+                    default:
+                        return {};
+                }
+
+                const table = this.db[storeName];
+                const userIdVal = userInfo.id || userInfo.name;
+                const idPrefix = `${userIdVal}_`;
+
+                // 1. Check for latest cached date for this user in this year
+                // We use the ID range to efficiently find the last entry for this user.
+                // ID format: "UserId_YYYY-MM-DD"
+                let fetchFromDate = startDate;
+
+                // Query range for this specific year to see where we left off
+                const lastEntry = await table.where('id')
+                    .between(`${userIdVal}_${startDate}`, `${userIdVal}_${endDate}\uffff`, true, true)
+                    .last();
+
+                if (lastEntry) {
+                    console.log(`[Danbooru Grass] Found cached data up to ${lastEntry.date}`);
+                    // Safety Buffer: Start fetching from 3 days prior to the last cached date
+                    const lastDate = new Date(lastEntry.date);
+                    lastDate.setDate(lastDate.getDate() - 3);
+
+                    const bufferDateStr = lastDate.toISOString().slice(0, 10);
+
+                    // Ensure we don't go before the year start
+                    fetchFromDate = bufferDateStr < startDate ? startDate : bufferDateStr;
+                }
+
+                // Optimization: If cached up to Dec 31st of that year, and year is past, skip fetch.
+                const todayStr = new Date().toISOString().slice(0, 10);
+                if (fetchFromDate >= endDate && year < new Date().getFullYear()) {
+                    console.log("[Danbooru Grass] Year complete in cache. Skipping fetch.");
+                } else if (fetchFromDate === todayStr && year === new Date().getFullYear()) {
+                    // If we already have data up to today, we might still want to refresh 'today' 
+                    // but if the last check was very recent (e.g. this session) maybe we skip?
+                    // For now, let's allow re-fetching 'today' effectively.
+                } else {
+                    // Set API Params
+                    const fetchRange = `${fetchFromDate}..${endDate}`;
+
+                    if (metric === 'uploads') {
+                        params.tags = `user:${userInfo.name} date:${fetchRange}`;
+                    } else if (metric === 'approvals') {
+                        params['search[post_tags_match]'] = `approver:${userInfo.name} date:${fetchRange}`;
+                    } else if (metric === 'notes') {
+                        params['search[created_at]'] = fetchRange;
+                    }
+
+                    // 2. Fetch missing range
+                    console.log(`[Danbooru Grass] Fetching delta: ${fetchRange}`);
+                    const items = await this.fetchAllPages(endpoint, params);
+                    console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
+
+                    // 3. Aggregate
+                    const dailyCounts = {};
+
+                    // Note: If we are fetching a range, we MUST count the fetched items.
+                    // But wait, "fetchAllPages" returns individual items (posts).
+                    // We simply count them.
+
+                    items.forEach(item => {
+                        const rawDate = item[dateKey] || item['created_at'];
+                        if (!rawDate) return;
+                        const dateStr = rawDate.slice(0, 10);
+                        dailyCounts[dateStr] = (dailyCounts[dateStr] || 0) + 1;
+                    });
+
+                    // 4. Upsert into DB
+                    // Note: We might have fetched a partial day (e.g. 'fetchFromDate').
+                    // The 'items' list contains the ACTUAL count for that day from the API.
+                    // So overwriting the DB entry for that day with 'dailyCounts' is correct.
+                    // BUT: 'dailyCounts' only contains days that had activity.
+                    // If a day had 0 activity, it won't be in 'dailyCounts'.
+                    // If we re-fetch 'today' and there are 0 items, 'dailyCounts' is empty.
+                    // We need to handle the case where a day exists in DB but now has 0 (unlikely for historical, but possible for today if deleted?).
+                    // Actually, if we fetch range 2025-12-01..2025-12-15.
+                    // And result has items only for 12-05.
+                    // Days 12-01..12-04, 12-06..12-15 are 0.
+                    // We should probably NOT overwrite existing non-zero counts with 0 unless we are sure.
+                    // However, the prompt says "If there is a duplicate key... update".
+                    // For the 'fetchFromDate' (e.g. 1st), we are re-counting it.
+                    // If the API returns 5 items for the 1st, we update DB to 5.
+                    // If API returns 0 items for the 1st? Then we don't have an entry in dailyCounts.
+                    // We only write what we found. 
+                    // This implies we trust the API to return all items.
+
+                    const bulkData = Object.entries(dailyCounts).map(([date, count]) => {
+                        return {
+                            id: `${userIdVal}_${date}`,
+                            userId: userIdVal,
+                            date: date,
+                            count: count
+                        };
+                    });
+
+                    if (bulkData.length > 0) {
+                        await table.bulkPut(bulkData);
+                    }
+                }
+
+                // 5. Return Full Year Data from Cache
+                // Now we just query the DB for the entire year to ensure we have the merged view (Old Cache + New Upserts)
+                const fullYearData = await table.where('id')
+                    .between(`${userIdVal}_${startDate}`, `${userIdVal}_${endDate}\uffff`, true, true)
+                    .toArray();
+
+                const resultMap = {};
+                // If ID matches, we map it. 
+                fullYearData.forEach(i => resultMap[i.date] = i.count);
+
+                return resultMap;
+
             } catch (e) {
-                console.error("[Danbooru Grass] Report fetch failed:", e);
-                alert(`[Danbooru Grass] Load Failed: ${e.message}`);
+                console.error("[Danbooru Grass] Data fetch failed:", e);
+                alert(`[Danbooru Grass] Fetch Failed: ${e.message}`);
                 return {};
             }
         }
 
-        async fetchReportData(metric, userInfo, year) {
-            const startDate = `${year}-01-01`;
-            const endDate = `${year}-12-31`;
+        async fetchAllPages(endpoint, params) {
+            let allItems = [];
+            let page = 1;
 
-            let tagQuery = '';
-            const sanitizedName = userInfo.name.replace(/ /g, '_');
-            switch (metric) {
-                case 'uploads': tagQuery = `user:${sanitizedName}`; break;
-                case 'approvals': tagQuery = `approver:${sanitizedName}`; break;
-                case 'notes': tagQuery = `noteupdater:${sanitizedName}`; break;
-            }
+            while (true) {
+                // Danbooru page limit 1000 usually, checking 200 as safe
+                const q = new URLSearchParams({ ...params, page: page });
+                const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
 
-            const params = new URLSearchParams({
-                'search[tags]': tagQuery,
-                'search[from]': startDate,
-                'search[to]': endDate,
-                'search[period]': 'day',
-                'search[mode]': 'table', // We need table mode to parse counts
-                'commit': 'Search'
-            });
+                try {
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const json = await resp.json();
 
-            const url = `${this.baseUrl}/reports/posts?${params.toString()}`;
-            console.log("[Danbooru Grass] Fetching Report:", url);
+                    if (!Array.isArray(json) || json.length === 0) break;
 
-            const resp = await fetch(url);
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const html = await resp.text();
+                    allItems = allItems.concat(json);
 
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
+                    if (json.length < params.limit) break; // Last page
+                    page++;
 
-            // Selector for the report table rows
-            const rows = doc.querySelectorAll('table.striped tbody tr');
+                    // Safety break
+                    if (page > 100) break;
 
-            const results = {};
-            rows.forEach(row => {
-                const cols = row.querySelectorAll('td');
-                if (cols.length >= 2) {
-                    const dateText = cols[0].textContent.trim(); // e.g., "2025-01-01"
-                    const countText = cols[1].textContent.trim(); // e.g., "14"
-                    const count = parseInt(countText, 10);
+                    // Simple rate limit helper
+                    await new Promise(r => setTimeout(r, 100));
 
-                    if (dateText && !isNaN(count) && count > 0) {
-                        results[dateText] = count;
-                    }
+                } catch (e) {
+                    console.error(`[Danbooru Grass] Page ${page} failed:`, e);
+                    break;
                 }
-            });
-
-            return results;
+            }
+            return allItems;
         }
     }
 
