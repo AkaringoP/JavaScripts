@@ -323,8 +323,11 @@
                     if (json.length < params.limit) break; // Last page
                     page++;
 
-                    // Safety break
-                    if (page > 100) break;
+                    // Safety break (approx 100,000 items)
+                    if (page > 500) {
+                        console.warn("[Danbooru Grass] Hit safety page limit (500).");
+                        break;
+                    }
 
                     // Simple rate limit helper
                     await new Promise(r => setTimeout(r, 100));
