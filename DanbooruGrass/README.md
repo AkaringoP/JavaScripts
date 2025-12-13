@@ -1,6 +1,7 @@
 # Danbooru Grass
 
 This userscript injects a GitHub-style contribution graph into Danbooru profile pages. It visualizes your activity (Uploads, Post Approvals, Note Updates) over the last year, allowing for quick insights into your contribution habits.
+<img width="1365" height="404" alt="image" src="https://github.com/user-attachments/assets/a4c0bf04-0adf-4ebc-92c6-7123a693e237" /> 
 
 ## Features
 
