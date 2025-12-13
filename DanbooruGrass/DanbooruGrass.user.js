@@ -732,8 +732,9 @@
                     .ch-subdomain-bg { fill: var(--grass-empty-cell, #ebedf0); }
                     .ch-domain-bg { fill: transparent !important; } /* Fix black bars */
 
-                    /* Month Labels */
-                    .ch-domain-text {
+                    /* All SVG Text (Months & Days) */
+                    #cal-heatmap text,
+                    #gh-day-labels text {
                         fill: var(--grass-text, #24292f) !important;
                         font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
                         font-size: 10px;
@@ -840,7 +841,7 @@
             labels.style.marginRight = '5px';
             labels.style.textAlign = 'right';
             labels.style.flexShrink = '0';
-            labels.style.color = '#24292f';
+            labels.style.color = 'var(--grass-text, #24292f)';
             labels.style.fontSize = '9px';
 
             // Align "Mon, Wed, Fri" to rows 1, 3, 5 (Sunday is Row 0)
@@ -1075,7 +1076,7 @@
                 legend.style.justifyContent = 'flex-end';
                 legend.style.alignItems = 'center';
                 legend.style.fontSize = '10px';
-                legend.style.color = '#57606a';
+                legend.style.color = 'var(--grass-text, #57606a)';
                 legend.style.gap = '4px';
 
                 // Custom Thresholds Logic (Empty + 4 Levels)
