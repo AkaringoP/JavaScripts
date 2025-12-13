@@ -27,7 +27,7 @@
         },
         THEMES: {
             light: { name: 'Light', bg: '#ffffff', empty: '#ebedf0', text: '#24292f' },
-            aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338' },
+            aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338', scrollbar: '#9FB5C6' },
             sakura: { name: 'Sakura', bg: '#fff0f5', empty: '#ffe0ea', text: '#24292f' },
             sunset: { name: 'Sunset', bg: '#fff5e6', empty: '#ffe0b2', text: '#24292f' },
             ocean: { name: 'Ocean', bg: '#1b2a4e', empty: '#2b3d68', text: '#e6edf3' },
@@ -93,6 +93,7 @@
                 root.style.setProperty('--grass-bg', theme.bg);
                 root.style.setProperty('--grass-empty-cell', theme.empty);
                 root.style.setProperty('--grass-text', theme.text);
+                root.style.setProperty('--grass-scrollbar-thumb', theme.scrollbar || '#d0d7de');
             }
             this.save({ theme: themeKey });
         }
@@ -749,7 +750,7 @@
                     }
                     #cal-heatmap-scroll::-webkit-scrollbar { height: 8px; }
                     #cal-heatmap-scroll::-webkit-scrollbar-thumb {
-                        background: #d0d7de;
+                        background: var(--grass-scrollbar-thumb, #d0d7de);
                         border-radius: 4px;
                     }
 
