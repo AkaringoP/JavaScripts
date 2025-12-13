@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Grass
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      3.0
 // @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -24,8 +24,88 @@
         CLEANUP_THRESHOLD_MS: 7 * 24 * 60 * 60 * 1000, // 7 Days
         SELECTORS: {
             STATISTICS_SECTION: 'div.user-statistics',
+        },
+        THEMES: {
+            light: { name: 'Light', bg: '#ffffff', empty: '#ebedf0', text: '#24292f' },
+            aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338' },
+            sakura: { name: 'Sakura', bg: '#fff0f5', empty: '#ffe0ea', text: '#24292f' },
+            sunset: { name: 'Sunset', bg: '#fff5e6', empty: '#ffe0b2', text: '#24292f' },
+            ocean: { name: 'Ocean', bg: '#1b2a4e', empty: '#2b3d68', text: '#e6edf3' },
+            midnight: { name: 'Midnight', bg: '#000000', empty: '#222222', text: '#f0f6fc' },
         }
     };
+
+    // --- 1. Settings Manager ---
+    class SettingsManager {
+        constructor() {
+            this.key = CONFIG.STORAGE_PREFIX + 'settings';
+            this.defaults = {
+                theme: 'light',
+                thresholds: {
+                    uploads: [1, 10, 25, 50],
+                    approvals: [10, 50, 100, 150],
+                    notes: [1, 10, 20, 30],
+                },
+                remembered_modes: {} // userId -> mode
+            };
+            this.settings = this.load();
+        }
+
+        load() {
+            try {
+                const s = localStorage.getItem(this.key);
+                const saved = s ? JSON.parse(s) : {};
+                // Deep merge defaults with saved
+                return {
+                    ...this.defaults,
+                    ...saved,
+                    thresholds: { ...this.defaults.thresholds, ...(saved.thresholds || {}) },
+                    remembered_modes: { ...(saved.remembered_modes || {}) }
+                };
+            } catch (e) {
+                return this.defaults;
+            }
+        }
+
+        save(newSettings) {
+            this.settings = { ...this.settings, ...newSettings };
+            localStorage.setItem(this.key, JSON.stringify(this.settings));
+        }
+
+        getTheme() {
+            const t = this.settings.theme;
+            return CONFIG.THEMES[t] ? t : 'light';
+        }
+
+        getThresholds(metric) {
+            return this.settings.thresholds[metric] || this.defaults.thresholds[metric] || [1, 5, 10, 20];
+        }
+
+        setThresholds(metric, values) {
+            const newThresholds = { ...this.settings.thresholds, [metric]: values };
+            this.save({ thresholds: newThresholds });
+        }
+
+        applyTheme(themeKey) {
+            const theme = CONFIG.THEMES[themeKey] || CONFIG.THEMES.light;
+            const root = document.querySelector(':root');
+            if (root) {
+                root.style.setProperty('--grass-bg', theme.bg);
+                root.style.setProperty('--grass-empty-cell', theme.empty);
+                root.style.setProperty('--grass-text', theme.text);
+            }
+            this.save({ theme: themeKey });
+        }
+
+        getLastMode(userId) {
+            return this.settings.remembered_modes[userId] || null;
+        }
+
+        setLastMode(userId, mode) {
+            const newModes = { ...this.settings.remembered_modes, [userId]: mode };
+            this.save({ remembered_modes: newModes });
+        }
+    }
 
     // --- 1. Context & Identity ---
     // --- 1.5 Database (Dexie.js) ---
@@ -216,7 +296,7 @@
                 if (fetchFromDate >= endDate && year < new Date().getFullYear()) {
                     console.log("[Danbooru Grass] Year complete in cache. Skipping fetch.");
                 } else if (fetchFromDate === todayStr && year === new Date().getFullYear()) {
-                    // If we already have data up to today, we might still want to refresh 'today' 
+                    // If we already have data up to today, we might still want to refresh 'today'
                     // but if the last check was very recent (e.g. this session) maybe we skip?
                     // For now, let's allow re-fetching 'today' effectively.
                 } else {
@@ -248,7 +328,7 @@
                         if (!rawDate) return;
 
                         // Validation: Strict User ID Check
-                        // post_events search by 'approver:NAME' returns all events for matched posts, 
+                        // post_events search by 'approver:NAME' returns all events for matched posts,
                         // which may include previous approvals by others. We must filter by creator_id.
                         if (userInfo.id && item[idKey] && String(item[idKey]) !== String(userInfo.id)) {
                             return;
@@ -274,7 +354,7 @@
                     // For the 'fetchFromDate' (e.g. 1st), we are re-counting it.
                     // If the API returns 5 items for the 1st, we update DB to 5.
                     // If API returns 0 items for the 1st? Then we don't have an entry in dailyCounts.
-                    // We only write what we found. 
+                    // We only write what we found.
                     // This implies we trust the API to return all items.
 
                     const bulkData = Object.entries(dailyCounts).map(([date, count]) => {
@@ -298,7 +378,7 @@
                     .toArray();
 
                 const resultMap = {};
-                // If ID matches, we map it. 
+                // If ID matches, we map it.
                 fullYearData.forEach(i => resultMap[i.date] = i.count);
 
                 return resultMap;
@@ -337,37 +417,61 @@
         async fetchAllPages(endpoint, params) {
             let allItems = [];
             let page = 1;
+            const BATCH_SIZE = 5; // 🚀 Batch size: 5 pages at a time
+            const DELAY_BETWEEN_BATCHES = 150; // Delay to respect server limits
 
             while (true) {
-                // Danbooru page limit 1000 usually, checking 200 as safe
-                const q = new URLSearchParams({ ...params, page: page });
-                const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
+                const promises = [];
 
-                try {
-                    const resp = await fetch(url);
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    const json = await resp.json();
+                // 1. Prepare Batch Requests
+                for (let i = 0; i < BATCH_SIZE; i++) {
+                    const currentPage = page + i;
+                    const q = new URLSearchParams({ ...params, page: currentPage });
+                    const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
 
-                    if (!Array.isArray(json) || json.length === 0) break;
+                    // Create Promise for each request
+                    promises.push(
+                        fetch(url).then(async resp => {
+                            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                            return resp.json();
+                        }).catch(e => {
+                            console.warn(`[Danbooru Grass] Page ${currentPage} failed:`, e);
+                            return []; // Return empty array on failure to keep flow
+                        })
+                    );
+                }
 
+                // 2. Execute Batch (Parallel)
+                const batchResults = await Promise.all(promises);
+
+                let finished = false;
+
+                // 3. Process Results
+                for (const json of batchResults) {
+                    if (!Array.isArray(json) || json.length === 0) {
+                        finished = true; // No data means end of stream
+                        continue;
+                    }
                     allItems = allItems.concat(json);
 
-                    if (json.length < params.limit) break; // Last page
-                    page++;
-
-                    // Safety break (approx 100,000 items)
-                    if (page > 500) {
-                        console.warn("[Danbooru Grass] Hit safety page limit (500).");
-                        break;
+                    // If less than limit, it's the last page
+                    if (json.length < params.limit) {
+                        finished = true;
                     }
+                }
 
-                    // Simple rate limit helper
-                    await new Promise(r => setTimeout(r, 100));
+                if (finished) break;
 
-                } catch (e) {
-                    console.error(`[Danbooru Grass] Page ${page} failed:`, e);
+                page += BATCH_SIZE;
+
+                // Safety Break
+                if (page > 1000) {
+                    console.warn("[Danbooru Grass] Hit safety page limit.");
                     break;
                 }
+
+                // 4. Batch Delay
+                await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES));
             }
             return allItems;
         }
@@ -375,9 +479,10 @@
 
     // --- 4. Graph Renderer (UI) ---
     class GraphRenderer {
-        constructor() {
+        constructor(settingsManager) {
             this.containerId = 'danbooru-grass-container';
             this.cal = null;
+            this.settingsManager = settingsManager;
         }
 
         injectSkeleton() {
@@ -442,6 +547,10 @@
                 <div id="cal-heatmap" style="overflow-x:auto; padding-bottom:5px;"></div>
                 <div id="grass-loading" style="text-align:center; padding:20px; color:#888;">Initializing...</div>
             `;
+
+            // Apply Initial Theme
+            const currentTheme = this.settingsManager.getTheme();
+            this.settingsManager.applyTheme(currentTheme);
 
             wrapper.appendChild(container);
 
@@ -600,12 +709,12 @@
                 style.textContent = `
                     /* Container & Header Styling */
                     #danbooru-grass-container {
-                        background-color: #fff !important;
-                        color: #24292f !important;
+                        background: var(--grass-bg, #fff) !important;
+                        color: var(--grass-text, #24292f) !important;
                         border-radius: 6px;
                     }
                     #danbooru-grass-container h2 {
-                        color: #24292f !important;
+                        color: var(--grass-text, #24292f) !important;
                         font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
                         font-weight: normal !important;
                     }
@@ -618,12 +727,12 @@
                         padding: 2px 2px;
                     }
                     /* Empty Cells & Domain Backgrounds */
-                    .ch-subdomain-bg { fill: #ebedf0; }
+                    .ch-subdomain-bg { fill: var(--grass-empty-cell, #ebedf0); }
                     .ch-domain-bg { fill: transparent !important; } /* Fix black bars */
 
                     /* Month Labels */
                     .ch-domain-text {
-                        fill: #24292f !important;
+                        fill: var(--grass-text, #24292f) !important;
                         font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
                         font-size: 10px;
                     }
@@ -638,6 +747,72 @@
                     #cal-heatmap-scroll::-webkit-scrollbar { height: 8px; }
                     #cal-heatmap-scroll::-webkit-scrollbar-thumb {
                         background: #d0d7de;
+                        border-radius: 4px;
+                    }
+
+                    /* Settings Popover */
+                    #danbooru-grass-settings-popover {
+                        position: absolute;
+                        bottom: 40px;
+                        left: 10px;
+                        background: #fff;
+                        border: 1px solid #d0d7de;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                        border-radius: 8px;
+                        padding: 12px;
+                        z-index: 10000;
+                        display: none;
+                        width: 290px; /* Increased to fit 6 items roughly or 3x2 */
+                    }
+                    .theme-grid {
+                        display: grid;
+                        grid-template-columns: repeat(6, 1fr);
+                        gap: 8px;
+                    }
+                    .theme-icon {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 8px;
+                        position: relative;
+                        cursor: pointer;
+                        border: 2px solid transparent;
+                        box-sizing: border-box;
+                    }
+                    .theme-icon:hover { transform: scale(1.1); }
+                    .theme-icon.active { border-color: #0969da; }
+                    .theme-icon-inner {
+                        position: absolute;
+                        top: 50%; left: 50%;
+                        transform: translate(-50%, -50%);
+                        width: 16px; height: 16px;
+                        border-radius: 4px;
+                    }
+                    .popover-header {
+                        font-weight: 600;
+                        font-size: 12px;
+                        color: #24292f;
+                        margin-bottom: 8px;
+                    }
+                    .popover-select {
+                        width: 100%;
+                        margin-bottom: 10px;
+                        padding: 4px;
+                        border-radius: 4px;
+                        border: 1px solid #d0d7de;
+                        background-color: #f6f8fa;
+                        font-size: 12px;
+                    }
+                    .threshold-row {
+                        display: flex;
+                        align-items: center;
+                        margin-bottom: 6px;
+                        font-size: 12px;
+                    }
+                    .threshold-input {
+                        width: 60px;
+                        margin-left: auto;
+                        padding: 2px 4px;
+                        border: 1px solid #d0d7de;
                         border-radius: 4px;
                     }
                 `;
@@ -690,24 +865,228 @@
             scrollWrapper.style.minHeight = '140px'; // Ensure height for graph
             container.appendChild(scrollWrapper);
 
-            // 3. Legend Injection
+            // 3. Footer (Settings & Legend)
             const mainContainer = document.getElementById('danbooru-grass-container');
-            if (!document.getElementById('danbooru-grass-legend')) {
+            if (!document.getElementById('danbooru-grass-footer')) {
+                const footer = document.createElement('div');
+                footer.id = 'danbooru-grass-footer';
+                footer.style.display = 'flex';
+                footer.style.justifyContent = 'space-between';
+                footer.style.alignItems = 'center';
+                footer.style.padding = '5px 20px 10px 0px'; // Added left padding
+                footer.style.marginTop = '10px';
+                mainContainer.appendChild(footer);
+
+                // 3.1 Settings Button (Left)
+                const settingsBtn = document.createElement('div');
+                settingsBtn.id = 'danbooru-grass-settings';
+                settingsBtn.title = 'Settings';
+                settingsBtn.style.cssText = `
+                    padding: 2px 8px;
+                    border: 1px solid #d0d7de;
+                    border-radius: 6px;
+                    background-color: #f6f8fa;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    color: #57606a;
+                `;
+                settingsBtn.innerHTML = `
+                    <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;">
+                        <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.292.028 1.555.563l.566 1.142c.27.547.106 1.181-.394 1.524l-.904.621c-.056.038-.076.104-.076.17a8.7 8.7 0 0 0 0 1.018c0 .066.02.132.076.17l.904.62c.5.344.664.978.394 1.524l-.566 1.142c-.263.535-.91.74-1.555.563l-1.103-.303c-.066-.019-.176-.011-.299.071a6.8 6.8 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.646-.716 1.196-1.461 1.26a8.2 8.2 0 0 1-.701.031 8.2 8.2 0 0 1-.701-.031c-.745-.064-1.29-.614-1.461-1.26l-.288-1.106c-.018-.066-.079-.158-.212-.224a6.8 6.8 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.292-.028-1.555-.563l-.566-1.142c-.27-.547-.106-1.181.394-1.524l.904-.621c.056-.038.076-.104.076-.17a8.7 8.7 0 0 0 0-1.018c0-.066-.02-.132-.076-.17l-.904-.62c-.5-.344-.664-.978-.394-1.524l.566-1.142c.263-.535.91-.74 1.555-.563l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.71.645 7.256.095 8.001.031A8.2 8.2 0 0 1 8 0Zm-.571 1.525c-.036.003-.108.036-.123.098l-.289 1.106c-.17.643-.64 1.103-1.246 1.218a5.2 5.2 0 0 0-1.157.669c-.53.411-1.192.427-1.748.046l-.904-.621c-.055-.038-.135-.04-.158.006l-.566 1.142c-.023.047.013.109.055.137l.904.621a1.9 1.9 0 0 1 0 3.23l-.904.621c-.042.029-.078.09-.055.137l.566 1.142c.023.047.103.044.158.006l.904-.621c.556-.38 1.218-.365 1.748.046.348.27.753.496 1.157.669.606.115 1.076.575 1.246 1.218l.289 1.106c.015.062.087.095.123.098.36.031.725.031 1.082 0 .036-.003.108-.036.123-.098l.289-1.106c.17-.643.64-1.103 1.246-1.218.404-.173.809-.399 1.157-.669.53-.411 1.192-.427 1.748-.046l.904.621c.055.038.135.04.158-.006l.566-1.142c.023-.047-.013-.109-.055-.137l-.904-.621a1.9 1.9 0 0 1 0-3.23l.904-.621c.042-.029.078-.09.055-.137l-.566-1.142c-.023-.047-.103-.044-.158-.006l-.904.621c-.556.38-1.218.365-1.748-.046a5.2 5.2 0 0 0-1.157-.669c-.606-.115-1.076-.575-1.246-1.218l-.289-1.106c-.015-.062-.087-.095-.123-.098a6.5 6.5 0 0 0-1.082 0ZM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"></path>
+                    </svg>
+                `;
+                let settingsChanged = false;
+
+                const validateThresholds = () => {
+                    const modes = ['uploads', 'approvals', 'notes'];
+                    for (const m of modes) {
+                        const vals = this.settingsManager.getThresholds(m);
+                        for (let i = 0; i < vals.length - 1; i++) {
+                            if (vals[i] >= vals[i + 1]) {
+                                return {
+                                    valid: false,
+                                    msg: `Invalid in [${m}]: Level ${i + 1} (${vals[i]}) must be smaller than Level ${i + 2} (${vals[i + 1]})`
+                                };
+                            }
+                        }
+                    }
+                    return { valid: true };
+                };
+
+                const closeSettings = () => {
+                    const pop = document.getElementById('danbooru-grass-settings-popover');
+                    if (pop) {
+                        // Validation Check
+                        const check = validateThresholds();
+                        if (!check.valid) {
+                            alert(check.msg);
+                            return; // Do NOT close
+                        }
+
+                        pop.style.display = 'none';
+                        if (settingsChanged) {
+                            console.log("[Danbooru Grass] Settings changed. Refreshing view...");
+                            settingsChanged = false; // Reset
+                            if (typeof onYearChange === 'function') {
+                                onYearChange(year);
+                            }
+                        }
+                    }
+                };
+
+                settingsBtn.onmouseover = () => { settingsBtn.style.backgroundColor = '#eaeef2'; };
+                settingsBtn.onmouseout = () => { settingsBtn.style.backgroundColor = '#f6f8fa'; };
+                settingsBtn.onclick = (e) => {
+                    const pop = document.getElementById('danbooru-grass-settings-popover');
+                    if (pop) {
+                        const current = pop.style.display;
+                        if (current === 'block') {
+                            closeSettings();
+                        } else {
+                            pop.style.display = 'block';
+                        }
+                        e.stopPropagation();
+                    }
+                };
+                footer.appendChild(settingsBtn);
+
+                // 3.1.5 Settings Popover
+                const popover = document.createElement('div');
+                popover.id = 'danbooru-grass-settings-popover';
+
+                // Close on click outside
+                document.addEventListener('click', (e) => {
+                    if (popover && popover.style.display === 'block') {
+                        if (!popover.contains(e.target) && !settingsBtn.contains(e.target)) {
+                            closeSettings();
+                        }
+                    }
+                });
+
+                // --- 1. Color Themes Section ---
+                const themeHeader = document.createElement('div');
+                themeHeader.className = 'popover-header';
+                themeHeader.textContent = 'Color Themes';
+                popover.appendChild(themeHeader);
+
+                const grid = document.createElement('div');
+                grid.className = 'theme-grid';
+
+                const currentTheme = this.settingsManager.getTheme();
+
+                Object.entries(CONFIG.THEMES).forEach(([key, theme]) => {
+                    const icon = document.createElement('div');
+                    icon.className = 'theme-icon';
+                    if (key === currentTheme) icon.classList.add('active'); // Highlight active theme
+                    icon.title = theme.name;
+                    icon.style.background = theme.bg;
+
+                    // Inner Circle (Empty Cell Color)
+                    const inner = document.createElement('div');
+                    inner.className = 'theme-icon-inner';
+                    inner.style.background = theme.empty;
+                    icon.appendChild(inner);
+
+                    icon.onclick = () => {
+                        this.settingsManager.applyTheme(key);
+                        // Update active state visual
+                        document.querySelectorAll('.theme-icon').forEach(el => el.classList.remove('active'));
+                        icon.classList.add('active');
+                    };
+                    grid.appendChild(icon);
+                });
+                popover.appendChild(grid);
+
+                // --- 2. Thresholds Section ---
+                const threshHeader = document.createElement('div');
+                threshHeader.className = 'popover-header';
+                threshHeader.textContent = 'Set thresholds';
+                threshHeader.style.marginTop = '15px';
+                popover.appendChild(threshHeader);
+
+                // Mode Selector
+                const modeSelect = document.createElement('select');
+                modeSelect.className = 'popover-select';
+                ['uploads', 'approvals', 'notes'].forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m;
+                    opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+                    if (m === metric.toLowerCase() || (m === 'uploads' && !metric)) opt.selected = true;
+                    modeSelect.appendChild(opt);
+                });
+                popover.appendChild(modeSelect);
+
+                // Editor Container
+                const editor = document.createElement('div');
+                popover.appendChild(editor);
+
+                const renderEditor = (mode) => {
+                    editor.innerHTML = '';
+                    const vals = this.settingsManager.getThresholds(mode);
+                    const inputColors = ['#9be9a8', '#40c463', '#30a14e', '#216e39'];
+
+                    vals.forEach((val, idx) => {
+                        const row = document.createElement('div');
+                        row.className = 'threshold-row';
+
+                        const label = document.createElement('span');
+                        label.textContent = `Level ${idx + 1}:`;
+                        label.style.width = '50px';
+
+                        const input = document.createElement('input');
+                        input.type = 'number';
+                        input.className = 'threshold-input';
+                        input.value = val;
+
+                        // Styling
+                        input.style.backgroundColor = inputColors[idx];
+                        input.style.color = (idx < 1) ? '#24292f' : '#ffffff';
+                        input.style.fontWeight = 'bold';
+                        input.style.border = '1px solid #d0d7de';
+                        input.style.borderRadius = '4px';
+
+                        input.onchange = () => {
+                            const newVals = [...vals];
+                            newVals[idx] = parseInt(input.value);
+                            // Update Settings directly (Validation deferred to close)
+                            this.settingsManager.setThresholds(mode, newVals);
+                            settingsChanged = true;
+                            vals[idx] = newVals[idx];
+                        };
+
+                        row.appendChild(label);
+                        row.appendChild(input);
+                        editor.appendChild(row);
+                    });
+                };
+
+                modeSelect.addEventListener('change', () => renderEditor(modeSelect.value));
+                renderEditor(modeSelect.value); // Initial Render
+                footer.appendChild(popover); // Append to footer so it's relative
+                footer.style.position = 'relative'; // Ensure popover positions correctly
+
+                // 3.2 Legend (Right)
                 const legend = document.createElement('div');
                 legend.id = 'danbooru-grass-legend';
                 legend.style.display = 'flex';
                 legend.style.justifyContent = 'flex-end';
                 legend.style.alignItems = 'center';
-                legend.style.padding = '5px 20px 10px 0'; // Right align padding
                 legend.style.fontSize = '10px';
                 legend.style.color = '#57606a';
                 legend.style.gap = '4px';
 
-                // Adjusted to 6 colors to support 5 thresholds: 1, 5, 10, 30, 50
-                const colors = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39', '#0e4429'];
-                // Thresholds: <1 (Grey), 1-4, 5-9, 10-29, 30-49, 50+ (Darkest)
+                // Custom Thresholds Logic (Empty + 4 Levels)
+                const colors = ['var(--grass-empty-cell)', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
+                const thresholds = this.settingsManager.getThresholds(metric);
+
+                // Create Legend Rects
+                // Colors[0] is Empty (< T1).
+                // Colors[1] is L1 (>= T1).
+                // ...
+                // Colors[4] is L4 (>= T4).
                 const rects = colors.map(c =>
-                    `<div style="width:10px; height:10px; background-color:${c}; border-radius:2px;"></div>`
+                    `<div style="width:10px; height:10px; background:${c}; border-radius:2px;"></div>`
                 ).join('');
 
                 legend.innerHTML = `
@@ -715,10 +1094,12 @@
                     ${rects}
                     <span style="margin-left:4px;">More</span>
                 `;
-                mainContainer.appendChild(legend);
+                footer.appendChild(legend);
             }
 
             console.log(`[Danbooru Grass] Rendering graph for ${year}. Data points: ${source.length}`);
+
+            const currentThresholds = this.settingsManager.getThresholds(metric);
 
             window.cal.paint({
                 itemSelector: '#cal-heatmap-scroll',
@@ -741,8 +1122,8 @@
                 data: { source: source, x: 'date', y: 'value' },
                 scale: {
                     color: {
-                        range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39', '#0e4429'],
-                        domain: [1, 5, 10, 30, 50],
+                        range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'],
+                        domain: currentThresholds,
                         type: 'threshold'
                     }
                 },
@@ -782,7 +1163,21 @@
                             });
 
                         // 2. Tooltips for Legend Cells
-                        const legendThresholds = ["0 (Less)", "1-4", "5-9", "10-29", "30-49", "50+ (More)"];
+                        // Calculate ranges based on thresholds [t1, t2, t3, t4]
+                        // Box 0: Less than t1 (usually 0 if t1=1)
+                        // Box 1: t1 to t2-1
+                        // Box 2: t2 to t3-1
+                        // Box 3: t3 to t4-1
+                        // Box 4: t4+
+
+                        const t = this.settingsManager.getThresholds(metric);
+                        const legendThresholds = [
+                            `${t[0] > 1 ? `0-${t[0] - 1}` : '0'} (Less)`,
+                            `${t[0]}-${t[1] - 1}`,
+                            `${t[1]}-${t[2] - 1}`,
+                            `${t[2]}-${t[3] - 1}`,
+                            `${t[3]}+ (More)`
+                        ];
 
                         // Select the 6 manual colored divs in the legend
                         // We target > div because we built the legend with standard HTML divs, not SVG.
@@ -819,7 +1214,8 @@
         console.log(`[Danbooru Grass] Initializing for ${context.targetUser.name}`);
 
         const dataManager = new DataManager();
-        const renderer = new GraphRenderer();
+        const settingsManager = new SettingsManager();
+        const renderer = new GraphRenderer(settingsManager);
 
         const injected = renderer.injectSkeleton();
         if (!injected) {
@@ -828,7 +1224,9 @@
         }
 
         let currentYear = new Date().getFullYear();
-        let currentMetric = 'uploads';
+        // Load last mode for this user, duplicate 'uploads' if not found
+        const userId = context.targetUser.id || context.targetUser.name; // Use safest ID available
+        let currentMetric = settingsManager.getLastMode(userId) || 'uploads';
 
         const joinYear = context.targetUser.joinDate.getFullYear();
         const years = [];
@@ -846,8 +1244,13 @@
 
                 renderer.updateControls(years, currentYear, currentMetric,
                     onYearChange,
-                    (m) => { currentMetric = m; updateView(); },
-                    async () => {
+                    (newMetric) => {
+                        currentMetric = newMetric;
+                        // Save the new mode preference
+                        settingsManager.setLastMode(userId, currentMetric);
+                        updateView();
+                    },
+                    /*onRefresh*/ async () => {
                         renderer.setLoading(true);
                         await dataManager.clearCache(currentMetric, context.targetUser);
                         updateView();
