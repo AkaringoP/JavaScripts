@@ -303,10 +303,12 @@
                     // Set API Params
                     const fetchRange = `${fetchFromDate}..${endDate}`;
 
+                    const normalizedName = userInfo.name.replace(/ /g, '_');
+
                     if (metric === 'uploads') {
-                        params.tags = `user:${userInfo.name} date:${fetchRange}`;
+                        params.tags = `user:${normalizedName} date:${fetchRange}`;
                     } else if (metric === 'approvals') {
-                        params['search[post_tags_match]'] = `approver:${userInfo.name} date:${fetchRange}`;
+                        params['search[post_tags_match]'] = `approver:${normalizedName} date:${fetchRange}`;
                     } else if (metric === 'notes') {
                         params['search[created_at]'] = fetchRange;
                     }
