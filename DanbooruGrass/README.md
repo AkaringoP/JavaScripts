@@ -14,7 +14,13 @@ This userscript injects a GitHub-style contribution graph into Danbooru profile 
 
 ## Version History
 
-### v3.0 (Latest)
+### v3.1 (Latest)
+*   **🛡️ Robust DOM Independence**: Improved profile extraction logic to be more resistant to layout changes.
+*   **💬 Friendly Error UI**: Replaced intrusive alerts with graceful inline error messages and retry options.
+*   **🧹 Advanced Cache Management**: Added real-time stats panel and a one-click purge button (red icon) for easier management.
+*   **✨ UI Refinements**: Improved Settings Popover positioning, text visibility (shadows), and state persistence.
+
+### v3.0
 *   **🎨 Advanced Theme Customization**: 
     *   6 Color Themes: Light, Sakura, Sunset, Ocean, Midnight, and **Aurora (Gradient)**.
     *   Themes apply dynamically to the graph and UI components.

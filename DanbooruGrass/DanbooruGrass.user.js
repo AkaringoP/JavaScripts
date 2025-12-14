@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Grass
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -138,56 +138,68 @@
             let joinDate = new Date().toISOString();
 
             try {
-                // 1. Try to get ID and Name from body attributes (Danbooru usually has these)
-                const body = document.body;
-                // On profile page, data-user-name might be the logged-in user, not target.
-                // But usually, there is a specific meta tag or current-user specific generic selector?
-                // Actually, Danbooru profile pages often put ID in the URL or a specific element.
+                // --- 1. Extract Name ---
+                // Priority A: Document Title (Most stable)
+                // Format: "User: [Name] | Danbooru"
+                const titleMatch = document.title.match(/^User: (.+?) \|/);
+                if (titleMatch) {
+                    name = titleMatch[1];
+                }
 
-                // Strategy: Look for "User: [Name]" header
-                const nameEl = document.querySelector('#a-show > div:nth-child(1) > h1 > a');
-                if (nameEl) name = nameEl.textContent.trim();
-                else {
+                // Priority B: H1 Header (Legacy/Visual)
+                if (!name) {
                     const h1 = document.querySelector('h1');
                     if (h1) name = h1.textContent.trim().replace(/^User: /, '');
                 }
 
-                if (!name) return null;
-
-                // 2. Try to get User ID
-                // Option A: Link to "My Account" or similar might exist, but we need TARGET user ID.
-                // Option B: Look for 'User ID: X' in stats or data attributes.
-                // Inspecting Danbooru source: <div class="user-statistics"> ... </div> doesn't always have ID.
-                // Reliable: The "Messages" link usually contains /users/ID/messages
-                const messagesLink = document.querySelector('a[href*="/messages?search%5Bto_user_id%5D="]');
-                if (messagesLink) {
-                    const match = messagesLink.href.match(/to_user_id%5D=(\d+)/);
-                    if (match) id = match[1];
+                // --- 2. Extract ID ---
+                // Priority A: URL Path (Most stable for direct links)
+                // Format: /users/12345
+                const urlMatch = window.location.pathname.match(/^\/users\/(\d+)/);
+                if (urlMatch) {
+                    id = urlMatch[1];
                 }
 
-                // Fallback: Look for any link to /users/ID/edit or similar if it's own profile,
-                // OR search for a link that looks like /users/ID/params...
-                if (!id) {
-                    const userLinks = document.querySelectorAll(`a[href^="/users/"]`);
-                    for (let link of userLinks) {
-                        const m = link.href.match(/\/users\/(\d+)/);
-                        // We must ensure this link isn't pointing to SOMEONE ELSE (e.g. inviter).
-                        // But usually the profile page links to itself in tabs.
-                        // Let's rely on the fact that we know the Name.
-                        if (m && link.textContent.includes(name)) {
-                            id = m[1];
-                            break;
+                // Priority B: Meta Tags or Body Attributes (If available)
+                // Danbooru often puts the *current* user in meta, strict check needed.
+                // We skip this to avoid confusion with logged-in user unless we are sure.
+
+                // Priority C: DOM Search (Fallback)
+                if (!id && name) {
+                    // Try to find a link to the user's own page which usually contains the ID
+                    // "Messages" link is a good candidate if it exists
+                    const messagesLink = document.querySelector('a[href*="/messages?search%5Bto_user_id%5D="]');
+                    if (messagesLink) {
+                        const match = messagesLink.href.match(/to_user_id%5D=(\d+)/);
+                        if (match) id = match[1];
+                    }
+
+                    // Look for "My Account" if we are on our own profile (and it didn't redirect to /users/ID)
+                    if (!id && window.location.pathname === '/profile') {
+                         // On /profile, we might be able to find the ID in the "Edit" link or similar
+                         const editLink = document.querySelector('a[href^="/users/"][href$="/edit"]');
+                         if (editLink) {
+                             const m = editLink.getAttribute('href').match(/\/users\/(\d+)\/edit/);
+                             if (m) id = m[1];
+                         }
+                    }
+
+                    // Scrape generic user links that match the name
+                    if (!id) {
+                        const userLinks = document.querySelectorAll(`a[href^="/users/"]`);
+                        for (let link of userLinks) {
+                            const m = link.getAttribute('href').match(/\/users\/(\d+)(?:\?|$)/);
+                            if (m && link.textContent.trim() === name) {
+                                id = m[1];
+                                break;
+                            }
                         }
                     }
                 }
 
-                if (!id) {
-                    // Last Resort: If we can't find ID, we might need it for some API calls (Notes).
-                    // Uploads/Approvals use Name. Notes use ID.
-                    console.warn("[Danbooru Grass] User ID not found directly.");
-                }
-
-                // Join Date
+                // --- 3. Extract Join Date ---
+                // "Join Date" is in the statistics table.
+                // We search for the "Join Date" text in TH elements.
                 const ths = Array.from(document.querySelectorAll('th'));
                 const joinHeader = ths.find(el => el.textContent.trim() === 'Join Date');
                 if (joinHeader && joinHeader.nextElementSibling) {
@@ -196,12 +208,15 @@
                     if (d) joinDate = d;
                 }
 
+                if (!name) return null; // Name is strictly required
+                if (!id) console.warn("[Danbooru Grass] User ID not found. Functionality may be limited (Notes).");
+
+                return { name: name, id: id, joinDate: new Date(joinDate) };
+
             } catch (e) {
                 console.warn("[Danbooru Grass] Extraction error:", e);
                 return null;
             }
-
-            return { name: name || 'Unknown', id: id, joinDate: new Date(joinDate) };
         }
 
         isValidProfile() {
@@ -388,8 +403,7 @@
 
             } catch (e) {
                 console.error("[Danbooru Grass] Data fetch failed:", e);
-                alert(`[Danbooru Grass] Fetch Failed: ${e.message}`);
-                return {};
+                throw e; // Propagate error to UI
             }
         }
 
@@ -478,6 +492,51 @@
             }
             return allItems;
         }
+
+        async getCacheStats() {
+            const stats = {
+                indexedDB: { count: 0, size: 0 },
+                localStorage: { count: 0, size: 0 },
+            };
+
+            // 1. IndexedDB Stats
+            // Accurate count via table counts
+            try {
+                const tables = ['uploads', 'approvals', 'notes'];
+                for (const t of tables) {
+                    const c = await this.db[t].count();
+                    stats.indexedDB.count += c;
+                }
+                // Approximate size: navigator.storage (Origin total)
+                if (navigator.storage && navigator.storage.estimate) {
+                    const est = await navigator.storage.estimate();
+                    if (est.usageDetails && est.usageDetails.indexedDB) {
+                        stats.indexedDB.size = est.usageDetails.indexedDB;
+                    } else {
+                        stats.indexedDB.size = est.usage; // Fallback to total origin usage
+                    }
+                }
+            } catch (e) {
+                console.warn("Failed to get IDB stats", e);
+            }
+
+            // 2. LocalStorage Stats
+            // Only count our keys
+            let lsCount = 0;
+            let lsSize = 0;
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k.startsWith(CONFIG.STORAGE_PREFIX)) {
+                    lsCount++;
+                    const val = localStorage.getItem(k);
+                    if (val) lsSize += (k.length + val.length) * 2;
+                }
+            }
+            stats.localStorage.count = lsCount;
+            stats.localStorage.size = lsSize;
+
+            return stats;
+        }
     }
 
     // --- 4. Graph Renderer (UI) ---
@@ -489,25 +548,23 @@
         }
 
         injectSkeleton() {
-            const existing = document.getElementById(this.containerId);
-            if (existing) existing.remove();
+            // Check if container already exists
+            if (document.getElementById(this.containerId)) {
+                return true; // Preservation Logic: Do not destroy!
+            }
 
-            // Try Finding Injection Point
+            // Normal Injection Logic
             let stats = document.querySelector(CONFIG.SELECTORS.STATISTICS_SECTION);
+            // Fallbacks...
             if (!stats) {
-                // Selector Fallback
                 const table = document.querySelector('#a-show > div:nth-child(1) > div:nth-child(2) > table');
                 if (table) stats = table.parentElement;
             }
             if (!stats) {
-                // Text Fallback
-                const all = document.querySelectorAll('*');
-                for (let el of all) {
-                    if (el.textContent === 'Statistics' && (el.tagName === 'H1' || el.tagName === 'H2')) {
-                        stats = el.parentElement;
-                        break;
-                    }
-                }
+                // Text Fallback (H1/H2)
+                document.querySelectorAll('h1, h2').forEach(el => {
+                    if (el.textContent.trim() === 'Statistics') stats = el.parentElement;
+                });
             }
 
             if (!stats) {
@@ -593,27 +650,6 @@
             });
             metricSel.onchange = (e) => onMetricChange(e.target.value);
             controls.appendChild(metricSel);
-
-            // Refresh Button
-            const refreshBtn = document.createElement('button');
-            refreshBtn.textContent = '↻';
-            refreshBtn.title = 'Clear Cache & Refresh';
-            refreshBtn.style.cssText = `
-                margin-left: 5px;
-                padding: 2px 8px;
-                border: 1px solid #d0d7de;
-                border-radius: 6px;
-                background-color: #f6f8fa;
-                cursor: pointer;
-                font-size: 1.1em;
-                color: #24292f;
-            `;
-            refreshBtn.onclick = () => {
-                if (confirm('Clear cache and re-fetch all data for this view?')) {
-                    onRefresh();
-                }
-            };
-            controls.appendChild(refreshBtn);
         }
 
         setLoading(isLoading) {
@@ -623,7 +659,7 @@
             if (cal) cal.style.opacity = isLoading ? '0.5' : '1';
         }
 
-        async renderGraph(dataMap, year, metric, userInfo, availableYears, onYearChange) {
+        async renderGraph(dataMap, year, metric, userInfo, availableYears, onYearChange, onRefresh) {
             // Update Header with Total Count and Embedded Year Selector
             const total = Object.values(dataMap || {}).reduce((acc, v) => acc + v, 0);
             const header = document.querySelector('#danbooru-grass-container h2');
@@ -757,8 +793,9 @@
                     /* Settings Popover */
                     #danbooru-grass-settings-popover {
                         position: absolute;
-                        bottom: 40px;
-                        left: 10px;
+                        top: 0;
+                        left: 45px;
+                        bottom: auto;
                         background: #fff;
                         color: #24292f;
                         border: 1px solid #d0d7de;
@@ -767,7 +804,8 @@
                         padding: 12px;
                         z-index: 10000;
                         display: none;
-                        width: 290px; /* Increased to fit 6 items roughly or 3x2 */
+                        width: 290px;
+                        transform-origin: top left;
                     }
                     .theme-grid {
                         display: grid;
@@ -1046,7 +1084,8 @@
 
                         // Styling
                         input.style.backgroundColor = inputColors[idx];
-                        input.style.color = (idx < 1) ? '#24292f' : '#ffffff';
+                        input.style.color = '#ffffff';
+                        input.style.textShadow = '0px 1px 2px rgba(0,0,0,0.8)';
                         input.style.fontWeight = 'bold';
                         input.style.border = '1px solid #d0d7de';
                         input.style.borderRadius = '4px';
@@ -1068,6 +1107,136 @@
 
                 modeSelect.addEventListener('change', () => renderEditor(modeSelect.value));
                 renderEditor(modeSelect.value); // Initial Render
+                modeSelect.addEventListener('change', () => renderEditor(modeSelect.value));
+                renderEditor(modeSelect.value); // Initial Render
+
+                // --- 3.1.5 Cache Info Section ---
+                const cacheSection = document.createElement('div');
+                cacheSection.style.marginTop = '15px';
+                cacheSection.style.borderTop = '1px solid #d0d7de';
+                cacheSection.style.paddingTop = '10px';
+                
+                // Header with Purge Button
+                const cacheHeader = document.createElement('div');
+                cacheHeader.style.display = 'flex';
+                cacheHeader.style.justifyContent = 'space-between';
+                cacheHeader.style.alignItems = 'center';
+                cacheHeader.style.marginBottom = '5px';
+                cacheHeader.innerHTML = `
+                    <div style="font-weight:bold; color:#24292f;">Cache Info</div>
+                    <button id="grass-purge-btn" title="Purge Cache" style="
+                        padding: 2px 6px;
+                        background-color: #ffebe9;
+                        border: 1px solid #ff818266;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 14px;
+                        color: #cf222e;
+                        line-height: 1;
+                    ">↺</button>
+                `;
+                cacheSection.appendChild(cacheHeader);
+
+                // Stats Container (Toggleable)
+                const cacheStatsContainer = document.createElement('div');
+                cacheStatsContainer.id = 'grass-cache-container';
+                cacheStatsContainer.innerHTML = `
+                    <div style="font-size:12px; margin-bottom:10px;">
+                        <a href="#" id="grass-cache-trigger" style="color:#0969da; text-decoration:none;">[ Show Stats ]</a>
+                    </div>
+                    <div id="grass-cache-content" style="display:none;"></div>
+                `;
+                cacheSection.appendChild(cacheStatsContainer);
+                popover.appendChild(cacheSection);
+
+                // Logic
+                const trigger = cacheSection.querySelector('#grass-cache-trigger');
+                const contentDiv = cacheSection.querySelector('#grass-cache-content');
+                const purgeBtn = cacheSection.querySelector('#grass-purge-btn');
+
+                const formatBytes = (bytes, decimals = 2) => {
+                    if (!+bytes) return '0 B';
+                    const k = 1024;
+                    const dm = decimals < 0 ? 0 : decimals;
+                    const sizes = ['B', 'KB', 'MB', 'GB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+                };
+
+                let isStatsVisible = false;
+                let statsInterval = null;
+
+                const updateMyStats = async () => {
+                    const dataManager = new DataManager();
+                    const stats = await dataManager.getCacheStats();
+                    contentDiv.innerHTML = `
+                            <table style="width:100%; border-collapse:collapse; font-size:11px;">
+                                <tr style="border-bottom:1px solid #eee;">
+                                    <th style="text-align:left; padding:2px;">Source</th>
+                                    <th style="text-align:right; padding:2px;">Items</th>
+                                    <th style="text-align:right; padding:2px;">Size</th>
+                                </tr>
+                                <tr>
+                                    <td style="padding:2px;">IndexedDB</td>
+                                    <td style="text-align:right; padding:2px;">${stats.indexedDB.count}</td>
+                                    <td style="text-align:right; padding:2px;">${formatBytes(stats.indexedDB.size)}</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding:2px;">Settings</td>
+                                    <td style="text-align:right; padding:2px;">${stats.localStorage.count}</td>
+                                    <td style="text-align:right; padding:2px;">${formatBytes(stats.localStorage.size)}</td>
+                                </tr>
+                            </table>
+                        `;
+                };
+
+                trigger.onclick = async (e) => {
+                    e.preventDefault();
+
+                    if (isStatsVisible) {
+                        // Hide
+                        contentDiv.style.display = 'none';
+                        trigger.textContent = "[ Show Stats ]";
+                        isStatsVisible = false;
+                        if (statsInterval) {
+                            clearInterval(statsInterval);
+                            statsInterval = null;
+                        }
+                    } else {
+                        // Show
+                        trigger.textContent = "Calculating...";
+                        contentDiv.style.display = 'block';
+                        await updateMyStats(); // Initial load
+                        trigger.textContent = "[ Hide Stats ]";
+                        isStatsVisible = true;
+
+                        // Start Polling (Real-time updates)
+                        if (statsInterval) clearInterval(statsInterval);
+                        statsInterval = setInterval(() => {
+                            if (isStatsVisible && popover.style.display === 'block') {
+                                updateMyStats();
+                            } else {
+                                // Safety clear
+                                clearInterval(statsInterval);
+                            }
+                        }, 100);
+                    }
+                };
+
+                // Cleanup on Close
+                const originalClose = closeSettings; 
+                // We don't have direct access to override 'closeSettings' easily as it's defined above scope in previous block but we can hook into the click listener?
+                // Actually, 'closeSettings' is defined in the parent scope. We can wrap it?
+                // Or better, just add a specific listener to the document click to clear interval if hidden?
+                // The 'closeSettings' sets display='none'.
+                // We can check visibility in the interval (done above).
+                
+                purgeBtn.onclick = () => {
+                    if (confirm('Are you sure you want to clear all cached data? This will trigger a full re-fetch.')) {
+                        onRefresh();
+                    }
+                };
+
                 footer.appendChild(popover); // Append to footer so it's relative
                 footer.style.position = 'relative'; // Ensure popover positions correctly
 
@@ -1206,6 +1375,28 @@
                     console.error("[Danbooru Grass] Render failed:", err);
                 });
         }
+        renderError(message, onRetry) {
+            const container = document.getElementById(this.containerId);
+            if (!container) return;
+            container.innerHTML = `
+                <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:140px; color:#cf222e; text-align:center;">
+                    <div style="font-weight:bold; margin-bottom:8px;">Unable to load contribution data</div>
+                    <div style="font-size:0.9em; margin-bottom:12px; color: var(--grass-text, #57606a);">${message}</div>
+                    <button id="grass-retry-btn" style="
+                        padding: 5px 16px;
+                        background-color: #f6f8fa;
+                        border: 1px solid #d0d7de;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 12px;
+                        font-weight: 500;
+                        color: #24292f;
+                    ">Retry</button>
+                </div>
+            `;
+            const btn = document.getElementById('grass-retry-btn');
+            if(btn) btn.onclick = onRetry;
+        }
     }
 
     // --- Main Execution ---
@@ -1245,7 +1436,11 @@
             try {
                 // Initial render for layout (header updates here slightly prematurely but data fills in later)
                 // We pass the callback even here so the dropdown works during loading if clicked
-                await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser, years, onYearChange);
+                await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser, years, onYearChange, async () => {
+                        renderer.setLoading(true);
+                        await dataManager.clearCache(currentMetric, context.targetUser);
+                        updateView();
+                    });
 
                 renderer.updateControls(years, currentYear, currentMetric,
                     onYearChange,
@@ -1264,9 +1459,14 @@
 
                 const data = await dataManager.getMetricData(currentMetric, context.targetUser, currentYear);
 
-                await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser, years, onYearChange);
+                await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser, years, onYearChange, async () => {
+                        renderer.setLoading(true);
+                        await dataManager.clearCache(currentMetric, context.targetUser);
+                        updateView();
+                    });
             } catch (e) {
                 console.error(e);
+                renderer.renderError(e.message || "Unknown error occurred", () => updateView());
             } finally {
                 renderer.setLoading(false);
             }
