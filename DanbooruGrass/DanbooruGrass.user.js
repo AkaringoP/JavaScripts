@@ -760,6 +760,7 @@
                         bottom: 40px;
                         left: 10px;
                         background: #fff;
+                        color: #24292f;
                         border: 1px solid #d0d7de;
                         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
                         border-radius: 8px;
