@@ -19,7 +19,10 @@
   // Config: Balanced settings for speed and stability
   const BATCH_SIZE = 5;
   const REQUEST_DELAY_MS = 500;
+
   const STORAGE_KEY = 'danbooru_locate_restore_query';
+  let isSearching = false;
+  let abortController = null;
 
   /**
    * Pauses execution for a specified duration.
@@ -86,17 +89,19 @@
     return data.length > 0 ? data.length : 20;
   };
 
-  const performCountCalculation = async (uiElement, searchQuery, currentId) => {
+  const performCountCalculation = async (uiElement, searchQuery, currentId, signal) => {
     uiElement.innerText = 'Checking settings...';
     // Base calculation on the cleaned query
     const calcQueryBase = searchQuery.replace(/order:random/gi, '').trim();
     const limit = await getEffectiveLimit(calcQueryBase);
 
+    if (signal.aborted) return { page: null, limit: null };
+
     uiElement.innerText = 'Calculating...';
     const countQuery = `${calcQueryBase} id:>${currentId}`;
     const countUrl = `/counts/posts.json?tags=${encodeURIComponent(countQuery)}`;
 
-    const response = await fetch(countUrl);
+    const response = await fetch(countUrl, { signal });
     if (!response.ok) {
       throw new Error(`Count API Error: ${response.status}`);
     }
@@ -114,14 +119,14 @@
     return { page, limit };
   };
 
-  const performBatchSearch = async (uiElement, searchQuery, currentId) => {
+  const performBatchSearch = async (uiElement, searchQuery, currentId, signal) => {
     const limit = await getEffectiveLimit(searchQuery);
     let startPage = 1;
     let found = false;
 
-    const fetchPage = async (tags, page, limit) => {
+    const fetchPage = async (tags, page, limit, signal) => {
       const apiUrl = `/posts.json?tags=${encodeURIComponent(tags)}&page=${page}&limit=${limit}&only=id`;
-      const res = await fetch(apiUrl);
+      const res = await fetch(apiUrl, { signal });
       if (!res.ok) {
         throw new Error(res.status);
       }
@@ -134,13 +139,19 @@
 
       const promises = [];
       for (let i = 0; i < BATCH_SIZE; i++) {
+        if (signal.aborted) break;
         const page = startPage + i;
         promises.push(
-          fetchPage(searchQuery, page, limit)
+          fetchPage(searchQuery, page, limit, signal)
             .then((data) => ({ page, data }))
-            .catch(() => ({ page, data: [] })),
+            .catch((err) => {
+              if (err.name === 'AbortError') throw err;
+              return { page, data: [] };
+            }),
         );
       }
+
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
       const results = await Promise.all(promises);
       results.sort((a, b) => a.page - b.page);
@@ -165,7 +176,19 @@
   };
 
   const executeLocate = async (uiElement) => {
-    const originalText = uiElement.innerText;
+    let originalText = uiElement.innerText;
+    if (originalText === 'Cancelled.' || originalText === 'Cancelling...') {
+      originalText = 'Locate in gallery';
+    }
+
+    if (isSearching) {
+      return;
+    }
+    isSearching = true;
+    abortController = new AbortController();
+    const signal = abortController.signal;
+
+    uiElement.style.pointerEvents = 'none'; // Visual feedback optionally
 
     try {
       const currentPostId = parseInt(document.body.dataset.id ||
@@ -205,10 +228,12 @@
       // 3. Execute Strategy
       let result = null;
       if (strategy === 'calculation') {
-        result = await performCountCalculation(uiElement, cleanQuery, currentPostId);
+        result = await performCountCalculation(uiElement, cleanQuery, currentPostId, signal);
       } else {
-        result = await performBatchSearch(uiElement, cleanQuery, currentPostId);
+        result = await performBatchSearch(uiElement, cleanQuery, currentPostId, signal);
       }
+
+      if (signal.aborted) return; // Silent exit regarding logic, handled in catch normally or here
 
       // 4. Redirect
       if (result && result.page) {
@@ -227,9 +252,22 @@
       }
 
     } catch (error) {
-      console.error('Locate Script Error:', error);
-      alert('An error occurred. Check console.');
-      uiElement.innerText = originalText;
+      if (error.name === 'AbortError') {
+        uiElement.innerText = 'Cancelled.';
+        setTimeout(() => {
+          if (!isSearching && uiElement.innerText === 'Cancelled.') {
+            uiElement.innerText = originalText;
+          }
+        }, 2000);
+      } else {
+        console.error('Locate Script Error:', error);
+        alert('An error occurred. Check console.');
+        uiElement.innerText = originalText;
+      }
+    } finally {
+      isSearching = false;
+      abortController = null;
+      uiElement.style.pointerEvents = 'auto';
     }
   };
 
@@ -293,6 +331,10 @@
 
         e.preventDefault();
         executeLocate(link);
+      } else if (e.code === 'Escape' && isSearching && abortController) {
+        e.preventDefault();
+        link.innerText = 'Cancelling...';
+        abortController.abort();
       }
     });
   };
