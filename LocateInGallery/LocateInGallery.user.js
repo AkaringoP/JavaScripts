@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Locate in Gallery
 // @namespace    https://github.com/AkaringoP
-// @version      1.0
+// @version      1.1
 // @description  Finds the post's gallery page using efficient counting logic (O(1)) for ID sorts, and batch search for others. Restores query context.
 // @author       AkaringoP
 // @license      MIT
