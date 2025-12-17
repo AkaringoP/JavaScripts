@@ -111,7 +111,7 @@
     }
 
     const page = Math.floor(precedingPostsCount / limit) + 1;
-    return {page, limit};
+    return { page, limit };
   };
 
   const performBatchSearch = async (uiElement, searchQuery, currentId) => {
@@ -136,9 +136,9 @@
       for (let i = 0; i < BATCH_SIZE; i++) {
         const page = startPage + i;
         promises.push(
-            fetchPage(searchQuery, page, limit)
-                .then((data) => ({page, data}))
-                .catch(() => ({page, data: []})),
+          fetchPage(searchQuery, page, limit)
+            .then((data) => ({ page, data }))
+            .catch(() => ({ page, data: [] })),
         );
       }
 
@@ -151,7 +151,7 @@
           isEmptyBatch = false;
         }
         if (res.data.find((p) => p.id === currentId)) {
-          return {page: res.page, limit};
+          return { page: res.page, limit };
         }
       }
 
@@ -169,14 +169,14 @@
 
     try {
       const currentPostId = parseInt(document.body.dataset.id ||
-          document.querySelector('meta[name="post-id"]')?.content, 10);
+        document.querySelector('meta[name="post-id"]')?.content, 10);
 
       const searchInput = document.querySelector('#tags') ||
-          document.querySelector('input[name="tags"]');
+        document.querySelector('input[name="tags"]');
       const originalQuery = searchInput ? searchInput.value.trim() : '';
 
-      if (!currentPostId || !originalQuery) {
-        alert('Missing post ID or search query.');
+      if (!currentPostId) {
+        alert('Missing post ID.');
         return;
       }
 
