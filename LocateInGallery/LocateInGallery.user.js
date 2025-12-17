@@ -7,8 +7,8 @@
 // @license      MIT
 // @match        *://danbooru.donmai.us/posts*
 // @icon         https://danbooru.donmai.us/favicon.ico
-// @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/main/LocateInGallery/LocateInGallery.user.js
-// @downloadURL  https://raw.githubusercontent.com/AkaringoP/JavaScripts/main/LocateInGallery/LocateInGallery.user.js
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/LocateInGallery/LocateInGallery.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/LocateInGallery/LocateInGallery.user.js
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==
