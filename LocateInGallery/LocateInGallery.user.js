@@ -19,6 +19,11 @@
   // Config: Balanced settings for speed and stability
   const BATCH_SIZE = 5;
   const REQUEST_DELAY_MS = 500;
+  const HISTORY_STORAGE_KEY = 'danbooru_locate_visit_history';
+  const HISTORY_LIMIT = 10;
+  // 1 hour expiration for volatile history perception
+  const HISTORY_EXPIRATION_MS = 60 * 60 * 1000;
+
 
   const STORAGE_KEY = 'danbooru_locate_restore_query';
   let isSearching = false;
@@ -175,6 +180,105 @@
     return null;
   };
 
+  const logCurrentPage = () => {
+    if (window.location.pathname !== '/posts') return;
+
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tags = (urlParams.get('tags') || '').trim();
+      const page = parseInt(urlParams.get('page'), 10) || 1;
+      const limit = parseInt(urlParams.get('limit'), 10) || 20;
+
+      const entry = { tags, page, limit, timestamp: Date.now() };
+      let history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
+      const now = Date.now();
+
+      // Filter out expired entries
+      history = history.filter(h => now - h.timestamp < HISTORY_EXPIRATION_MS);
+
+      // Deduplicate: If the new entry is identical to the most recent one log-wise, skip
+      if (history.length > 0) {
+        const last = history[0];
+        if (last.tags === tags && last.page === page && last.limit === limit) {
+          // Update timestamp of existing entry to keep it fresh
+          last.timestamp = now;
+          localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+          return;
+        }
+      }
+
+      history.unshift(entry);
+      if (history.length > HISTORY_LIMIT) {
+        history = history.slice(0, HISTORY_LIMIT);
+      }
+
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    } catch (e) {
+      console.warn('LocateInGallery: Failed to log history', e);
+    }
+  };
+
+  const checkHistory = async (currentId, targetTags, signal) => {
+    try {
+      let history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
+      if (history.length === 0) return null;
+
+      const now = Date.now();
+      // Just in case, filter expired (though logCurrentPage handles cleanup mostly)
+      // We do not save back here to avoid side effects during read, but we ignore expired
+      history = history.filter(h => now - h.timestamp < HISTORY_EXPIRATION_MS);
+
+      // Filter compatible entries
+      const candidates = history.filter(h => h.tags === targetTags);
+
+      for (const entry of candidates) {
+        if (signal.aborted) return null;
+
+        // 1. Primary Check (Exact Page)
+        const checkUrl = `/posts.json?tags=${encodeURIComponent(entry.tags)}&page=${entry.page}&limit=${entry.limit}&only=id`;
+        const res = await fetch(checkUrl, { signal });
+
+        // If primary request failed (network error), skip extended check for this entry
+        if (!res.ok) continue;
+
+        const data = await res.json();
+        if (data.find(p => p.id === currentId)) {
+          return { page: entry.page, limit: entry.limit };
+        }
+
+        if (signal.aborted) return null;
+
+        // 2. Extended Check (Next 3 pages) - Parallel
+        // Only if primary check failed but API call was successful (so query is valid)
+        const promises = [];
+        for (let offset = 1; offset <= 3; offset++) {
+          const nextPage = entry.page + offset;
+          const nextUrl = `/posts.json?tags=${encodeURIComponent(entry.tags)}&page=${nextPage}&limit=${entry.limit}&only=id`;
+
+          promises.push(
+            fetch(nextUrl, { signal })
+              .then(r => r.ok ? r.json() : [])
+              .then(d => ({ page: nextPage, data: d }))
+              .catch(() => ({ page: nextPage, data: [] }))
+          );
+        }
+
+        const results = await Promise.all(promises);
+        // Sort by page order to return the earliest occurrence
+        results.sort((a, b) => a.page - b.page);
+
+        for (const r of results) {
+          if (r.data.find(p => p.id === currentId)) {
+            return { page: r.page, limit: entry.limit };
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('LocateInGallery: History check error', e);
+    }
+    return null;
+  };
+
   const executeLocate = async (uiElement) => {
     let originalText = uiElement.innerText;
     if (originalText === 'Cancelled.' || originalText === 'Cancelling...') {
@@ -227,10 +331,19 @@
 
       // 3. Execute Strategy
       let result = null;
-      if (strategy === 'calculation') {
-        result = await performCountCalculation(uiElement, cleanQuery, currentPostId, signal);
+
+      // 3.0. Try Fast Path (History Log) first
+      uiElement.innerText = 'Checking history...';
+      const historyResult = await checkHistory(currentPostId, cleanQuery, signal);
+      if (historyResult) {
+        result = historyResult;
       } else {
-        result = await performBatchSearch(uiElement, cleanQuery, currentPostId, signal);
+        // Fallback to standard strategies
+        if (strategy === 'calculation') {
+          result = await performCountCalculation(uiElement, cleanQuery, currentPostId, signal);
+        } else {
+          result = await performBatchSearch(uiElement, cleanQuery, currentPostId, signal);
+        }
       }
 
       if (signal.aborted) return; // Silent exit regarding logic, handled in catch normally or here
@@ -298,7 +411,10 @@
     // A. Check if we need to restore context (Runs on Gallery Page)
     restoreQueryContext();
 
-    // B. Initialize Locate Button (Runs on Post Page)
+    // B. Log current page visit (Runs on Gallery Page)
+    logCurrentPage();
+
+    // C. Initialize Locate Button (Runs on Post Page)
     // We check for the options menu to decide if we are on a Post page
     const optionsList = document.querySelector('#post-options > ul');
     if (!optionsList) {
