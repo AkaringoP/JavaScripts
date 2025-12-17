@@ -23,7 +23,7 @@
   const HISTORY_LIMIT = 10;
   // 1 hour expiration for volatile history perception
   const HISTORY_EXPIRATION_MS = 60 * 60 * 1000;
-
+  const SEARCH_LIMIT = 1000; // Max permitted by Danbooru (usually 200 for basic, 1000 for Gold)
 
   const STORAGE_KEY = 'danbooru_locate_restore_query';
   let isSearching = false;
@@ -125,9 +125,12 @@
   };
 
   const performBatchSearch = async (uiElement, searchQuery, currentId, signal) => {
-    const limit = await getEffectiveLimit(searchQuery);
-    let startPage = 1;
+    const userLimit = await getEffectiveLimit(searchQuery);
+    let page = 1;
     let found = false;
+    let actualLimit = SEARCH_LIMIT; // Start by assuming we can search 1000
+
+    uiElement.innerText = 'Initializing Deep Scan...';
 
     const fetchPage = async (tags, page, limit, signal) => {
       const apiUrl = `/posts.json?tags=${encodeURIComponent(tags)}&page=${page}&limit=${limit}&only=id`;
@@ -139,43 +142,53 @@
     };
 
     while (!found) {
-      const endPage = startPage + BATCH_SIZE - 1;
-      uiElement.innerText = `Scanning Pages ${startPage} - ${endPage}...`;
-
-      const promises = [];
-      for (let i = 0; i < BATCH_SIZE; i++) {
-        if (signal.aborted) break;
-        const page = startPage + i;
-        promises.push(
-          fetchPage(searchQuery, page, limit, signal)
-            .then((data) => ({ page, data }))
-            .catch((err) => {
-              if (err.name === 'AbortError') throw err;
-              return { page, data: [] };
-            }),
-        );
-      }
-
       if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
-      const results = await Promise.all(promises);
-      results.sort((a, b) => a.page - b.page);
+      // Calculate the approximate range of posts we are scanning
+      // Note: This is a loose approximation if limits change, but good enough for UI
+      const startPostIndex = (page - 1) * actualLimit + 1;
+      const endPostIndex = page * actualLimit;
+      uiElement.innerText = `Scanning posts ${startPostIndex} - ${endPostIndex}...`;
 
-      let isEmptyBatch = true;
-      for (const res of results) {
-        if (res.data.length > 0) {
-          isEmptyBatch = false;
-        }
-        if (res.data.find((p) => p.id === currentId)) {
-          return { page: res.page, limit };
-        }
-      }
+      try {
+        const data = await fetchPage(searchQuery, page, Math.min(SEARCH_LIMIT, actualLimit), signal);
 
-      if (isEmptyBatch) {
-        break;
+        if (data.length === 0) {
+          return null; // End of results
+        }
+
+        // Update actualLimit based on the first response
+        if (page === 1) {
+          if (data.length > 0 && data.length < SEARCH_LIMIT) {
+            // Adaptive Limit Detection
+            if (data.length === 200) actualLimit = 200;
+            if (data.length === 1000) actualLimit = 1000;
+          }
+        }
+
+        // Search in the chunk
+        const index = data.findIndex(p => p.id === currentId);
+        if (index !== -1) {
+          // Found it!
+          // Calculate global index (0-based)
+          const globalIndex = (page - 1) * actualLimit + index;
+          // Calculate target page in User's view (1-based)
+          const targetPage = Math.floor(globalIndex / userLimit) + 1;
+          return { page: targetPage, limit: userLimit };
+        }
+
+        if (data.length < actualLimit) {
+          return null; // End of results check
+        }
+
+        page++;
+        await sleep(REQUEST_DELAY_MS); // Polite delay
+
+      } catch (err) {
+        if (err.name === 'AbortError') throw err;
+        console.warn(`Batch page ${page} failed`, err);
+        throw err;
       }
-      startPage += BATCH_SIZE;
-      await sleep(REQUEST_DELAY_MS);
     }
     return null;
   };
