@@ -1,12 +1,17 @@
 // ==UserScript==
 // @name         Danbooru Next Random Post
-// @namespace    http://tampermonkey.net/
+// @namespace    https://github.com/AkaringoP
 // @version      1.0
 // @description  Navigates to a random post while keeping the current search context. Supports Alt+Shift+RightArrow shortcut.
 // @author       AkaringoP
+// @license      MIT
 // @match        *://danbooru.donmai.us/posts/*
+// @icon         https://danbooru.donmai.us/favicon.ico
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/NextRandomPost/NextRandomPost.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/NextRandomPost/NextRandomPost.user.js
 // @grant        none
 // ==/UserScript==
+
 
 (() => {
   'use strict';
