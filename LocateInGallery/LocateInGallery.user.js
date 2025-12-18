@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Locate in Gallery
 // @namespace    https://github.com/AkaringoP
-// @version      1.1
+// @version      1.3
 // @description  Finds the post's gallery page using efficient counting logic (O(1)) for ID sorts, and batch search for others. Restores query context.
 // @author       AkaringoP
 // @license      MIT
@@ -16,16 +16,21 @@
 (() => {
   'use strict';
 
-  // Config: Balanced settings for speed and stability
+  // --- CONFIGURATION ---
+  /** @const {number} Number of parallel requests per batch. */
   const BATCH_SIZE = 5;
-  const REQUEST_DELAY_MS = 500;
+
+  /** @const {number} Max items per request (Try 1000 for Gold, fallback to 200 for Basic). */
+  const MAX_SCAN_LIMIT = 1000;
+
+  /** @const {number} Delay in milliseconds between batches to respect rate limits. */
+  const REQUEST_DELAY_MS = 600;
+
   const HISTORY_STORAGE_KEY = 'danbooru_locate_visit_history';
   const HISTORY_LIMIT = 10;
-  // 1 hour expiration for volatile history perception
   const HISTORY_EXPIRATION_MS = 60 * 60 * 1000;
-  const SEARCH_LIMIT = 1000; // Max permitted by Danbooru (usually 200 for basic, 1000 for Gold)
-
   const STORAGE_KEY = 'danbooru_locate_restore_query';
+
   let isSearching = false;
   let abortController = null;
 
@@ -69,7 +74,7 @@
   };
 
   /**
-   * Determines the effective 'limit' (posts per page).
+   * Determines the effective 'limit' (posts per page) for calculation.
    * @param {string} searchQuery - The current search query tags.
    * @return {Promise<number>} The number of posts per page.
    */
@@ -81,60 +86,80 @@
       return urlLimit;
     }
 
-    // When probing limit, strip 'order:random' to avoid confusion
     const cleanQuery = searchQuery.replace(/order:random/gi, '').trim();
     const probeUrl = `/posts.json?tags=${encodeURIComponent(cleanQuery)}&only=id`;
-    const response = await fetch(probeUrl);
 
-    if (!response.ok) {
-      throw new Error(`Limit Probe Error: ${response.status}`);
+    try {
+      const response = await fetch(probeUrl);
+      if (!response.ok) {
+        return 20;
+      }
+      const data = await response.json();
+      return data.length > 0 ? data.length : 20;
+    } catch (error) {
+      return 20;
     }
-
-    const data = await response.json();
-    return data.length > 0 ? data.length : 20;
   };
 
+  /**
+   * Calculates the page number using the count API (Strategy 1).
+   * @param {HTMLElement} uiElement - The link element to update status.
+   * @param {string} searchQuery - The current search tags.
+   * @param {number} currentId - The ID of the current post.
+   * @param {AbortSignal} signal - Signal to abort the request.
+   * @return {Promise<{page: number, limit: number}|{page: null, limit: null}>} Result.
+   */
   const performCountCalculation = async (uiElement, searchQuery, currentId, signal) => {
     uiElement.innerText = 'Checking settings...';
-    // Base calculation on the cleaned query
     const calcQueryBase = searchQuery.replace(/order:random/gi, '').trim();
     const limit = await getEffectiveLimit(calcQueryBase);
 
-    if (signal.aborted) return { page: null, limit: null };
+    if (signal.aborted) {
+      return {page: null, limit: null};
+    }
 
     uiElement.innerText = 'Calculating...';
     const countQuery = `${calcQueryBase} id:>${currentId}`;
     const countUrl = `/counts/posts.json?tags=${encodeURIComponent(countQuery)}`;
 
-    const response = await fetch(countUrl, { signal });
+    const response = await fetch(countUrl, {signal});
     if (!response.ok) {
       throw new Error(`Count API Error: ${response.status}`);
     }
-
     const data = await response.json();
 
     let precedingPostsCount = 0;
     if (data && data.counts && typeof data.counts.posts === 'number') {
       precedingPostsCount = data.counts.posts;
-    } else {
-      console.warn('Unexpected JSON structure from counts API:', data);
     }
 
     const page = Math.floor(precedingPostsCount / limit) + 1;
-    return { page, limit };
+    return {page, limit};
   };
 
+  /**
+   * Searches using parallel batch requests with adaptive limits (Strategy 2).
+   * @param {HTMLElement} uiElement - The link element.
+   * @param {string} searchQuery - The search tags.
+   * @param {number} currentId - The current post ID.
+   * @param {AbortSignal} signal - Signal to abort.
+   * @return {Promise<{page: number, limit: number}|null>} Result.
+   */
   const performBatchSearch = async (uiElement, searchQuery, currentId, signal) => {
     const userLimit = await getEffectiveLimit(searchQuery);
-    let page = 1;
+
+    let scanPage = 1;
     let found = false;
-    let actualLimit = SEARCH_LIMIT; // Start by assuming we can search 1000
 
-    uiElement.innerText = 'Initializing Deep Scan...';
+    // Start assuming max capability, but adapt if server returns less.
+    let detectedScanLimit = MAX_SCAN_LIMIT;
+    let limitDetected = false;
 
-    const fetchPage = async (tags, page, limit, signal) => {
-      const apiUrl = `/posts.json?tags=${encodeURIComponent(tags)}&page=${page}&limit=${limit}&only=id`;
-      const res = await fetch(apiUrl, { signal });
+    uiElement.innerText = 'Initializing Warp Drive...';
+
+    const fetchScanPage = async (tags, page, signal) => {
+      const apiUrl = `/posts.json?tags=${encodeURIComponent(tags)}&page=${page}&limit=${MAX_SCAN_LIMIT}&only=id`;
+      const res = await fetch(apiUrl, {signal});
       if (!res.ok) {
         throw new Error(res.status);
       }
@@ -142,59 +167,80 @@
     };
 
     while (!found) {
-      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-
-      // Calculate the approximate range of posts we are scanning
-      // Note: This is a loose approximation if limits change, but good enough for UI
-      const startPostIndex = (page - 1) * actualLimit + 1;
-      const endPostIndex = page * actualLimit;
-      uiElement.innerText = `Scanning posts ${startPostIndex} - ${endPostIndex}...`;
-
-      try {
-        const data = await fetchPage(searchQuery, page, Math.min(SEARCH_LIMIT, actualLimit), signal);
-
-        if (data.length === 0) {
-          return null; // End of results
-        }
-
-        // Update actualLimit based on the first response
-        if (page === 1) {
-          if (data.length > 0 && data.length < SEARCH_LIMIT) {
-            // Adaptive Limit Detection
-            if (data.length === 200) actualLimit = 200;
-            if (data.length === 1000) actualLimit = 1000;
-          }
-        }
-
-        // Search in the chunk
-        const index = data.findIndex(p => p.id === currentId);
-        if (index !== -1) {
-          // Found it!
-          // Calculate global index (0-based)
-          const globalIndex = (page - 1) * actualLimit + index;
-          // Calculate target page in User's view (1-based)
-          const targetPage = Math.floor(globalIndex / userLimit) + 1;
-          return { page: targetPage, limit: userLimit };
-        }
-
-        if (data.length < actualLimit) {
-          return null; // End of results check
-        }
-
-        page++;
-        await sleep(REQUEST_DELAY_MS); // Polite delay
-
-      } catch (err) {
-        if (err.name === 'AbortError') throw err;
-        console.warn(`Batch page ${page} failed`, err);
-        throw err;
+      if (signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
       }
+
+      // Update UI
+      const currentAssumeLimit = limitDetected ? detectedScanLimit : 200;
+      const startPost = (scanPage - 1) * currentAssumeLimit * BATCH_SIZE + 1;
+      const endPost = scanPage * currentAssumeLimit * BATCH_SIZE;
+      uiElement.innerText = `Scanning posts ~${startPost} - ${endPost}...`;
+
+      // Parallel Requests
+      const promises = [];
+      for (let i = 0; i < BATCH_SIZE; i++) {
+        const currentScanPage = (scanPage - 1) * BATCH_SIZE + (i + 1);
+        promises.push(
+            fetchScanPage(searchQuery, currentScanPage, signal)
+                .then((data) => ({scanPage: currentScanPage, data}))
+                .catch(() => ({scanPage: currentScanPage, data: []})),
+        );
+      }
+
+      const results = await Promise.all(promises);
+      results.sort((a, b) => a.scanPage - b.scanPage);
+
+      let emptyResponseCount = 0;
+
+      for (const res of results) {
+        if (res.data.length === 0) {
+          emptyResponseCount++;
+        }
+
+        // Adaptive Limit Detection (Run on first valid response)
+        if (!limitDetected && res.data.length > 0) {
+          if (res.data.length > 200) {
+            detectedScanLimit = 1000; // Gold User confirmed
+          } else {
+            // Either Basic user (capped at 200) or end of list.
+            // Safest to assume 200 for calculation alignment.
+            detectedScanLimit = 200;
+          }
+          limitDetected = true;
+        }
+
+        const localIndex = res.data.findIndex((p) => p.id === currentId);
+
+        if (localIndex !== -1) {
+          // Found! Calculate global index.
+          const postsBeforeThisPage = (res.scanPage - 1) * detectedScanLimit;
+          const globalIndex = postsBeforeThisPage + localIndex;
+
+          // Convert to user's page number
+          const targetUserPage = Math.floor(globalIndex / userLimit) + 1;
+
+          return {page: targetUserPage, limit: userLimit};
+        }
+      }
+
+      if (emptyResponseCount === BATCH_SIZE) {
+        return null; // End of results
+      }
+
+      scanPage++;
+      await sleep(REQUEST_DELAY_MS);
     }
     return null;
   };
 
+  /**
+   * Logs the current page visit to localStorage for fast-path lookups.
+   */
   const logCurrentPage = () => {
-    if (window.location.pathname !== '/posts') return;
+    if (window.location.pathname !== '/posts') {
+      return;
+    }
 
     try {
       const urlParams = new URLSearchParams(window.location.search);
@@ -202,18 +248,15 @@
       const page = parseInt(urlParams.get('page'), 10) || 1;
       const limit = parseInt(urlParams.get('limit'), 10) || 20;
 
-      const entry = { tags, page, limit, timestamp: Date.now() };
+      const entry = {tags, page, limit, timestamp: Date.now()};
       let history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
       const now = Date.now();
 
-      // Filter out expired entries
-      history = history.filter(h => now - h.timestamp < HISTORY_EXPIRATION_MS);
+      history = history.filter((h) => now - h.timestamp < HISTORY_EXPIRATION_MS);
 
-      // Deduplicate: If the new entry is identical to the most recent one log-wise, skip
       if (history.length > 0) {
         const last = history[0];
         if (last.tags === tags && last.page === page && last.limit === limit) {
-          // Update timestamp of existing entry to keep it fresh
           last.timestamp = now;
           localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
           return;
@@ -231,58 +274,66 @@
     }
   };
 
+  /**
+   * Checks history for an immediate match.
+   * @param {number} currentId - The post ID.
+   * @param {string} targetTags - The search query.
+   * @param {AbortSignal} signal - Abort signal.
+   * @return {Promise<{page: number, limit: number}|null>} Result.
+   */
   const checkHistory = async (currentId, targetTags, signal) => {
     try {
       let history = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || '[]');
-      if (history.length === 0) return null;
+      if (history.length === 0) {
+        return null;
+      }
 
       const now = Date.now();
-      // Just in case, filter expired (though logCurrentPage handles cleanup mostly)
-      // We do not save back here to avoid side effects during read, but we ignore expired
-      history = history.filter(h => now - h.timestamp < HISTORY_EXPIRATION_MS);
-
-      // Filter compatible entries
-      const candidates = history.filter(h => h.tags === targetTags);
+      history = history.filter((h) => now - h.timestamp < HISTORY_EXPIRATION_MS);
+      const candidates = history.filter((h) => h.tags === targetTags);
 
       for (const entry of candidates) {
-        if (signal.aborted) return null;
+        if (signal.aborted) {
+          return null;
+        }
 
         // 1. Primary Check (Exact Page)
         const checkUrl = `/posts.json?tags=${encodeURIComponent(entry.tags)}&page=${entry.page}&limit=${entry.limit}&only=id`;
-        const res = await fetch(checkUrl, { signal });
+        const res = await fetch(checkUrl, {signal});
 
-        // If primary request failed (network error), skip extended check for this entry
-        if (!res.ok) continue;
-
-        const data = await res.json();
-        if (data.find(p => p.id === currentId)) {
-          return { page: entry.page, limit: entry.limit };
+        if (!res.ok) {
+          continue;
         }
 
-        if (signal.aborted) return null;
+        const data = await res.json();
+        if (data.find((p) => p.id === currentId)) {
+          return {page: entry.page, limit: entry.limit};
+        }
+
+        if (signal.aborted) {
+          return null;
+        }
 
         // 2. Extended Check (Next 3 pages) - Parallel
-        // Only if primary check failed but API call was successful (so query is valid)
         const promises = [];
         for (let offset = 1; offset <= 3; offset++) {
           const nextPage = entry.page + offset;
           const nextUrl = `/posts.json?tags=${encodeURIComponent(entry.tags)}&page=${nextPage}&limit=${entry.limit}&only=id`;
 
           promises.push(
-            fetch(nextUrl, { signal })
-              .then(r => r.ok ? r.json() : [])
-              .then(d => ({ page: nextPage, data: d }))
-              .catch(() => ({ page: nextPage, data: [] }))
+              fetch(nextUrl, {signal})
+                  .then((r) => r.ok ? r.json() : [])
+                  .then((d) => ({page: nextPage, data: d}))
+                  .catch(() => ({page: nextPage, data: []})),
           );
         }
 
         const results = await Promise.all(promises);
-        // Sort by page order to return the earliest occurrence
         results.sort((a, b) => a.page - b.page);
 
         for (const r of results) {
-          if (r.data.find(p => p.id === currentId)) {
-            return { page: r.page, limit: entry.limit };
+          if (r.data.find((p) => p.id === currentId)) {
+            return {page: r.page, limit: entry.limit};
           }
         }
       }
@@ -292,6 +343,10 @@
     return null;
   };
 
+  /**
+   * Main execution logic.
+   * @param {HTMLElement} uiElement - The UI link element.
+   */
   const executeLocate = async (uiElement) => {
     let originalText = uiElement.innerText;
     if (originalText === 'Cancelled.' || originalText === 'Cancelling...') {
@@ -305,14 +360,14 @@
     abortController = new AbortController();
     const signal = abortController.signal;
 
-    uiElement.style.pointerEvents = 'none'; // Visual feedback optionally
+    uiElement.style.pointerEvents = 'none';
 
     try {
       const currentPostId = parseInt(document.body.dataset.id ||
-        document.querySelector('meta[name="post-id"]')?.content, 10);
+          document.querySelector('meta[name="post-id"]')?.content, 10);
 
       const searchInput = document.querySelector('#tags') ||
-        document.querySelector('input[name="tags"]');
+          document.querySelector('input[name="tags"]');
       const originalQuery = searchInput ? searchInput.value.trim() : '';
 
       if (!currentPostId) {
@@ -351,7 +406,6 @@
       if (historyResult) {
         result = historyResult;
       } else {
-        // Fallback to standard strategies
         if (strategy === 'calculation') {
           result = await performCountCalculation(uiElement, cleanQuery, currentPostId, signal);
         } else {
@@ -359,13 +413,14 @@
         }
       }
 
-      if (signal.aborted) return; // Silent exit regarding logic, handled in catch normally or here
+      if (signal.aborted) {
+        return;
+      }
 
       // 4. Redirect
       if (result && result.page) {
         uiElement.innerText = `Found (Pg ${result.page})! Redirecting...`;
 
-        // If we stripped order:random, save the ORIGINAL query to restore it later
         if (needsRestore) {
           sessionStorage.setItem(STORAGE_KEY, originalQuery);
         }
@@ -398,40 +453,32 @@
   };
 
   /**
-   * Feature: Restore Query Context on Gallery Page
-   * Checks if we just arrived from a Locate action and restores the search box.
+   * Restores search context if coming from a random search.
    */
   const restoreQueryContext = () => {
     const storedQuery = sessionStorage.getItem(STORAGE_KEY);
-    if (!storedQuery) return;
+    if (!storedQuery) {
+      return;
+    }
 
-    // We are on a gallery page if the URL path is /posts (and not /posts/123)
-    // Checking strict path helps avoid running on the post page itself immediately after redirect (though href change handles that)
     if (window.location.pathname === '/posts') {
       const searchInput = document.querySelector('#tags') || document.querySelector('input[name="tags"]');
       if (searchInput) {
         searchInput.value = storedQuery;
-        // Optional: Provide visual feedback? (e.g., flash border)
-        // searchInput.style.transition = 'background-color 0.5s';
-        // searchInput.style.backgroundColor = '#e8f5e9'; // Light green hint
       }
-      // Clear storage so it doesn't persist on future reloads
       sessionStorage.removeItem(STORAGE_KEY);
     }
   };
 
+  /**
+   * Initializes the script.
+   */
   const init = async () => {
-    // A. Check if we need to restore context (Runs on Gallery Page)
     restoreQueryContext();
-
-    // B. Log current page visit (Runs on Gallery Page)
     logCurrentPage();
 
-    // C. Initialize Locate Button (Runs on Post Page)
-    // We check for the options menu to decide if we are on a Post page
     const optionsList = document.querySelector('#post-options > ul');
     if (!optionsList) {
-      // If no options list, we are likely on the gallery page or elsewhere, so stop here.
       return;
     }
 
