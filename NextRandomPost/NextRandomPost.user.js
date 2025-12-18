@@ -24,10 +24,14 @@
   let isNavigating = false;
   let isFetching = false;
   let toastElement = null;
-  let toastTimeout = null; // To handle clearing previous timeouts
+  let toastTimeout = null;
 
   // --- UI Utilities (Toast) ---
 
+  /**
+   * Creates and appends the toast element to the DOM.
+   * @return {!HTMLElement} The created toast element.
+   */
   const createToast = () => {
     const toast = document.createElement('div');
     const style = toast.style;
@@ -36,20 +40,19 @@
     style.top = '20px';
     style.left = '50%';
     style.transform = 'translateX(-50%)';
-    
-    // Style adjustments requested
+
     style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
     style.color = '#fff';
-    style.padding = '10px 24px'; // Slightly wider padding
-    style.borderRadius = '8px';  // Rounded rectangle (not pill)
-    style.fontFamily = 'Verdana, sans-serif';
+    style.padding = '10px 24px';
+    style.borderRadius = '8px';
+    style.fontFamily = 'Arial, sans-serif';
     style.fontSize = '14px';
-    style.fontWeight = 'normal'; // Normal font weight
-    style.whiteSpace = 'nowrap'; // Force single line
-    
+    style.fontWeight = 'normal';
+    style.whiteSpace = 'nowrap';
+
     style.zIndex = '10000';
     style.opacity = '0';
-    style.transition = 'opacity 0.4s ease'; // Smooth fade effect
+    style.transition = 'opacity 0.4s ease';
     style.pointerEvents = 'none';
     style.boxShadow = '0 4px 6px rgba(0,0,0,0.15)';
 
@@ -57,22 +60,26 @@
     return toast;
   };
 
+  /**
+   * Displays a toast message to the user.
+   * @param {string} message The message to display.
+   * @param {string=} type The type of message ('info' or 'error'). Defaults to 'info'.
+   */
   const showToast = (message, type = 'info') => {
     if (!toastElement) {
       toastElement = createToast();
     }
 
-    // Clear any pending fade-out to prevent flickering if triggered quickly
     if (toastTimeout) {
       clearTimeout(toastTimeout);
       toastTimeout = null;
     }
 
-    toastElement.style.color = type === 'error' ? '#ff8e8e' : '#fff'; // Softer red for error
+    toastElement.style.color = type === 'error' ? '#ff8e8e' : '#fff';
     toastElement.innerText = message;
-    
-    // Trigger Reflow to ensure the transition plays if it was just created or hidden
-    void toastElement.offsetWidth; 
+
+    // Trigger reflow to restart animation.
+    void toastElement.offsetWidth;
 
     toastElement.style.opacity = '1';
 
@@ -85,11 +92,15 @@
 
   // --- Core Logic ---
 
+  /**
+   * Retrieves the current search query from the input box or URL.
+   * @return {string} The current search tags.
+   */
   const getCurrentQuery = () => {
     const searchInput = document.querySelector('#tags') ||
-        document.querySelector('input[name="tags"]');
+      document.querySelector('input[name="tags"]');
 
-    if (searchInput && searchInput.value.trim() !== '') {
+    if (searchInput) {
       return searchInput.value.trim();
     }
 
@@ -97,44 +108,56 @@
     return urlParams.get('q') || urlParams.get('tags') || '';
   };
 
-  const fetchRandomId = async (tags) => {
-    if (isFetching) return null;
+  /**
+   * Fetches a random post ID based on the given tags.
+   * @param {string} tags The search tags to use.
+   * @param {boolean=} force Whether to force a fetch even if one is in progress.
+   * @return {!Promise<?number>} The random post ID, or null if none found.
+   */
+  const fetchRandomId = async (tags, force = false) => {
+    if (isFetching && !force) return null;
     isFetching = true;
 
     try {
-      const orderRegex = /order:[^\s]+/;
-      let apiQuery = tags;
+      // Strip existing order tags to avoid conflicts.
+      const apiQuery = tags.replace(/order:[^\s]+/, '').trim();
 
-      if (orderRegex.test(apiQuery)) {
-        apiQuery = apiQuery.replace(orderRegex, 'order:random');
-      } else {
-        apiQuery += ' order:random';
-      }
-
-      const apiUrl = `/posts.json?tags=${encodeURIComponent(apiQuery)}&limit=1&only=id`;
+      const apiUrl = `/posts.json?tags=${encodeURIComponent(apiQuery)}&random=true&limit=1&only=id`;
       const response = await fetch(apiUrl);
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       return (data && data.length > 0) ? data[0].id : null;
-
     } catch (error) {
       console.warn('NextRandomPost: Fetch failed', error);
-      return null;
+      throw error;
     } finally {
       isFetching = false;
     }
   };
 
+  /**
+   * Prefetches a random post ID to cache for later use.
+   * @return {!Promise<void>}
+   */
   const performPrefetch = async () => {
     const currentTags = getCurrentQuery();
-    const id = await fetchRandomId(currentTags);
-    if (id) {
-      cachedNextId = id;
-      cachedQuerySource = currentTags;
+    try {
+      const id = await fetchRandomId(currentTags, false);
+      if (id) {
+        cachedNextId = id;
+        cachedQuerySource = currentTags;
+      }
+    } catch (e) {
+      // Ignore prefetch errors.
     }
   };
 
+  /**
+   * Navigates to a specific post with the active tags.
+   * @param {number} postId The ID of the post to navigate to.
+   * @param {string} activeTags The tags to maintain in the URL.
+   */
   const navigateToPost = (postId, activeTags) => {
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('tags')) {
@@ -145,6 +168,10 @@
     window.location.href = `/posts/${postId}?${urlParams.toString()}`;
   };
 
+  /**
+   * Executes the navigation logic, using cached ID or fetching a new one.
+   * @return {!Promise<void>}
+   */
   const executeNavigation = async () => {
     if (isNavigating) return;
     isNavigating = true;
@@ -159,18 +186,29 @@
 
     // Strategy 2: Cache Miss
     showToast('Query changed. Searching...', 'info');
-    const freshId = await fetchRandomId(currentTags);
 
-    if (freshId) {
-      navigateToPost(freshId, currentTags);
-    } else {
-      showToast('No random post found.', 'error');
-      isNavigating = false;
+    try {
+      const freshId = await fetchRandomId(currentTags, true);
+
+      if (freshId) {
+        navigateToPost(freshId, currentTags);
+      } else {
+        showToast('No random post found.', 'error');
+        isNavigating = false;
+      }
+    } catch (error) {
+      // Fallback to server-side random redirect if API fails.
+      console.error('API Error, falling back to server redirect', error);
+      const fallbackUrl = `/posts/random${currentTags ? '?tags=' + encodeURIComponent(currentTags) : ''}`;
+      window.location.href = fallbackUrl;
     }
   };
 
   // --- Init ---
 
+  /**
+   * Initializes the script, setting up event listeners and prefetching.
+   */
   const init = () => {
     performPrefetch();
 
@@ -194,9 +232,9 @@
     }
 
     document.addEventListener('keydown', (event) => {
-      const target = event.target;
+      const target = /** @type {!HTMLElement} */ (event.target);
       const isInput = ['INPUT', 'TEXTAREA'].includes(target.tagName) ||
-          target.isContentEditable;
+        target.isContentEditable;
 
       if (isInput) return;
 
