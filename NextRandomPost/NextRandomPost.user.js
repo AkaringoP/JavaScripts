@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Danbooru Next Random Post
 // @namespace    https://github.com/AkaringoP
-// @version      1.0
-// @description  Navigates to a random post while keeping the current search context. Supports Alt+Shift+RightArrow shortcut.
+// @version      2.0
+// @description  Navigates to a random post using the current input context.
 // @author       AkaringoP
 // @license      MIT
 // @match        *://danbooru.donmai.us/posts/*
@@ -12,29 +12,98 @@
 // @grant        none
 // ==/UserScript==
 
-
 (() => {
   'use strict';
 
-  /**
-   * Core logic to find and navigate to a random post.
-   *
-   * @param {HTMLElement} uiElement - The element to show status text (e.g., the link).
-   */
-  const executeRandomNavigation = async (uiElement) => {
-    // Show 'Finding...' text on the link if provided
-    const originalText = uiElement ? uiElement.innerText : '';
-    if (uiElement) uiElement.innerText = 'Finding...';
+  // --- Constants ---
+  const TOAST_DURATION_MS = 2500;
+
+  // --- State Management ---
+  let cachedNextId = null;
+  let cachedQuerySource = '';
+  let isNavigating = false;
+  let isFetching = false;
+  let toastElement = null;
+  let toastTimeout = null; // To handle clearing previous timeouts
+
+  // --- UI Utilities (Toast) ---
+
+  const createToast = () => {
+    const toast = document.createElement('div');
+    const style = toast.style;
+
+    style.position = 'fixed';
+    style.top = '20px';
+    style.left = '50%';
+    style.transform = 'translateX(-50%)';
+    
+    // Style adjustments requested
+    style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
+    style.color = '#fff';
+    style.padding = '10px 24px'; // Slightly wider padding
+    style.borderRadius = '8px';  // Rounded rectangle (not pill)
+    style.fontFamily = 'Verdana, sans-serif';
+    style.fontSize = '14px';
+    style.fontWeight = 'normal'; // Normal font weight
+    style.whiteSpace = 'nowrap'; // Force single line
+    
+    style.zIndex = '10000';
+    style.opacity = '0';
+    style.transition = 'opacity 0.4s ease'; // Smooth fade effect
+    style.pointerEvents = 'none';
+    style.boxShadow = '0 4px 6px rgba(0,0,0,0.15)';
+
+    document.body.appendChild(toast);
+    return toast;
+  };
+
+  const showToast = (message, type = 'info') => {
+    if (!toastElement) {
+      toastElement = createToast();
+    }
+
+    // Clear any pending fade-out to prevent flickering if triggered quickly
+    if (toastTimeout) {
+      clearTimeout(toastTimeout);
+      toastTimeout = null;
+    }
+
+    toastElement.style.color = type === 'error' ? '#ff8e8e' : '#fff'; // Softer red for error
+    toastElement.innerText = message;
+    
+    // Trigger Reflow to ensure the transition plays if it was just created or hidden
+    void toastElement.offsetWidth; 
+
+    toastElement.style.opacity = '1';
+
+    toastTimeout = setTimeout(() => {
+      if (toastElement) {
+        toastElement.style.opacity = '0';
+      }
+    }, TOAST_DURATION_MS);
+  };
+
+  // --- Core Logic ---
+
+  const getCurrentQuery = () => {
+    const searchInput = document.querySelector('#tags') ||
+        document.querySelector('input[name="tags"]');
+
+    if (searchInput && searchInput.value.trim() !== '') {
+      return searchInput.value.trim();
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('q') || urlParams.get('tags') || '';
+  };
+
+  const fetchRandomId = async (tags) => {
+    if (isFetching) return null;
+    isFetching = true;
 
     try {
-      // 1. Parse current URL parameters
-      // In the browser URL, the parameter is 'q'
-      const urlParams = new URLSearchParams(window.location.search);
-      const currentQuery = urlParams.get('q') || '';
-
-      // 2. Modify query for API: Replace specific order with 'order:random'
       const orderRegex = /order:[^\s]+/;
-      let apiQuery = currentQuery;
+      let apiQuery = tags;
 
       if (orderRegex.test(apiQuery)) {
         apiQuery = apiQuery.replace(orderRegex, 'order:random');
@@ -42,79 +111,101 @@
         apiQuery += ' order:random';
       }
 
-      // 3. Fetch random post ID (limit=1, only=id for performance)
-      // FIX: The API endpoint uses 'tags=' parameter, NOT 'q='
       const apiUrl = `/posts.json?tags=${encodeURIComponent(apiQuery)}&limit=1&only=id`;
-
       const response = await fetch(apiUrl);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
 
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
+      return (data && data.length > 0) ? data[0].id : null;
 
-      if (data && data.length > 0) {
-        const nextId = data[0].id;
-        // 4. Navigate to the new post
-        // IMPORTANT: We append window.location.search to keep the original user query (e.g., order:change)
-        window.location.href = `/posts/${nextId}${window.location.search}`;
-      } else {
-        alert('No random post found.');
-        if (uiElement) uiElement.innerText = originalText;
-      }
     } catch (error) {
-      console.error('Next Random Post Script Error:', error);
-      alert('An error occurred. Please check the console.');
-      if (uiElement) uiElement.innerText = originalText;
+      console.warn('NextRandomPost: Fetch failed', error);
+      return null;
+    } finally {
+      isFetching = false;
     }
   };
 
-  /**
-   * Initializes the script: creates the UI link and sets up shortcuts.
-   */
+  const performPrefetch = async () => {
+    const currentTags = getCurrentQuery();
+    const id = await fetchRandomId(currentTags);
+    if (id) {
+      cachedNextId = id;
+      cachedQuerySource = currentTags;
+    }
+  };
+
+  const navigateToPost = (postId, activeTags) => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('tags')) {
+      urlParams.set('tags', activeTags);
+    } else {
+      urlParams.set('q', activeTags);
+    }
+    window.location.href = `/posts/${postId}?${urlParams.toString()}`;
+  };
+
+  const executeNavigation = async () => {
+    if (isNavigating) return;
+    isNavigating = true;
+
+    const currentTags = getCurrentQuery();
+
+    // Strategy 1: Cache Hit
+    if (cachedNextId && currentTags === cachedQuerySource) {
+      navigateToPost(cachedNextId, currentTags);
+      return;
+    }
+
+    // Strategy 2: Cache Miss
+    showToast('Query changed. Searching...', 'info');
+    const freshId = await fetchRandomId(currentTags);
+
+    if (freshId) {
+      navigateToPost(freshId, currentTags);
+    } else {
+      showToast('No random post found.', 'error');
+      isNavigating = false;
+    }
+  };
+
+  // --- Init ---
+
   const init = () => {
-    // 1. Find the container for the link (Options menu)
+    performPrefetch();
+
     const optionsList = document.querySelector('#post-options > ul');
-    if (!optionsList) return;
+    if (optionsList) {
+      const listItem = document.createElement('li');
+      const link = document.createElement('a');
 
-    // 2. Create the 'Next random post' link (UI Label)
-    const listItem = document.createElement('li');
-    const link = document.createElement('a');
+      link.href = '#';
+      link.innerText = 'Next random post';
+      link.style.cursor = 'pointer';
+      link.title = 'Shortcut: Alt + Shift + →';
 
-    link.href = '#';
-    link.innerText = 'Next random post';
-    link.style.cursor = 'pointer';
-    // Tooltip to inform the user about the shortcut
-    link.title = 'Shortcut: Alt + Shift + →';
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        executeNavigation();
+      });
 
-    listItem.appendChild(link);
-    optionsList.appendChild(listItem);
+      listItem.appendChild(link);
+      optionsList.appendChild(listItem);
+    }
 
-    // 3. Add Click Event Listener (Mouse support)
-    link.addEventListener('click', (event) => {
-      event.preventDefault();
-      executeRandomNavigation(link);
-    });
-
-    // 4. Add Keyboard Shortcut Listener (Keyboard support)
-    // Shortcut: Alt + Shift + ArrowRight
     document.addEventListener('keydown', (event) => {
-      // Prevent triggering when typing in input fields
       const target = event.target;
-      const isInput = target.tagName === 'INPUT' ||
-                      target.tagName === 'TEXTAREA' ||
-                      target.isContentEditable;
+      const isInput = ['INPUT', 'TEXTAREA'].includes(target.tagName) ||
+          target.isContentEditable;
 
       if (isInput) return;
 
-      // Check for Alt + Shift + ArrowRight
       if (event.altKey && event.shiftKey && event.key === 'ArrowRight') {
-        event.preventDefault(); // Prevent default browser behavior
-        executeRandomNavigation(link);
+        event.preventDefault();
+        executeNavigation();
       }
     });
   };
 
-  // Run the initialization
   init();
 })();
