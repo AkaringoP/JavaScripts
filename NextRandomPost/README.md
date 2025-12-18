@@ -1,19 +1,27 @@
 # Danbooru Next Random Post
 
-A UserScript for Danbooru that allows you to navigate to a random post while **preserving your current search context (tags and sort order)**.
+A high-performance UserScript for [Danbooru](https://danbooru.donmai.us/) that allows users to navigate to a random post within their current search context instantly.
 
-Unlike the default "Random" feature which jumps to a random post from the entire database, this script ensures that you stay within your current search query (e.g., specific artist, character, or tag combination).
+## 🚀 Overview
 
-## ✨ Features
+This script adds a **"Next random post"** button to the post options sidebar and enables a keyboard shortcut (`Alt` + `Shift` + `→`). Unlike the default random feature, this script:
+1.  **Preserves your search tags** (keeps you inside your current query).
+2.  **Pre-fetches the next post** for zero-latency navigation.
+3.  **Detects input changes** to ensure accurate search results.
 
-* **🔍 Context Preservation**
-    * Navigates to a random post only within the currently searched tags (e.g., `user:AkaringoP tsujino_akari`).
-    * Preserves your original URL parameters and sort order (e.g., `order:change`) after navigation.
-* **⚡️ Keyboard Shortcut**
-    * **`Alt` + `Shift` + `→` (Right Arrow)**: Instantly jump to the next random post.
-    * Includes safety checks to prevent accidental triggering while typing in search bars or comments.
-* **🖱 UI Integration**
-    * Adds a convenient **"Next random post"** link to the bottom of the sidebar "Options" menu.
+## 📝 Update Notes
+
+### v2.0
+* **Smart Pre-fetching:** Implemented background pre-fetching for instant navigation.
+* **Input Detection:** The script now prioritizes the search bar input over URL parameters.
+* **UI Improvement:** Replaced native alert popups with non-intrusive Toast notifications.
+* **Context Logic:** URL parameters now properly update to reflect modified tags upon navigation.
+* **Stability:** Added request throttling and improved error handling.
+
+### v1.0
+* Initial release.
+* Added "Next random post" link to the sidebar.
+* Added keyboard shortcut (`Alt` + `Shift` + `→`) for quick navigation.
 
 ## 🚀 Installation
 
@@ -26,26 +34,17 @@ You need a UserScript manager extension installed in your browser to use this sc
 2.  **Install the Script:**
     * **[Click here to install the script](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/NextRandomPost/NextRandomPost.user.js)**
     
+
 ## 📖 Usage
 
-### Method 1: Mouse
-1.  Navigate to any post on Danbooru.
-2.  Look at the **Options** menu on the left sidebar.
-3.  Click the **Next random post** link at the bottom.
+### Method 1: Sidebar Link
+Click the **"Next random post"** link located in the **Options** sidebar on any post page.
 
 ### Method 2: Keyboard Shortcut
-* Press **`Alt` + `Shift` + `→`** (Right Arrow key) to jump to the next random post.
+Press **`Alt` + `Shift` + `Right Arrow (→)`** to instantly jump to the next random image.
 
-## 🛠 How it Works
+*Note: The shortcut is disabled while typing in the search bar or comment box to prevent accidental navigation.*
 
-1.  The script reads the current search query (tags) from the URL.
-2.  It temporarily modifies the query to `order:random` for an API request.
-3.  It fetches a single post ID from the Danbooru API (`/posts.json`) that matches the current tags.
-4.  It redirects the browser to the new post ID while appending the **original** search query string to the URL, ensuring the user's browsing context remains unchanged.
+## 📜 License
 
-## 📝 License
-
-This project is licensed under the MIT License.
-
----
-**Author:** [AkaringoP](https://github.com/AkaringoP)
+Distributed under the MIT License. See `LICENSE` for more information.
