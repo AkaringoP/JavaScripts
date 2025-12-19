@@ -5,7 +5,9 @@
 // @description  Assist creating notes on mobile with accurate scaling and touch-friendly controls.
 // @author       AkaringoP 
 // @match        *://danbooru.donmai.us/posts/*
-// @grant        GM_addStyle
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
+// @grant        none
 // ==/UserScript==
 
 (function() {
