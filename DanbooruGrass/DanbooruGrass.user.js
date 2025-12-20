@@ -31,7 +31,7 @@
             solarized_light: { name: 'Solarized Light', bg: '#fdf6e3', empty: '#eee8d5', text: '#586e75', scrollbar: '#93a1a1' },
             sakura: { name: 'Sakura', bg: '#fff0f5', empty: '#ffe0ea', text: '#24292f' },
             sunset: { name: 'Sunset', bg: '#fff5e6', empty: '#ffe0b2', text: '#24292f' },
-            ice: { name: 'Ice', bg: '#e6fffb', empty: '#ddfbf7', text: '#006d75', scrollbar: '#5cdbd3' },
+            ice: { name: 'Ice', bg: '#e6fffb', empty: '#ffffff', text: '#006d75', scrollbar: '#5cdbd3' },
             aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338', scrollbar: '#9FB5C6' },
 
             // Dark Schemes
