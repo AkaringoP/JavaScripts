@@ -26,12 +26,18 @@
             STATISTICS_SECTION: 'div.user-statistics',
         },
         THEMES: {
+            // Light Schemes
             light: { name: 'Light', bg: '#ffffff', empty: '#ebedf0', text: '#24292f' },
-            aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338', scrollbar: '#9FB5C6' },
+            solarized_light: { name: 'Solarized Light', bg: '#fdf6e3', empty: '#eee8d5', text: '#586e75', scrollbar: '#93a1a1' },
             sakura: { name: 'Sakura', bg: '#fff0f5', empty: '#ffe0ea', text: '#24292f' },
             sunset: { name: 'Sunset', bg: '#fff5e6', empty: '#ffe0b2', text: '#24292f' },
-            ocean: { name: 'Ocean', bg: '#1b2a4e', empty: '#2b3d68', text: '#e6edf3' },
+            ice: { name: 'Ice', bg: '#e6fffb', empty: '#ddfbf7', text: '#006d75', scrollbar: '#5cdbd3' },
+            aurora: { name: 'Aurora', bg: 'linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)', empty: '#ffffff', text: '#2e3338', scrollbar: '#9FB5C6' },
+
+            // Dark Schemes
             midnight: { name: 'Midnight', bg: '#000000', empty: '#222222', text: '#f0f6fc' },
+            solarized_dark: { name: 'Solarized Dark', bg: '#002b36', empty: '#073642', text: '#93a1a1', scrollbar: '#586e75' },
+            ocean: { name: 'Ocean', bg: '#1b2a4e', empty: '#2b3d68', text: '#e6edf3' },
         }
     };
 
@@ -176,12 +182,12 @@
 
                     // Look for "My Account" if we are on our own profile (and it didn't redirect to /users/ID)
                     if (!id && window.location.pathname === '/profile') {
-                         // On /profile, we might be able to find the ID in the "Edit" link or similar
-                         const editLink = document.querySelector('a[href^="/users/"][href$="/edit"]');
-                         if (editLink) {
-                             const m = editLink.getAttribute('href').match(/\/users\/(\d+)\/edit/);
-                             if (m) id = m[1];
-                         }
+                        // On /profile, we might be able to find the ID in the "Edit" link or similar
+                        const editLink = document.querySelector('a[href^="/users/"][href$="/edit"]');
+                        if (editLink) {
+                            const m = editLink.getAttribute('href').match(/\/users\/(\d+)\/edit/);
+                            if (m) id = m[1];
+                        }
                     }
 
                     // Scrape generic user links that match the name
@@ -1115,7 +1121,7 @@
                 cacheSection.style.marginTop = '15px';
                 cacheSection.style.borderTop = '1px solid #d0d7de';
                 cacheSection.style.paddingTop = '10px';
-                
+
                 // Header with Purge Button
                 const cacheHeader = document.createElement('div');
                 cacheHeader.style.display = 'flex';
@@ -1224,13 +1230,13 @@
                 };
 
                 // Cleanup on Close
-                const originalClose = closeSettings; 
+                const originalClose = closeSettings;
                 // We don't have direct access to override 'closeSettings' easily as it's defined above scope in previous block but we can hook into the click listener?
                 // Actually, 'closeSettings' is defined in the parent scope. We can wrap it?
                 // Or better, just add a specific listener to the document click to clear interval if hidden?
                 // The 'closeSettings' sets display='none'.
                 // We can check visibility in the interval (done above).
-                
+
                 purgeBtn.onclick = () => {
                     if (confirm('Are you sure you want to clear all cached data? This will trigger a full re-fetch.')) {
                         onRefresh();
@@ -1395,7 +1401,7 @@
                 </div>
             `;
             const btn = document.getElementById('grass-retry-btn');
-            if(btn) btn.onclick = onRetry;
+            if (btn) btn.onclick = onRetry;
         }
     }
 
@@ -1437,10 +1443,10 @@
                 // Initial render for layout (header updates here slightly prematurely but data fills in later)
                 // We pass the callback even here so the dropdown works during loading if clicked
                 await renderer.renderGraph({}, currentYear, currentMetric, context.targetUser, years, onYearChange, async () => {
-                        renderer.setLoading(true);
-                        await dataManager.clearCache(currentMetric, context.targetUser);
-                        updateView();
-                    });
+                    renderer.setLoading(true);
+                    await dataManager.clearCache(currentMetric, context.targetUser);
+                    updateView();
+                });
 
                 renderer.updateControls(years, currentYear, currentMetric,
                     onYearChange,
@@ -1460,10 +1466,10 @@
                 const data = await dataManager.getMetricData(currentMetric, context.targetUser, currentYear);
 
                 await renderer.renderGraph(data, currentYear, currentMetric, context.targetUser, years, onYearChange, async () => {
-                        renderer.setLoading(true);
-                        await dataManager.clearCache(currentMetric, context.targetUser);
-                        updateView();
-                    });
+                    renderer.setLoading(true);
+                    await dataManager.clearCache(currentMetric, context.targetUser);
+                    updateView();
+                });
             } catch (e) {
                 console.error(e);
                 renderer.renderError(e.message || "Unknown error occurred", () => updateView());
