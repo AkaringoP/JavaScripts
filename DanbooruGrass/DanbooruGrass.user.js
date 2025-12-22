@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Grass
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -1476,8 +1476,8 @@
 
         purgeBtn.onclick = () => {
           if (confirm(
-              'Are you sure you want to clear all cached data? This will trigger a full re-fetch.'
-            )) {
+            'Are you sure you want to clear all cached data? This will trigger a full re-fetch.'
+          )) {
             onRefresh();
           }
         };
@@ -1525,57 +1525,81 @@
       const currentThresholds = this.settingsManager.getThresholds(metric);
 
       window.cal.paint({
-          itemSelector: '#cal-heatmap-scroll',
-          range: 12,
-          domain: {
-            type: 'month',
-            gutter: 3,
-            label: {
-              position: 'top',
-              text: 'MMM',
-              height: 20,
-              textAlign: 'start'
-            },
+        itemSelector: '#cal-heatmap-scroll',
+        range: 12,
+        domain: {
+          type: 'month',
+          gutter: 3,
+          label: {
+            position: 'top',
+            text: 'MMM',
+            height: 20,
+            textAlign: 'start'
           },
-          subDomain: {
-            type: 'day',
-            radius: 2,
-            width: 11,
-            height: 11,
-            gutter: 2,
-            label: null,
+        },
+        subDomain: {
+          type: 'day',
+          radius: 2,
+          width: 11,
+          height: 11,
+          gutter: 2,
+          label: null,
+        },
+        // Align start date to Local Jan 1st 00:00, represented as UTC to match data
+        date: {
+          start: new Date(
+            new Date(year, 0, 1).getTime() -
+            (new Date().getTimezoneOffset() * 60000)
+          )
+        },
+        data: {
+          source: source,
+          x: 'date',
+          y: 'value'
+        },
+        scale: {
+          color: {
+            range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'],
+            domain: currentThresholds,
+            type: 'threshold',
           },
-          // Align start date to Local Jan 1st 00:00, represented as UTC to match data
-          date: {
-            start: new Date(
-              new Date(year, 0, 1).getTime() -
-              (new Date().getTimezoneOffset() * 60000)
-            )
-          },
-          data: {
-            source: source,
-            x: 'date',
-            y: 'value'
-          },
-          scale: {
-            color: {
-              range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'],
-              domain: currentThresholds,
-              type: 'threshold',
-            },
-          },
-          theme: 'light',
-        })
+        },
+        theme: 'light',
+      })
         .then(() => {
           console.log('[Danbooru Grass] Render complete.');
           // Re-apply Styles and Interaction
           setTimeout(() => {
             const tooltip = d3.select('#danbooru-grass-tooltip');
 
+            // --- Auto-Scroll to Current Date (Refined) ---
+            const scrollContainer = document.getElementById('cal-heatmap-scroll');
+            if (scrollContainer) {
+              if (year === new Date().getFullYear()) {
+                const currentMonth = new Date().getMonth() + 1; // 1-12
+                // Find the Nth .ch-domain (Month) element
+                // We look for 'svg.ch-domain' or just '.ch-domain' that are direct children if possible
+                // Based on user feedback, it seems to be 'svg.ch-domain'
+                const targetMonth = scrollContainer.querySelector(`.ch-domain:nth-of-type(${currentMonth})`);
+
+                if (targetMonth) {
+                  const containerRect = scrollContainer.getBoundingClientRect();
+                  const elementRect = targetMonth.getBoundingClientRect();
+                  // Scroll to the element with a slight padding
+                  scrollContainer.scrollLeft += (elementRect.left - containerRect.left - 10);
+                } else {
+                  // Fallback: Scroll to end
+                  scrollContainer.scrollLeft = scrollContainer.scrollWidth;
+                }
+              } else {
+                scrollContainer.scrollLeft = 0;
+              }
+            }
+
             // 1. Tooltips for Graph Cells
             d3.selectAll('#cal-heatmap-scroll rect')
               .attr('rx', 2).attr('ry', 2) // Apply border radius
-              .on('mouseover', function(event, d) {
+              .on('mouseover', function (event, d) {
                 // Fallback for datum if D3 binding is tricky
                 const datum = d || d3.select(this).datum();
                 if (!datum || !datum.t) return;
@@ -1589,7 +1613,7 @@
                   .style('top', (event.pageY - 28) + 'px');
               })
               .on('mouseout', () => tooltip.style('opacity', 0))
-              .on('click', function(event, d) {
+              .on('click', function (event, d) {
                 const datum = d || d3.select(this).datum();
                 if (!datum || !datum.t) return;
                 // Enable click even if value is 0
@@ -1620,10 +1644,10 @@
             // We target > div because we built the legend with standard HTML divs, not SVG.
             const legendDivs = d3.selectAll('#danbooru-grass-legend > div');
 
-            legendDivs.each(function(d, i) {
+            legendDivs.each(function (d, i) {
               if (i >= 0 && i < legendThresholds.length) {
                 d3.select(this)
-                  .on('mouseover', function(event) {
+                  .on('mouseover', function (event) {
                     tooltip.style('opacity', 1)
                       .html(legendThresholds[i])
                       .style('left', (event.pageX + 10) + 'px')
@@ -1721,10 +1745,10 @@
           years,
           onYearChange,
           async () => {
-              renderer.setLoading(true);
-              await dataManager.clearCache(currentMetric, context.targetUser);
-              updateView();
-            }
+            renderer.setLoading(true);
+            await dataManager.clearCache(currentMetric, context.targetUser);
+            updateView();
+          }
         );
 
         renderer.updateControls(
@@ -1760,10 +1784,10 @@
           years,
           onYearChange,
           async () => {
-              renderer.setLoading(true);
-              await dataManager.clearCache(currentMetric, context.targetUser);
-              updateView();
-            }
+            renderer.setLoading(true);
+            await dataManager.clearCache(currentMetric, context.targetUser);
+            updateView();
+          }
         );
       } catch (e) {
         console.error(e);
