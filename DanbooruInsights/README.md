@@ -1,7 +1,14 @@
 # Danbooru Insights
 
 This userscript injects a GitHub-style contribution graph and a comprehensive analytics dashboard into Danbooru profile pages. Formerly known as **Danbooru Grass**, the project has been renamed to **Danbooru Insights** to reflect the addition of advanced analytics features (`AnalyticsApp`). It visualizes your activity (Uploads, Post Approvals, Note Updates) and provides deep insights into your posting habits, offering a clearer view of your contributions to the community.
-<img width="1365" height="404" alt="image" src="https://github.com/user-attachments/assets/a4c0bf04-0adf-4ebc-92c6-7123a693e237" />
+
+## Examples
+#### GrassApp
+<img width="1365" height="404" alt="GrassApp" src="https://github.com/user-attachments/assets/a4c0bf04-0adf-4ebc-92c6-7123a693e237" />
+
+#### AnalyticsApp
+<img width="706" height="500" alt="AnalyticsApp 1" src="https://github.com/user-attachments/assets/30116ec5-497a-471e-bff5-9fb9a48baa41" />
+<img width="706" height="525" alt="AnalyticsApp 2" src="https://github.com/user-attachments/assets/9ce42888-1f12-4b15-90bf-be2809d1b5b5" />
 
 ## Features
 
