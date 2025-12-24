@@ -2,7 +2,7 @@
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
 // @version      4.0
-// @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
+// @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
 // @match        https://danbooru.donmai.us/profile
@@ -3381,7 +3381,7 @@
 
         // Close Popover Handler
         document.addEventListener('mousedown', (e) => {
-          if (popover.style.display !== 'none' && !popover.contains(e.target) && e.target !== canvas) {
+          if (popover.style.display !== 'none' && !popover.contains(e.target)) {
             popover.style.display = 'none';
           }
         });
@@ -3612,7 +3612,10 @@
           let html = `
              <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
                <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
-               <span style="font-size: 12px; color: #888;">${items.length} items</span>
+               <div style="display:flex; align-items:center; gap: 10px;">
+                 <span style="font-size: 12px; color: #888;">${items.length} items</span>
+                 <button id="scatter-pop-close" style="background:none; border:none; color:#999; font-size:16px; cursor:pointer; line-height:1; padding:0;">&times;</button>
+               </div>
              </div>
              <div style="flex: 1; overflow-y: auto;">
            `;
@@ -3643,14 +3646,27 @@
             el.onclick = () => window.open(`/posts/${el.dataset.id}`, '_blank');
           });
 
+          // Close Button Handler
+          const closeBtn = popover.querySelector('#scatter-pop-close');
+          if (closeBtn) {
+            closeBtn.onclick = (e) => {
+              e.stopPropagation();
+              popover.style.display = 'none';
+            };
+          }
+
           popover.style.display = 'flex';
           const pH = popover.offsetHeight || 300;
 
           let posX = mx + 15;
           let posY = my + 15;
 
-          if (posX + 320 > window.innerWidth) posX = mx - 320 - 15;
-          if (posY + pH > window.innerHeight) posY = my - pH - 15;
+          // Safety Clamp
+          if (posX + 320 > window.innerWidth) posX = window.innerWidth - 320 - 10;
+          if (posX < 10) posX = 10;
+          
+          if (posY + pH > window.innerHeight) posY = window.innerHeight - pH - 10;
+          if (posY < 10) posY = 10;
 
           popover.style.left = posX + 'px';
           popover.style.top = posY + 'px';
@@ -3803,7 +3819,7 @@
           const idsStr = missingIds.join(',');
           // Note: Danbooru 'tags' param for ID search: "id:1,2,3"
           // limit=100 should cover typical milestone count
-          const url = `${this.baseUrl} / posts.json ? tags = id : ${idsStr} & limit=100 & only=id, preview_file_url, file_url, rating`;
+          const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,preview_file_url,file_url,rating`;
 
           const res = await fetch(url);
           if (res.ok) {
