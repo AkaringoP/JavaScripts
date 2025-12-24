@@ -6,6 +6,7 @@
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
 // @match        https://danbooru.donmai.us/profile
+// @icon         https://danbooru.donmai.us/favicon.ico
 // @grant        none
 // @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruInsights
 // @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/DanbooruInsights/DanbooruInsights.user.js
