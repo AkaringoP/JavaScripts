@@ -3650,53 +3650,79 @@
 
           if (result.length === 0) return;
 
-          const topList = result.sort((a, b) => b.s - a.s).slice(0, 50);
+          // Pass full list to popover (sorted)
+          const sortedList = result.sort((a, b) => b.s - a.s);
 
-          showPopover(e.clientX, e.clientY, topList, dMin, dMax);
+          showPopover(e.clientX, e.clientY, sortedList, dateMin, dateMax, scoreMin, scoreMax);
         });
 
-        const showPopover = (mx, my, items, dMin, dMax) => {
+        const showPopover = (mx, my, items, dMin, dMax, sMin, sMax) => {
           const d1 = new Date(dMin).toLocaleDateString();
           const d2 = new Date(dMax).toLocaleDateString();
+          const sm1 = Math.floor(sMin);
+          const sm2 = Math.ceil(sMax);
+          const totalCount = items.length;
+          let visibleLimit = 50;
 
-          let html = `
-             <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-               <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
-               <div style="display:flex; align-items:center; gap: 10px;">
-                 <span style="font-size: 12px; color: #888;">${items.length} items</span>
+          const renderItems = (start, limit) => {
+            let chunkHtml = '';
+            const slice = items.slice(start, start + limit);
+
+            slice.forEach(it => {
+              const itDate = new Date(it.d).toLocaleDateString();
+              let color = '#ccc';
+              if (it.r === 'g') color = '#4caf50';
+              else if (it.r === 's') color = '#ffb74d';
+              else if (it.r === 'q') color = '#ab47bc';
+              else if (it.r === 'e') color = '#f44336';
+
+              chunkHtml += `
+                 <div class="pop-item" data-id="${it.id}" style="padding: 8px 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: bg 0.2s;">
+                   <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
+                   <span style="color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px; width: 60px;">#${it.id}</span>
+                   <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
+                   <span style="font-weight: bold; color: #333; font-size: 13px;">${it.s}</span>
+                 </div>
+               `;
+            });
+            return chunkHtml;
+          };
+
+          // Define Main HTML Structure
+          let headerHtml = `
+             <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: start;">
+               <div style="display:flex; flex-direction:column;">
+                  <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
+                  <span style="font-size: 11px; color: #666; margin-top:2px;">Score: ${sm1} ~ ${sm2}</span>
+               </div>
+               <div style="display:flex; align-items:center; gap: 10px; margin-top:2px;">
+                 <span id="pop-count-label" style="font-size: 12px; color: #888;">${Math.min(visibleLimit, totalCount)} / ${totalCount} items</span>
                  <button id="scatter-pop-close" style="background:none; border:none; color:#999; font-size:16px; cursor:pointer; line-height:1; padding:0;">&times;</button>
                </div>
              </div>
-             <div style="flex: 1; overflow-y: auto;">
+             <div id="pop-list-container" style="flex: 1; overflow-y: auto;">
+               ${renderItems(0, visibleLimit)}
+             </div>
+             <div id="pop-load-more" style="display: ${totalCount > visibleLimit ? 'block' : 'none'}; padding: 10px; text-align: center; border-top: 1px solid #eee; background: #fff;">
+                <button id="btn-load-more" style="width: 100%; padding: 6px; background: #f0f0f0; border: none; border-radius: 4px; color: #555; cursor: pointer; font-size: 12px;">Load More (+50)</button>
+             </div>
            `;
 
-          items.forEach(it => {
-            const itDate = new Date(it.d).toLocaleDateString();
-            let color = '#ccc';
-            if (it.r === 'g') color = '#4caf50';
-            else if (it.r === 's') color = '#ffb74d';
-            else if (it.r === 'q') color = '#ab47bc';
-            else if (it.r === 'e') color = '#f44336';
+          popover.innerHTML = headerHtml;
 
-            html += `
-               <div class="pop-item" data-id="${it.id}" style="padding: 8px 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: bg 0.2s;">
-                 <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
-                 <span style="color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px; width: 60px;">#${it.id}</span>
-                 <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
-                 <span style="font-weight: bold; color: #333; font-size: 13px;">${it.s}</span>
-               </div>
-             `;
-          });
-          html += '</div>';
-          popover.innerHTML = html;
+          // Event Attachment Helper
+          const attachEvents = (parent) => {
+            parent.querySelectorAll('.pop-item').forEach(el => {
+              el.onmouseover = () => el.style.backgroundColor = '#f5f9ff';
+              el.onmouseout = () => el.style.backgroundColor = 'transparent';
+              el.onclick = () => window.open(`/posts/${el.dataset.id}`, '_blank');
+            });
+          };
 
-          popover.querySelectorAll('.pop-item').forEach(el => {
-            el.onmouseover = () => el.style.backgroundColor = '#f5f9ff';
-            el.onmouseout = () => el.style.backgroundColor = 'transparent';
-            el.onclick = () => window.open(`/posts/${el.dataset.id}`, '_blank');
-          });
+          // Attach initial events
+          attachEvents(popover.querySelector('#pop-list-container'));
 
-          // Close Button Handler
+          // Close Handler
           const closeBtn = popover.querySelector('#scatter-pop-close');
           if (closeBtn) {
             closeBtn.onclick = (e) => {
@@ -3705,8 +3731,41 @@
             };
           }
 
+          // Load More Handler
+          const loadMoreContainer = popover.querySelector('#pop-load-more');
+          const loadMoreBtn = popover.querySelector('#btn-load-more');
+          const listContainer = popover.querySelector('#pop-list-container');
+          const countLabel = popover.querySelector('#pop-count-label');
+
+          if (loadMoreBtn) {
+            loadMoreBtn.onclick = () => {
+              const start = visibleLimit;
+              visibleLimit += 50;
+              const newHtml = renderItems(start, 50);
+
+              // Append HTML string to container
+              listContainer.insertAdjacentHTML('beforeend', newHtml);
+
+              // Attach events to new items (this matches only new ones if we are careful, or re-run on all?)
+              // attachEvents runs on all matching .pop-item inside parent.
+              // To optimize, we could create elements instead of HTML strings, but this is fast enough.
+              // Let's just re-attach to the LAST 50 added? NO, simple re-query is fine or efficient delegation.
+              // Simplest: Re-run attach on container (overwriting isn't bad) or just last children.
+              // For safety, let's just re-run on container.
+              attachEvents(listContainer);
+
+              // Update Label
+              countLabel.textContent = `${Math.min(visibleLimit, totalCount)} / ${totalCount} items`;
+
+              // Hide button if done
+              if (visibleLimit >= totalCount) {
+                loadMoreContainer.style.display = 'none';
+              }
+            };
+          }
+
           popover.style.display = 'flex';
-          const pH = popover.offsetHeight || 300;
+          const pH = popover.offsetHeight || 300; // Recalc if needed logic later
 
           let posX = mx + 15;
           let posY = my + 15;
