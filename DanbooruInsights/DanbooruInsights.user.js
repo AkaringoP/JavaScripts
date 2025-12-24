@@ -2906,6 +2906,8 @@
         }
       });
 
+      topStatsRow.appendChild(pieContainer);
+
       // Initial Load (Default Tab: Copyright)
       updatePieTabs();
       loadTab(currentPieTab);
