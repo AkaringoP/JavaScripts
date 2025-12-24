@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      4.0
+// @version      4.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -2130,6 +2130,7 @@
         setTimeout(() => {
           overlay.style.display = 'none';
           document.body.style.overflow = '';
+          this.updateHeaderStatus(); // Update menu status on close
         }, 200); // Match transition duration
       }
     }
@@ -2158,7 +2159,7 @@
            <h2 style="margin-top:0; color:#333; margin-bottom:4px;">Analytics Dashboard</h2>
            <p style="color:#555; margin:0;">Detailed statistics and history for ${this.context.targetUser.name}</p>
         </div>
-        <div style="display:flex; align-items:center;">
+        <div id="analytics-header-controls" style="display:none; align-items:center;">
            <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
               <input type="checkbox" id="analytics-nsfw-toggle" ${isNsfwEnabled ? 'checked' : ''} style="margin-right:6px;">
               Enable NSFW
@@ -2352,7 +2353,7 @@
           <p>${msg}</p>
           <p style="font-size:0.9em; color:#777; margin-bottom:30px;">
              This one-time process might take a while depending on the post count.<br>
-             You can close this window - we'll remember where we stopped.
+             You can close this window - data collection will continue in the background.
           </p>
           <button id="analytics-start-sync" style="
             background-color: #0969da; color: white; border: none; padding: 10px 20px;
@@ -2376,7 +2377,42 @@
 
         // Setup Sync Button
         const btn = syncDiv.querySelector('#analytics-start-sync');
+
+        // Check Global Sync State
+        if (AnalyticsDataManager.isGlobalSyncing) {
+          btn.innerHTML = 'Fetching in background...';
+          btn.disabled = true;
+          btn.style.backgroundColor = '#94d3a2'; // Light green/disabled
+          btn.style.cursor = 'not-allowed';
+
+          // Restore Progress Bar
+          const progressDiv = syncDiv.querySelector('#analytics-main-progress');
+          const bar = syncDiv.querySelector('#analytics-main-bar');
+          const percent = syncDiv.querySelector('#analytics-main-percent');
+          const countText = syncDiv.querySelector('#analytics-main-count');
+
+          progressDiv.style.display = 'block';
+
+          // Initial State
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (total > 0) {
+            const p = Math.round((current / total) * 100);
+            bar.style.width = `${p}%`;
+            percent.textContent = `${p}%`;
+            countText.textContent = `${current} / ${total}`;
+          }
+
+          // Subscribe
+          AnalyticsDataManager.onProgressCallback = (c, max) => {
+            const p = max > 0 ? Math.round((c / max) * 100) : 0;
+            bar.style.width = `${p}%`;
+            percent.textContent = max > 0 ? `${p}%` : 'Scanning...';
+            countText.textContent = `${c} / ${max > 0 ? max : '?'}`;
+          };
+        }
+
         btn.onclick = async () => {
+          btn.innerHTML = 'Fetching...';
           btn.disabled = true;
           btn.style.opacity = '0.7';
           const progressDiv = syncDiv.querySelector('#analytics-main-progress');
@@ -2386,12 +2422,15 @@
 
           progressDiv.style.display = 'block';
 
-          await dataManager.syncAllPosts(this.context.targetUser, (current, max) => {
-            const p = max > 0 ? Math.round((current / max) * 100) : 0;
+          // Subscribe locally immediately
+          AnalyticsDataManager.onProgressCallback = (c, max) => {
+            const p = max > 0 ? Math.round((c / max) * 100) : 0;
             bar.style.width = `${p}%`;
             percent.textContent = max > 0 ? `${p}%` : 'Scanning...';
-            countText.textContent = `${current} / ${max > 0 ? max : '?'}`;
-          });
+            countText.textContent = `${c} / ${max > 0 ? max : '?'}`;
+          };
+
+          await dataManager.syncAllPosts(this.context.targetUser, null); // Pass null, let internal broadcast handle it
 
           // Done
           this.updateHeaderStatus();
@@ -2402,6 +2441,10 @@
       }
 
       // --- VIEW 2: DASHBOARD (REPORT) ---
+      // Show Header Controls
+      const headerControls = header.querySelector('#analytics-header-controls');
+      if (headerControls) headerControls.style.display = 'flex';
+
       // Show widgets
 
       const dashboardDiv = document.createElement('div');
@@ -2862,8 +2905,6 @@
           }
         }
       });
-
-      topStatsRow.appendChild(pieContainer);
 
       // Initial Load (Default Tab: Copyright)
       updatePieTabs();
@@ -3415,9 +3456,16 @@
           const drawW = w - padL - padR;
           const drawH = h - padT - padB;
 
-          const minDate = Math.min(...scatterData.map(d => d.d));
-          const maxDate = Math.max(...scatterData.map(d => d.d));
-          let maxScore = Math.max(...scatterData.map(d => d.s));
+          let minDate = Infinity;
+          let maxDate = -Infinity;
+          let maxScore = 0;
+
+          // Safe Min/Max Calculation (Avoid Stack Overflow)
+          for (const d of scatterData) {
+            if (d.d < minDate) minDate = d.d;
+            if (d.d > maxDate) maxDate = d.d;
+            if (d.s > maxScore) maxScore = d.s;
+          }
 
           maxScore = Math.ceil(maxScore / 100) * 100;
           if (maxScore < 100) maxScore = 100;
@@ -3602,7 +3650,7 @@
 
           const topList = result.sort((a, b) => b.s - a.s).slice(0, 50);
 
-          showPopover(e.clientX, e.clientY, topList, dateMin, dateMax);
+          showPopover(e.clientX, e.clientY, topList, dMin, dMax);
         });
 
         const showPopover = (mx, my, items, dMin, dMax) => {
@@ -3664,7 +3712,7 @@
           // Safety Clamp
           if (posX + 320 > window.innerWidth) posX = window.innerWidth - 320 - 10;
           if (posX < 10) posX = 10;
-          
+
           if (posY + pH > window.innerHeight) posY = window.innerHeight - pH - 10;
           if (posY < 10) posY = 10;
 
@@ -3685,6 +3733,10 @@
    * AnalyticsDataManager: Handles heavy data fetching for full history.
    */
   class AnalyticsDataManager extends DataManager {
+    static isGlobalSyncing = false;
+    static syncProgress = { current: 0, total: 0 };
+    static onProgressCallback = null;
+
     constructor(db) {
       super(db);
     }
@@ -3777,7 +3829,27 @@
           targets.push(i);
         }
       }
-      // Case 3: Large (> 10,000) -> 1, 100, 1000, 2000...
+      // Case 4: Huge (> 100,000) -> 1, 100, 1000, 5000, 10000, ... (Step 5000)
+      else if (total > 100000) {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        if (total >= 1000) targets.push(1000);
+
+        for (let i = 5000; i <= total; i += 5000) {
+          targets.push(i);
+        }
+      }
+      // Case 3: Very Large (> 50,000) -> 1, 100, 1000, 2500, 5000, ... (Step 2500)
+      else if (total > 50000) {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        if (total >= 1000) targets.push(1000);
+
+        for (let i = 2500; i <= total; i += 2500) {
+          targets.push(i);
+        }
+      }
+      // Case 2: Large (> 10,000) -> 1, 100, 1000, 2000...
       else {
         targets.push(1);
         if (total >= 100) targets.push(100);
@@ -3985,7 +4057,7 @@
 
       const params = new URLSearchParams({
         'search[group]': 'rating',
-        'search[tags]': `user:${userInfo.name} `,
+        'search[tags]': `user:${userInfo.name.replace(/ /g, '_')} `,
         'search[from]': fromDate,
         'search[to]': toDate
       });
@@ -4048,7 +4120,8 @@
     async getCharacterDistribution(userInfo) {
       if (!userInfo.name) return [];
 
-      const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(userInfo.name)}`;
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
 
       try {
         const resp = await fetch(url).then(r => r.json());
@@ -4064,7 +4137,7 @@
 
           let userCount = 0;
           try {
-            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${userInfo.name} ${tagName}`)}`;
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
             const countResp = await fetch(countUrl).then(r => r.json());
             userCount = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           } catch (e) {
@@ -4112,7 +4185,8 @@
     async getCopyrightDistribution(userInfo) {
       if (!userInfo.name) return [];
 
-      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(userInfo.name)}`;
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
 
       try {
         const resp = await fetch(url).then(r => r.json());
@@ -4143,7 +4217,7 @@
           // 1. Fetch User specific count
           let userCount = 0;
           try {
-            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${userInfo.name} ${tagName}`)}`;
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
             const countResp = await fetch(countUrl).then(r => r.json());
             userCount = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           } catch (e) { }
@@ -4204,7 +4278,8 @@
     async getFavCopyrightDistribution(userInfo) {
       if (!userInfo.name) return [];
 
-      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(userInfo.name)}`;
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(normalizedName)}`;
 
       try {
         const resp = await fetch(url).then(r => r.json());
@@ -4234,7 +4309,7 @@
           // 1. Fetch Fav Count
           let favCount = 0;
           try {
-            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`ordfav:${userInfo.name} ${tagName}`)}`;
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`ordfav:${normalizedName} ${tagName}`)}`;
             const countResp = await fetch(countUrl).then(r => r.json());
             favCount = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           } catch (e) { }
@@ -4285,7 +4360,8 @@
       const fetchTop = async (ratingTags) => {
         try {
           // Use tags=... order:score rating:x limit=1
-          const query = `user:${userInfo.name} order:score rating:${ratingTags} `;
+          const normalizedName = userInfo.name.replace(/ /g, '_');
+          const query = `user:${normalizedName} order:score rating:${ratingTags} `;
           const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
           const resp = await fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
@@ -4381,7 +4457,8 @@
     async getPromotionHistory(userInfo) {
       if (!userInfo.name) return [];
       try {
-        const url = `/user_feedbacks.json?commit=Search&search%5Bbody_matches%5D=promoted&search%5Buser_name%5D=${encodeURIComponent(userInfo.name)}`;
+        const normalizedName = userInfo.name.replace(/ /g, '_');
+        const url = `/user_feedbacks.json?commit=Search&search%5Bbody_matches%5D=promoted&search%5Buser_name%5D=${encodeURIComponent(normalizedName)}`;
         const feedbacks = await fetch(url).then(r => r.json());
 
         if (!Array.isArray(feedbacks)) return [];
@@ -4415,8 +4492,9 @@
       let total = 0;
       try {
         // Method A: Exact Search Count (API)
-        // Use relative URL to avoid origin issues
-        const countUrl = `/counts/posts.json?tags=user:${encodeURIComponent(userInfo.name)}`;
+        // Use tags=... order:score rating:x limit=1
+        const normalizedName = userInfo.name.replace(/ /g, '_');
+        const countUrl = `/counts/posts.json?tags=user:${encodeURIComponent(normalizedName)}`;
         const countData = await fetch(countUrl).then(r => r.json());
         if (countData && typeof countData.counts === 'object' && typeof countData.counts.posts === 'number') {
           return countData.counts.posts;
@@ -4460,126 +4538,156 @@
 
       const uploaderId = parseInt(userInfo.id);
 
-      // 1. Get total count
-      let total = await this.getTotalPostCount(userInfo);
-      console.log(`[Danbooru Grass] Sync Goal: ${total} `);
-
-      return 0; // Failed
-    }
-
-    async syncAllPosts(userInfo, onProgress) {
-      if (!userInfo.id) {
-        console.error('User ID required for sync');
+      // Global Sync Lock
+      if (AnalyticsDataManager.isGlobalSyncing) {
+        console.warn('[Danbooru Grass] Sync already in progress.');
         return;
       }
+      AnalyticsDataManager.isGlobalSyncing = true;
+      AnalyticsDataManager.syncProgress = { current: 0, total: 0 };
 
-      const uploaderId = parseInt(userInfo.id);
+      // Helper to broadcast progress
+      const reportProgress = (c, t) => {
+        AnalyticsDataManager.syncProgress = { current: c, total: t };
+        if (AnalyticsDataManager.onProgressCallback) {
+          AnalyticsDataManager.onProgressCallback(c, t);
+        }
+        if (onProgress) onProgress(c, t);
+      };
 
-      // 1. Get total count
-      let total = await this.getTotalPostCount(userInfo);
-      console.log(`[Danbooru Grass] Sync Goal: ${total} `);
+      try {
 
-      // 2. Resume Check
-      // Strategy: overlapping sync (1 month back) to catch updates (score/tags)
-      const newestArr = await this.db.posts.where('uploader_id').equals(uploaderId).reverse().limit(1).toArray();
-      let startId = 0;
+        // 1. Get total count
+        let total = await this.getTotalPostCount(userInfo);
+        console.log(`[Danbooru Grass] Sync Goal: ${total} `);
 
-      if (newestArr.length > 0) {
-        const newest = newestArr[0];
-        const newestDate = new Date(newest.created_at);
-        const cutOffDate = new Date(newestDate);
-        cutOffDate.setMonth(cutOffDate.getMonth() - 1);
+        // 2. Resume Check
+        // Strategy: overlapping sync (1 month back) to catch updates (score/tags)
+        const newestArr = await this.db.posts.where('uploader_id').equals(uploaderId).reverse().limit(1).toArray();
+        let startId = 0;
 
-        console.log(`[Danbooru Grass] Newest Post: ${newestDate.toISOString().split('T')[0]}, Re-syncing from: ${cutOffDate.toISOString().split('T')[0]}`);
+        if (newestArr.length > 0) {
+          const newest = newestArr[0];
+          const newestDate = new Date(newest.created_at);
+          const cutOffDate = new Date(newestDate);
+          cutOffDate.setMonth(cutOffDate.getMonth() - 1);
 
-        // Find the first post that is OLDER than cutOffDate to determine startId
-        let found = false;
-        await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each(p => {
-          if (found) return;
-          if (new Date(p.created_at) < cutOffDate) {
-            startId = p.id;
-            found = true;
-            return false; // Stop iteration
-          }
-        });
+          console.log(`[Danbooru Grass] Newest Post: ${newestDate.toISOString().split('T')[0]}, Re-syncing from: ${cutOffDate.toISOString().split('T')[0]}`);
 
-        // fallback: if history is shorter than 1 month, startId stays 0 (Full Sync)
-      }
+          // Find the first post that is OLDER than cutOffDate to determine startId
+          let found = false;
+          await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each(p => {
+            if (found) return;
+            if (new Date(p.created_at) < cutOffDate) {
+              startId = p.id;
+              found = true;
+              return false; // Stop iteration
+            }
+          });
 
-      let currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+          // fallback: if history is shorter than 1 month, startId stays 0 (Full Sync)
+        }
 
-      console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
+        let currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).count();
 
-      // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced". 
-      // We must assume "Unknown" and proceed to try and fetch new posts.
-      // IF total > 0 (Success), then we check if current >= total.
-      // BUT with the new overlapping logic, we almost ALWAYS want to sync at least the overlap.
-      // So we relax the "Already synced" check if we have a valid startId > 0 (meaning we have history).
-      // If startId > 0, we proceed to fetch updates.
-      // If startId == 0 and current == total, then maybe we are really done?
-      // Actually, user wants "Update". So if we calculated a startId, we should run.
+        console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
 
-      if (startId === 0 && total > 0 && currentNo >= total) {
-        console.log('[Danbooru Grass] Already synced (Goal reached).');
-        if (onProgress) onProgress(currentNo, total);
-        return;
-      }
+        // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced". 
+        // We must assume "Unknown" and proceed to try and fetch new posts.
+        // IF total > 0 (Success), then we check if current >= total.
+        // BUT with the new overlapping logic, we almost ALWAYS want to sync at least the overlap.
+        // So we relax the "Already synced" check if we have a valid startId > 0 (meaning we have history).
+        // If startId > 0, we proceed to fetch updates.
+        // If startId == 0 and current == total, then maybe we are really done?
+        // Actually, user wants "Update". So if we calculated a startId, we should run.
 
-      // If total is 0, we simply run blindly until empty. That's fine.
+        if (startId === 0 && total > 0 && currentNo >= total) {
+          console.log('[Danbooru Grass] Already synced (Goal reached).');
+          reportProgress(currentNo, total);
+          return;
+        }
+
+        // If total is 0, we simply run blindly until empty. That's fine.
 
 
-      // 3. Buffered Parallel Fetching Logic
-      let lastFetchedId = startId;
-      const limit = 200; // API Limit
-      // 3 concurrency = 600 items. 
-      // User complaint "jerky" likely means 5 threads * 200 = 1000 items is too big a batch.
-      // Draining incrementally with buffer will solve this.
-      const parallel_count = 5;
+        // 3. Buffered Parallel Fetching Logic
+        let lastFetchedId = startId;
+        const limit = 200; // API Limit
+        // 3 concurrency = 600 items. 
+        // User complaint "jerky" likely means 5 threads * 200 = 1000 items is too big a batch.
+        // Draining incrementally with buffer will solve this.
+        const parallel_count = 5;
 
-      let pageOffset = 1;
-      let isDone = false;
-      let buffer = new Map(); // page -> items[]
-      let nextExpectedPage = pageOffset;
+        let pageOffset = 1;
+        // 3. Worker Pool Logic (Rolling Window)
+        const MAX_CONCURRENCY = 5;
+        const WORKER_DELAY = 400; // 5 workers * 1 req / 0.4s = 12.5 req/s (Max)
 
-      while (!isDone) {
-        const promises = [];
+        // Shared State
+        let activeWorkers = 0;
+        let hasMore = true;
+        let completedCount = 0;
 
-        // Launch batch
-        for (let i = 0; i < parallel_count; i++) {
-          if (isDone) break;
+        // Ordered Commit State
+        const buffer = new Map(); // page -> items
+        let nextExpectedPage = 1;
 
-          const currentPage = pageOffset + i;
-          const params = {
-            limit,
-            page: currentPage,
-            'tags': `user:${userInfo.name} order:id_asc id:>${startId}`,
-            'only': 'id,uploader_id,created_at,score,rating,tag_count_general,preview_file_url,file_url'
-          };
-          const q = new URLSearchParams(params);
-          const url = `/posts.json?${q.toString()}`;
+        const worker = async (workerId) => {
+          // Staggered Start: Prevent initial burst
+          if (workerId > 0) await new Promise(r => setTimeout(r, workerId * 200));
 
-          // Use a self-contained processor for each request to update UI asap
-          const p = fetch(url)
-            .then(r => {
-              if (!r.ok) throw new Error(`HTTP ${r.status}`);
-              return r.json();
-            })
-            .then(async (items) => {
-              // 1. Buffer the result
+          while (hasMore) {
+            // 1. Claim a page
+            const currentPage = pageOffset++;
+
+            try {
+              const params = {
+                limit,
+                page: currentPage,
+                'tags': `user:${userInfo.name.replace(/ /g, '_')} order:id_asc id:>${startId}`,
+                'only': 'id,uploader_id,created_at,score,rating,tag_count_general,preview_file_url,file_url'
+              };
+              const q = new URLSearchParams(params);
+              const url = `/posts.json?${q.toString()}`;
+
+              // Retry Logic
+              let items = null;
+              let attempts = 0;
+              while (attempts < 3) {
+                try {
+                  items = await fetch(url).then(r => {
+                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                    return r.json();
+                  });
+                  break; // Success
+                } catch (err) {
+                  attempts++;
+                  const isServerErr = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504');
+                  console.warn(`[Worker ${workerId}] Page ${currentPage} attempt ${attempts} failed: ${err.message}`);
+
+                  if (attempts >= 3 || !isServerErr) throw err; // Give up or fatal error
+
+                  // Backoff: 1s, 2s, 4s...
+                  await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempts - 1)));
+                }
+              }
+
+              if (items.length === 0) {
+                hasMore = false; // Signal end
+                return;
+              }
+
+              // 2. Buffer the result
               buffer.set(currentPage, items);
 
-              // 2. Drain the buffer SEQUENTIALLY
-              // While we have the 'next needed page' in buffer, flush it.
+              // 3. Ordered Commit Loop (Check if we can save)
               while (buffer.has(nextExpectedPage)) {
                 const batchItems = buffer.get(nextExpectedPage);
-                buffer.delete(nextExpectedPage);
+                buffer.delete(nextExpectedPage); // Remove from buffer
 
-                if (batchItems.length === 0) {
-                  isDone = true; // Stop fully
-                  // Don't break here, let the loop finish?
-                } else {
-                  // Save
-                  const bulkData = batchItems.map((p, index) => ({
+                if (batchItems.length > 0) {
+                  // Assign Sequential Numbers
+                  const bulkData = batchItems.map((p) => ({
                     id: p.id,
                     uploader_id: p.uploader_id,
                     created_at: p.created_at,
@@ -4590,45 +4698,45 @@
                     file_url: p.file_url,
                     no: ++currentNo
                   }));
-                  if (bulkData.length > 0) {
-                    await this.db.posts.bulkPut(bulkData);
-                  }
 
-                  // Update Monitor Immediately
-                  if (onProgress) onProgress(currentNo, total > currentNo ? total : currentNo);
+                  await this.db.posts.bulkPut(bulkData);
+
+                  // Update Progress
+                  reportProgress(currentNo, total > currentNo ? total : currentNo);
                 }
 
                 nextExpectedPage++;
               }
-              return items;
-            })
-            .catch(e => {
-              console.error(`Page ${currentPage} failed`, e);
-              isDone = true; // Stop on error
-            });
 
-          promises.push(p);
+            } catch (e) {
+              console.error(`[Worker ${workerId}] Page ${currentPage} failed`, e);
+              hasMore = false;
+            }
+
+            // Rate Limit Sleep
+            if (hasMore) {
+              await new Promise(r => setTimeout(r, WORKER_DELAY));
+            }
+          }
+        };
+
+        // Ignite Workers
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENCY; i++) {
+          workers.push(worker(i));
         }
 
-        // Wait for current batch to finish all network ops before starting next batch
-        // (We drain inside, but we don't want 100 requests flying).
-        await Promise.all(promises);
+        await Promise.all(workers);
 
-        if (isDone) break;
+        // Save "Last Synced Date" metadata
+        const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+        localStorage.setItem(lastSyncKey, new Date().toISOString());
 
-        // Next batch
-        pageOffset += parallel_count;
-
-        // Small delay
-        await new Promise(r => setTimeout(r, 100));
+        // Auto-cleanup other users' stale data (older than 14 days)
+        await this.cleanupStaleData(userInfo.id);
+      } finally {
+        AnalyticsDataManager.isGlobalSyncing = false;
       }
-
-      // Save "Last Synced Date" metadata
-      const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
-      localStorage.setItem(lastSyncKey, new Date().toISOString());
-
-      // Auto-cleanup other users' stale data (older than 14 days)
-      await this.cleanupStaleData(userInfo.id);
     }
 
     /**
