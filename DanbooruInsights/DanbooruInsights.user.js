@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Danbooru DanbooruInsights
+// @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
 // @version      4.0
 // @description  Injects a GitHub-style contribution graph into Danbooru profile pages.
@@ -8,8 +8,8 @@
 // @match        https://danbooru.donmai.us/profile
 // @grant        none
 // @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruInsights
-// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruInsights/DanbooruInsights.user.js
-// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruInsights/DanbooruInsights.user.js
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/DanbooruInsights/DanbooruInsights.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/DanbooruInsights/DanbooruInsights.user.js
 // @require      https://d3js.org/d3.v7.min.js
 // @require      https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js
 // @require      https://unpkg.com/dexie/dist/dexie.js
@@ -264,24 +264,24 @@
     constructor() {
       super('DanbooruGrassDB');
 
-      // [v1] 기존 스키마 (v3.1까지 사용) - 잔디 기능용
-      // 수정하지 않습니다. (Legacy)
+      // [v1] Existing schema (used up to v3.1) - For Grass feature
+      // Do not modify. (Legacy)
       this.version(1).stores({
         uploads: 'id, userId, date, count', // id: [userId]_[date]
         approvals: 'id, userId, date, count',
         notes: 'id, userId, date, count'
       });
 
-      // [v2] 신규 스키마 (v4.0 업데이트) - 분석 기능 추가
-      // 기존 테이블은 그대로 적어주고, 'posts' 테이블을 새로 정의합니다.
+      // [v2] New schema (v4.0 update) - Analytics feature added
+      // Keep existing tables, define new 'posts' table.
       this.version(2).stores({
-        // 1. 기존 테이블 유지 (잔디용)
+        // 1. Keep existing tables (Grass)
         uploads: 'id, userId, date, count',
         approvals: 'id, userId, date, count',
         notes: 'id, userId, date, count',
 
-        // 2. 신규 테이블 추가 (분석용 - Analytics)
-        // 인덱스 설명:
+        // 2. Add new table (Analytics)
+        // Index description:
         // PK: id (Post ID is unique global)
         // no: User-specific sequence (1-based index)
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general'
@@ -2251,7 +2251,7 @@
           if (diffDays > 7) {
             // Show Notification Bubble
             const bubble = document.createElement('div');
-            bubble.innerHTML = '전체 데이터 갱신이 필요하다';
+            bubble.innerHTML = 'Full data refresh required';
             bubble.style.cssText = `
                 position: absolute;
                 top: 45px;
@@ -3843,20 +3843,20 @@
       }
 
       // Add targets (Reverse order to show Biggest first like screenshot? Or Ascending?)
-      // User text: "#1, #100, #1000... 보여주는거지" -> This lists Ascending.
+      // User text: "#1, #100, #1000... show me" -> This lists Ascending.
       // Screenshot: Shows Descending (Latest, 40k, 39k...).
-      // User complaint: "milestone... 거꾸로 되어 있어" -> ambiguous.
-      // "거꾸로" might mean "I see #40k but I want #1...?" OR "I see #1 but I want #40k...?"
-      // Context: "총 업로드 수는 40860개니까 #1, ... 이런 식" -> IMPLIES ASCENDING list in the text.
+      // User complaint: "milestone... is backwards" -> ambiguous.
+      // "Backwards" might mean "I see #40k but I want #1...?" OR "I see #1 but I want #40k...?"
+      // Context: "Total uploads 40860 so #1, ... like this" -> IMPLIES ASCENDING list in the text.
       // BUT, usually milestones are "Achieved 40k!" (Recent is exciting).
       // Let's provide ASCENDING based on the text list example.
-      // "1500개까지면 첫번째... 그 다음... #1, #100..." -> He lists 1 first.
+      // "Up to 1500, first... then... #1, #100..." -> He lists 1 first.
 
       // HOWEVER, if I show #1 first, user has to scroll to see recent?
       // Maybe user wants "History" view.
       // I will implement ASCENDING so #1 is first as text suggested.
 
-      // Wait, "milestone 책정된게 거꾸로 되어 있어" (Milestones are calculated backwards/wrongly?).
+      // Wait, "milestone calculation is backwards" (Milestones are calculated backwards/wrongly?).
       // In previous code I did: `results.sort((a, b) => b.index - a.index); ` (Descending).
       // So user definitely wants ASCENDING.
 
