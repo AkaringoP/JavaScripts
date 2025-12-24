@@ -2194,6 +2194,14 @@
           nsfwToggle.onchange = (e) => {
             isNsfwEnabled = e.target.checked;
             localStorage.setItem(nsfwKey, isNsfwEnabled);
+
+            // Efficient UI Update (No full re-render)
+            const boobsBtn = document.querySelector('.pie-tab[data-mode="breasts"]');
+            if (boobsBtn) {
+              boobsBtn.style.display = isNsfwEnabled ? 'block' : 'none';
+            }
+
+            // Also update any other NSFW sensitive elements if they exist
             if (applyNsfwUpdate) applyNsfwUpdate();
           };
         }
@@ -2739,6 +2747,14 @@
             if (currentPieTab === 'rating') {
               // rating:q
               query = `rating:${d.data.details.rating}`;
+            } else if (currentPieTab === 'breasts') {
+              // user:{name} {tag} (reconstruct tag from label)
+              // Label is "Flat Chest".
+              // Original logic had tag... but we formatted it.
+              // Let's store original tag in details if possible?
+              // The label was "Flat Chest". We can lower case and replace space with underscore
+              const tag = d.data.label.toLowerCase().replace(/ /g, '_');
+              query = `user:${user.name.replace(/ /g, '_')} ${tag}`;
             } else {
               // character or copyright or fav_copyright
               // d.data.details.tagName is set for these
@@ -2848,6 +2864,7 @@
                        <button class="pie-tab" data-mode="character" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Char</button>
                        <button class="pie-tab" data-mode="rating" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Rate</button>
                        <button class="pie-tab" data-mode="fav_copyright" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Fav_Copy</button>
+                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Boobs</button>
                    </div>
                </div>
                <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
@@ -2879,6 +2896,20 @@
             data = await dataManager.getCopyrightDistribution(this.context.targetUser);
           } else if (tabName === 'fav_copyright') {
             data = await dataManager.getFavCopyrightDistribution(this.context.targetUser);
+          } else if (tabName === 'breasts') {
+            data = await dataManager.getBreastsDistribution(this.context.targetUser);
+            // Ensure 'value' property exists for pie chart logic if not present
+            // getBreastsReturns {name, count}
+            // Pie logic uses 'value' (frequency) or calculates it
+            // Let's manually calculate total and assign 'value' as ratio
+            const total = data.reduce((acc, c) => acc + c.count, 0);
+            data = data.map(d => ({
+              ...d,
+              frequency: total > 0 ? d.count / total : 0,
+              value: total > 0 ? d.count / total : 0,
+              label: d.name,
+              details: { ...d, thumb: null } // stub details
+            }));
           }
 
           pieData[tabName] = data;
@@ -3363,7 +3394,6 @@
             if (activeFilters[key]) {
               btn.style.background = conf.color;
               btn.style.opacity = '1';
-              btn.style.color = '#fff';
             } else {
               btn.style.background = '#e0e0e0';
               btn.style.opacity = '0.7';
@@ -4541,10 +4571,59 @@
     }
 
     /**
-     * Syncs all posts for the user.
+     * Fetches breast size distribution by checking specific tags.
      * @param {Object} userInfo 
-     * @param {Function} onProgress (current, total) => void
+     * @returns {Promise<Array>}
      */
+    async getBreastsDistribution(userInfo) {
+      if (!userInfo.name) return [];
+
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const tags = [
+        'flat_chest',
+        'small_breasts',
+        'medium_breasts',
+        'large_breasts',
+        'huge_breasts',
+        'gigantic_breasts'
+      ];
+
+      // Use mapConcurrent from base class to fetch efficiently
+      const results = await this.mapConcurrent(tags, 6, async (tag) => {
+        try {
+          // Fetch count for "user:name tag"
+          // Using counts/posts.json
+          const uniqueTag = `user:${normalizedName} ${tag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await fetch(url).then(r => r.json());
+
+          let count = 0;
+          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+            count = resp.counts.posts;
+          }
+
+          // Format Label
+          // flat_chest -> Flat Chest
+          const label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+
+          return {
+            name: label,
+            count: count,
+            frequency: 0, // Calculated later if needed, but pie chart needs raw count
+            isOther: false
+          };
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch count for ${tag}`, e);
+          return { name: tag, count: 0 };
+        }
+      });
+
+      // Filter out zero counts
+      const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+
+      return filtered;
+    }
+
     /**
      * Helper to get robust total count
      */
