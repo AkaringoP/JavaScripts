@@ -2201,6 +2201,13 @@
               boobsBtn.style.display = isNsfwEnabled ? 'block' : 'none';
             }
 
+            // If we are currently on the 'Boobs' tab and NSFW is disabled, switch to 'Copy'
+            if (!isNsfwEnabled && currentPieTab === 'breasts') {
+              currentPieTab = 'copyright';
+              if (typeof updatePieTabs === 'function') updatePieTabs();
+              if (typeof loadTab === 'function') loadTab('copyright');
+            }
+
             // Also update any other NSFW sensitive elements if they exist
             if (applyNsfwUpdate) applyNsfwUpdate();
           };
