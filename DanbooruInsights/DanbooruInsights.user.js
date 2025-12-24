@@ -427,7 +427,20 @@
      * @return {boolean} True if valid.
      */
     isValidProfile() {
-      return !!this.targetUser && !!this.targetUser.name;
+      if (!this.targetUser || !this.targetUser.name) return false;
+
+      // Strict URL Check: Only main profile pages
+      // Allowed: /profile, /users/12345
+      // Disallowed: /users/12345/uploads, /users/12345/favorites, etc.
+      const path = window.location.pathname;
+      const isProfileUrl = path === '/profile' || /^\/users\/\d+$/.test(path);
+
+      if (!isProfileUrl) {
+        console.log('[Danbooru Grass] Not a main profile page (URL mismatch).');
+        return false;
+      }
+
+      return true;
     }
   }
 
