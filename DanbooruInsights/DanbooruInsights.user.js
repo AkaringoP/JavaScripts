@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      4.2
+// @version      4.3
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -284,7 +284,21 @@
         // Index description:
         // PK: id (Post ID is unique global)
         // no: User-specific sequence (1-based index)
+        // PK: id (Post ID is unique global)
+        // no: User-specific sequence (1-based index)
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general'
+      });
+
+      // [v3] Stats Cache
+      // Cache expensive aggregations (Pie Charts)
+      // PK: [key+userId] (Compound key for uniqueness per user per metric)
+      this.version(3).stores({
+        uploads: 'id, userId, date, count',
+        approvals: 'id, userId, date, count',
+        notes: 'id, userId, date, count',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
+        piestats: '[key+userId], userId, updated_at'
       });
     }
   }
@@ -452,6 +466,40 @@
     constructor(db) {
       this.baseUrl = 'https://danbooru.donmai.us';
       this.db = db;
+    }
+
+    /**
+     * Retrieves cached stats if valid (within 24 hours).
+     */
+    async getStats(key, userId) {
+      try {
+        const record = await this.db.piestats.get({ key, userId });
+        if (record) {
+          // Optional: Check expiration if we wanted strictly time-based, 
+          // but user said "expire on full reset", so we effectively trust cache until reset.
+          return record.data;
+        }
+        return null;
+      } catch (e) {
+        console.warn('Failed to load stats cache', e);
+        return null;
+      }
+    }
+
+    /**
+     * Saves stats to cache.
+     */
+    async saveStats(key, userId, data) {
+      try {
+        await this.db.piestats.put({
+          key,
+          userId,
+          data,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Failed to save stats cache', e);
+      }
     }
 
     /**
@@ -801,10 +849,11 @@
     /**
      * @param {SettingsManager} settingsManager The settings manager instance.
      */
-    constructor(settingsManager) {
+    constructor(settingsManager, db) {
       this.containerId = 'danbooru-grass-container';
       this.cal = null;
       this.settingsManager = settingsManager;
+      this.db = db;
     }
 
     /**
@@ -1463,7 +1512,7 @@
         let statsInterval = null;
 
         const updateMyStats = async () => {
-          const dataManager = new DataManager();
+          const dataManager = new DataManager(this.db);
           const stats = await dataManager.getCacheStats();
           contentDiv.innerHTML = `
             <table style="width:100%; border-collapse:collapse; font-size:11px;">
@@ -1776,7 +1825,7 @@
       // We pass the Shared DB instance to DataManager
       const dataManager = new DataManager(this.db);
       // We pass the Shared Settings instance to GraphRenderer
-      const renderer = new GraphRenderer(this.settings);
+      const renderer = new GraphRenderer(this.settings, this.db);
 
       const injected = renderer.injectSkeleton();
       if (!injected) {
@@ -1878,6 +1927,7 @@
       this.db = db;
       this.settings = settings;
       this.context = context;
+      this.dataManager = new AnalyticsDataManager(db);
       this.modalId = 'danbooru-grass-analytics-modal';
     }
 
@@ -2056,9 +2106,20 @@
         btn.title = 'Open Analytics Report';
         btn.innerHTML = '📊';
         btn.style.margin = '0'; // Reset margin since container has it
-        btn.onclick = (e) => {
+        btn.onclick = async (e) => {
           e.preventDefault();
           e.stopPropagation();
+
+          // Auto-Sync Check: If not synced, wait for sync THEN open
+          if (this.isFullySynced === false) {
+            console.log('[Danbooru Grass] Auto-sync triggered on open.');
+            try {
+              await this.performPartialSync(btn, false);
+            } catch (err) {
+              console.error('[Danbooru Grass] Auto-sync failed:', err);
+            }
+          }
+
           this.toggleModal(true);
         };
         container.appendChild(btn);
@@ -2083,14 +2144,87 @@
       }
     }
 
-    async updateHeaderStatus(progressText = null) {
+    /**
+     * Performs a partial sync/update.
+     * @param {HTMLElement} btn Optional button element to update UI.
+     * @param {boolean} shouldRender Whether to re-render the dashboard after sync (default: true).
+     */
+    async performPartialSync(btn = null, shouldRender = true) {
+      if (AnalyticsDataManager.isGlobalSyncing) return;
+
+      const originalText = btn ? btn.innerHTML : '';
+      let animInterval = null;
+
+      if (btn) {
+        btn.disabled = true;
+        btn.style.cursor = 'wait';
+      }
+
+      const onProgress = (current, total, msg) => {
+        if (btn) {
+          const p = total > 0 ? Math.floor((current / total) * 100) : 0;
+          btn.innerHTML = `<span style="font-size:0.8em">${p}%</span>`;
+        }
+
+        const isComplete = (total > 0 && current >= total);
+
+        if (msg === 'PREPARING' || isComplete) {
+          if (!animInterval) {
+            let dots = 1;
+            const runAnim = () => {
+              const dotStr = '.'.repeat(dots);
+              const html = `
+                      <div style="color:#00ba7c; font-weight:bold;">Synced: ${current.toLocaleString()} / ${total.toLocaleString()}</div>
+                      <div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">Preparing Report${dotStr}</div>
+                    `;
+              // Pass 'transparent' or '#fff' as base color to avoid red override, but inline styles win anyway.
+              this.updateHeaderStatus(html, 'inherit');
+              dots = (dots % 3) + 1;
+            };
+            runAnim();
+            animInterval = setInterval(runAnim, 500);
+          }
+        } else {
+          // Normal progress (Red)
+          // If animation was running (unlikely to switch back), clear it? 
+          // Usually we go Fetch -> Preparing -> Done.
+          this.updateHeaderStatus(`Synced: ${current.toLocaleString()} / ${total.toLocaleString()}`, '#ff4444');
+        }
+      };
+
+      try {
+        await this.dataManager.syncAllPosts(this.context.targetUser, onProgress);
+
+        if (animInterval) clearInterval(animInterval);
+
+        // Final Status (Green)
+        if (shouldRender) {
+          const finalStats = await this.dataManager.getSyncStats(this.context.targetUser);
+          // We can just show "Synced" in green now
+          this.updateHeaderStatus(`Synced: ${finalStats.count.toLocaleString()} / ${finalStats.count.toLocaleString()}`, '#00ba7c');
+        }
+
+        if (btn) btn.innerHTML = originalText;
+        if (shouldRender) {
+          this.renderDashboard();
+          this.toggleModal(true);
+        }
+      } catch (e) {
+        if (animInterval) clearInterval(animInterval);
+        console.error(e);
+        if (btn) btn.innerHTML = 'ERR';
+        this.updateHeaderStatus('Sync Failed', '#ff4444');
+      }
+    }
+
+    async updateHeaderStatus(progressText = null, customColor = null) {
       const el = document.getElementById(`${this.modalId}-header-status`);
       if (!el) return;
 
       if (progressText) {
         // Real-time update during sync
         el.innerHTML = progressText;
-        el.style.color = '#d73a49'; // Warning/Active color
+        el.style.color = customColor || '#d73a49'; // Use custom or default warning color
         return;
       }
 
@@ -2105,16 +2239,20 @@
       const lastSync = localStorage.getItem(lastSyncKey);
       const lastSyncText = lastSync ? new Date(lastSync).toLocaleDateString() : 'Never';
 
-      // Allow tolerance for deleted posts (e.g. 10)
-      const tolerance = 10;
+      // Strict sync: No tolerance for missing posts
+      const tolerance = 0;
       const isSynced = (total > 0 && count >= total - tolerance);
+      this.isFullySynced = isSynced; // Store state for auto-sync check
 
-      if (isSynced) {
-        el.innerHTML = `Synced: ${count.toLocaleString()} / ${total.toLocaleString()}<br>Last: ${lastSyncText}`;
-        el.style.color = '#2da44e';
+      // Update UI
+      if (stats.lastSync && isSynced) {
+        el.innerHTML = `Synced: ${count.toLocaleString()} / ${total.toLocaleString()}<br><span style="font-size:1em; font-weight:normal; color:#28a745;">${lastSyncText}</span>`;
+        el.style.color = customColor || '#28a745'; // Green
+        el.title = `Last synced: ${lastSyncText}`;
       } else {
         el.innerHTML = `Synced: ${count.toLocaleString()} / ${total ? total.toLocaleString() : '?'}<br>Not fully synced`;
-        el.style.color = '#d73a49';
+        el.style.color = customColor || '#d73a49'; // Red
+        el.title = `Sync Required. Last: ${lastSyncText}`;
       }
     }
 
@@ -2234,22 +2372,8 @@
 
         if (rBtn) {
           rBtn.onclick = async () => {
-            // Partial Sync (Update)
-            rBtn.disabled = true;
-            rBtn.style.cursor = 'wait';
-            const originalText = rBtn.innerHTML;
-
-            await dataManager.syncAllPosts(this.context.targetUser, (current, max) => {
-              const p = max > 0 ? Math.round((current / max) * 100) : 0;
-              rBtn.innerHTML = `${p}%`;
-            });
-
-            rBtn.innerHTML = originalText;
-            rBtn.disabled = false;
-            rBtn.style.cursor = 'pointer';
-
-            this.updateHeaderStatus();
-            this.renderDashboard();
+            // Partial Sync (Update) via reusable method
+            await this.performPartialSync(rBtn);
           };
           rBtn.onmouseover = () => rBtn.style.background = '#f6f8fa';
           rBtn.onmouseout = () => rBtn.style.background = 'none';
@@ -2260,8 +2384,8 @@
             if (confirm("⚠ FULL RESET WARNING ⚠\n\nThis will DELETE all local analytics data for this user and require a full re-sync.\n\nContinue?")) {
               dBtn.innerHTML = '⌛';
               await dataManager.clearUserData(this.context.targetUser);
-              alert("Data cleared. Returning to sync screen.");
-              this.renderDashboard();
+              alert("Data cleared.");
+              this.toggleModal(false);
             }
           };
           dBtn.onmouseover = () => { dBtn.style.background = '#ffeef0'; dBtn.style.borderColor = '#d73a49'; };
@@ -2283,10 +2407,10 @@
             bubble.innerHTML = 'Full data refresh required';
             bubble.style.cssText = `
                 position: absolute;
-                top: 45px;
+                top: -45px;
                 right: 0px; 
-                background: #333;
-                color: #fff;
+                background: #ffeb3b;
+                color: #333;
                 padding: 8px 12px;
                 border-radius: 6px;
                 font-size: 12px;
@@ -2299,13 +2423,13 @@
             const arrow = document.createElement('div');
             arrow.style.cssText = `
                 position: absolute;
-                top: -6px;
-                right: 14px;
+                bottom: -6px;
+                right: 12px;
                 width: 0;
                 height: 0;
                 border-left: 6px solid transparent;
                 border-right: 6px solid transparent;
-                border-bottom: 6px solid #333;
+                border-top: 6px solid #ffeb3b;
               `;
             bubble.appendChild(arrow);
 
@@ -2880,11 +3004,11 @@
            <div style="width:100%; display:flex; flex-direction:column;">
                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; width:100%;">
                    <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
-                       <button class="pie-tab" data-mode="copyright" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Copy</button>
-                       <button class="pie-tab" data-mode="character" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Char</button>
-                       <button class="pie-tab" data-mode="rating" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Rate</button>
-                       <button class="pie-tab" data-mode="fav_copyright" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Fav_Copy</button>
-                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">Boobs</button>
+                       <button class="pie-tab" data-mode="copyright" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Copy</button>
+                       <button class="pie-tab" data-mode="character" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Char</button>
+                       <button class="pie-tab" data-mode="rating" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Rate</button>
+                       <button class="pie-tab" data-mode="fav_copyright" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Fav_Copy</button>
+                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Boobs</button>
                    </div>
                </div>
                <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
@@ -3046,8 +3170,8 @@
                  🏆 Most Popular Post
               </div>
               <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
-                 <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer;">SFW</button>
-                 <button class="top-post-tab" id="analytics-top-nsfw-btn" data-mode="nsfw" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">NSFW</button>
+                 <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
+                 <button class="top-post-tab" id="analytics-top-nsfw-btn" data-mode="nsfw" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">NSFW</button>
               </div>
            </div>
            <div class="top-post-content">
@@ -3393,31 +3517,41 @@
         Object.keys(ratings).forEach(key => {
           const btn = document.createElement('div');
           const conf = ratings[key];
-          btn.style.width = '24px';
-          btn.style.height = '24px';
-          btn.style.borderRadius = '50%';
-          btn.style.background = conf.color;
-          btn.style.color = '#fff';
+
           btn.style.display = 'flex';
           btn.style.alignItems = 'center';
-          btn.style.justifyContent = 'center';
-          btn.style.fontSize = '12px';
-          btn.style.fontWeight = 'bold';
           btn.style.cursor = 'pointer';
           btn.style.userSelect = 'none';
-          btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.2)';
-          btn.textContent = conf.label;
+          btn.style.gap = '4px';
+
+          // Label Text
+          const label = document.createElement('span');
+          label.textContent = conf.label;
+          label.style.fontWeight = 'normal';
+          label.style.color = '#000000'; // Init color
+          label.style.fontSize = '12px';
+
+          // Circle Indicator
+          const circle = document.createElement('div');
+          circle.style.width = '16px';
+          circle.style.height = '16px';
+          circle.style.borderRadius = '50%';
+          circle.style.background = conf.color;
+          circle.style.boxShadow = '0 1px 3px rgba(0,0,0,0.2)';
+          circle.style.transition = 'background 0.3s, transform 0.3s';
+
+          btn.appendChild(label);
+          btn.appendChild(circle);
 
           btn.onclick = () => {
             activeFilters[key] = !activeFilters[key];
             // Toggle Visual
             if (activeFilters[key]) {
-              btn.style.background = conf.color;
-              btn.style.opacity = '1';
+              circle.style.background = conf.color;
+              circle.style.opacity = '1';
             } else {
-              btn.style.background = '#e0e0e0';
-              btn.style.opacity = '0.7';
-              btn.style.color = '#888';
+              circle.style.background = '#e0e0e0';
+              circle.style.opacity = '0.7';
             }
             renderScatter();
           };
@@ -4228,8 +4362,15 @@
      * @param {Object} userInfo
      * @returns {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
-    async getCharacterDistribution(userInfo) {
+    async getCharacterDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0); // Need ID for cache key
+      const cacheKey = 'character_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
 
       const normalizedName = userInfo.name.replace(/ /g, '_');
       const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
@@ -4279,6 +4420,7 @@
           });
         }
 
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
         return top10;
 
       } catch (e) {
@@ -4293,8 +4435,15 @@
      * @param {Object} userInfo
      * @returns {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
-    async getCopyrightDistribution(userInfo) {
+    async getCopyrightDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0);
+      const cacheKey = 'copyright_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
 
       const normalizedName = userInfo.name.replace(/ /g, '_');
       const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
@@ -4357,6 +4506,7 @@
           });
         }
 
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
         return top10;
 
       } catch (e) {
@@ -4386,8 +4536,15 @@
      * Uses ordfav:{user} to find favorites.
      * @param {Object} userInfo
      */
-    async getFavCopyrightDistribution(userInfo) {
+    async getFavCopyrightDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0);
+      const cacheKey = 'fav_copyright_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
 
       const normalizedName = userInfo.name.replace(/ /g, '_');
       const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(normalizedName)}`;
@@ -4452,6 +4609,7 @@
           });
         }
 
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
         return top10;
       } catch (e) {
         console.warn('[Danbooru Grass] Failed to fetch fav copyright distribution', e);
@@ -4592,11 +4750,18 @@
 
     /**
      * Fetches breast size distribution by checking specific tags.
-     * @param {Object} userInfo 
+     * @param {Object} userInfo
      * @returns {Promise<Array>}
      */
-    async getBreastsDistribution(userInfo) {
+    async getBreastsDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0);
+      const cacheKey = 'breasts_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
 
       const normalizedName = userInfo.name.replace(/ /g, '_');
       const tags = [
@@ -4641,6 +4806,7 @@
       // Filter out zero counts
       const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
 
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
       return filtered;
     }
 
@@ -4687,7 +4853,7 @@
 
     /**
      * Syncs all posts for the user.
-     * @param {Object} userInfo 
+     * @param {Object} userInfo
      * @param {Function} onProgress (current, total) => void
      */
     async syncAllPosts(userInfo, onProgress) {
@@ -4707,12 +4873,12 @@
       AnalyticsDataManager.syncProgress = { current: 0, total: 0 };
 
       // Helper to broadcast progress
-      const reportProgress = (c, t) => {
+      const reportProgress = (c, t, msg = null) => {
         AnalyticsDataManager.syncProgress = { current: c, total: t };
         if (AnalyticsDataManager.onProgressCallback) {
-          AnalyticsDataManager.onProgressCallback(c, t);
+          AnalyticsDataManager.onProgressCallback(c, t, msg);
         }
-        if (onProgress) onProgress(c, t);
+        if (onProgress) onProgress(c, t, msg);
       };
 
       try {
@@ -4748,11 +4914,22 @@
           // fallback: if history is shorter than 1 month, startId stays 0 (Full Sync)
         }
 
-        let currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+        // Initialize currentNo based on startId
+        // If startId is 0, we start counting from 0.
+        // If startId > 0, we start counting from the number of posts we have UP TO that point.
+        let currentNo = 0;
+        if (startId > 0) {
+          // Fix: Count ONLY this user's posts below startId
+          // Using filter() on the collection because composite index might not exist for (id, uploader_id)
+          currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter(p => p.id <= startId).count();
+          console.log(`[Danbooru Grass] Resuming count from ${currentNo} (ID: ${startId})`);
+        } else {
+          console.log('[Danbooru Grass] Full sync count starting from 0');
+        }
 
         console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
 
-        // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced". 
+        // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced".
         // We must assume "Unknown" and proceed to try and fetch new posts.
         // IF total > 0 (Success), then we check if current >= total.
         // BUT with the new overlapping logic, we almost ALWAYS want to sync at least the overlap.
@@ -4773,7 +4950,7 @@
         // 3. Buffered Parallel Fetching Logic
         let lastFetchedId = startId;
         const limit = 200; // API Limit
-        // 3 concurrency = 600 items. 
+        // 3 concurrency = 600 items.
         // User complaint "jerky" likely means 5 threads * 200 = 1000 items is too big a batch.
         // Draining incrementally with buffer will solve this.
         const parallel_count = 5;
@@ -4862,6 +5039,7 @@
                   await this.db.posts.bulkPut(bulkData);
 
                   // Update Progress
+                  // currentNo is now accurate (reset based on startId)
                   reportProgress(currentNo, total > currentNo ? total : currentNo);
                 }
 
@@ -4894,6 +5072,13 @@
 
         // Auto-cleanup other users' stale data (older than 14 days)
         await this.cleanupStaleData(userInfo.id);
+
+        // Signal UI: Processing Stats
+        reportProgress(total, total, 'PREPARING');
+
+        // Refresh all stats after sync
+        await this.refreshAllStats(userInfo);
+
       } finally {
         AnalyticsDataManager.isGlobalSyncing = false;
       }
@@ -4923,7 +5108,7 @@
           let shouldDelete = false;
           if (!lastSyncStr) {
             // No record? Treat as stale (or maybe very old format). Delete to be safe/clean?
-            // Or maybe it's a new user not yet synced? 
+            // Or maybe it's a new user not yet synced?
             // If it's in DB but has no sync date, it's zombie data.
             shouldDelete = true;
           } else {
@@ -4936,11 +5121,29 @@
           if (shouldDelete) {
             console.log(`[Danbooru Grass] Cleaning up stale data for User ID: ${uid}`);
             await this.db.posts.where('uploader_id').equals(uid).delete();
+            await this.db.piestats.where('userId').equals(uid).delete(); // Also clear stats for this user
             localStorage.removeItem(syncKey);
           }
         }
       } catch (e) {
         console.warn('[Danbooru Grass] Cleanup failed', e);
+      }
+    }
+
+    async refreshAllStats(userInfo) {
+      console.log(`[Analytics] Refreshing all stats for user ${userInfo.name}`);
+      const forceRefresh = true;
+      try {
+        await Promise.all([
+          this.getRatingDistribution(userInfo, forceRefresh),
+          this.getCharacterDistribution(userInfo, forceRefresh),
+          this.getCopyrightDistribution(userInfo, forceRefresh),
+          this.getFavCopyrightDistribution(userInfo, forceRefresh),
+          this.getBreastsDistribution(userInfo, forceRefresh)
+        ]);
+        console.log(`[Analytics] All stats refreshed for user ${userInfo.name}`);
+      } catch (e) {
+        console.warn('[Analytics] Failed to refresh stats', e);
       }
     }
 
@@ -4950,6 +5153,12 @@
 
       // Delete posts for this user
       await this.db.posts.where('uploader_id').equals(uploaderId).delete();
+      await this.db.piestats.where('userId').equals(uploaderId).delete();
+
+      // Clear legacy tables if they exist/used
+      await this.db.uploads.where('userId').equals(uploaderId).delete();
+      await this.db.approvals.where('userId').equals(uploaderId).delete();
+      await this.db.notes.where('userId').equals(uploaderId).delete();
 
       // Clear metadata
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
