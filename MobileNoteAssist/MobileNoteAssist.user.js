@@ -14,30 +14,52 @@
 (function() {
   'use strict';
 
-  /**
-   * Configuration constants.
-   */
+  // --------------------------------------------------------------------------
+  // Constants & Configuration
+  // --------------------------------------------------------------------------
+
+  /** @const {string} Key for local storage to save the enabled state. */
   const STATE_KEY = 'dmna_enabled';
+
+  /** @const {string} Key for local storage to save the button's Y position. */
   const POS_KEY = 'dmna_btn_margin_y';
-  const INITIAL_SIZE_RATIO = 0.10; // 10% of the image's smaller dimension
+
+  /** @const {number} Initial box size ratio relative to the image's smaller dimension. */
+  const INITIAL_SIZE_RATIO = 0.10;
+
+  /** @const {number} Minimum size of the note box in pixels. */
   const MIN_BOX_SIZE = 15;
+
+  /** @const {number} Minimum initial size of the note box. */
   const MIN_INITIAL_SIZE = 30;
+
+  /** @const {number} Maximum initial size of the note box. */
   const MAX_INITIAL_SIZE = 150;
-  const LONG_PRESS_DURATION = 1500; // 1.5 Seconds
+
+  /** @const {number} Duration in ms to trigger the reposition mode (Long Press). */
+  const LONG_PRESS_DURATION = 1500;
 
   // UI Positioning Constants
+  /** @const {number} Size of the floating button in pixels. */
   const BTN_SIZE = 40;
+
+  /** @const {number} Horizontal margin for the floating button. */
   const BTN_MARGIN_X = 20;
+
+  /** @const {number} Default vertical margin for the floating button. */
   const DEFAULT_BTN_MARGIN_Y = 80;
+
+  /** @const {number} Distance of the toast message from the viewport bottom. */
   const TOAST_MARGIN_BOTTOM = 20;
 
-  /**
-   * Global state variables.
-   */
+  // --------------------------------------------------------------------------
+  // State Variables
+  // --------------------------------------------------------------------------
+
   let isEnabled = localStorage.getItem(STATE_KEY) === 'true';
   let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) || DEFAULT_BTN_MARGIN_Y;
 
-  // Interaction state variables
+  // Interaction state
   let isDraggingBtn = false;
   let isPressing = false;
   let longPressTimer = null;
@@ -55,16 +77,17 @@
   let toastTimer = null;
   let viewportRaf = null;
 
-  /**
-   * CSS styles for the UI components.
-   */
+  // --------------------------------------------------------------------------
+  // Styles
+  // --------------------------------------------------------------------------
+
   const STYLES = `
-    /* 1. Note Box Container */
+    /* Note Box Container */
     #dmna-box {
       position: absolute;
       width: 50px;
       height: 50px;
-      border: 1.4px solid #0073ff;
+      border: 1.2px solid #0073ff;
       background-color: rgba(0, 115, 255, 0.15);
       z-index: 9990;
       touch-action: none;
@@ -73,17 +96,23 @@
       box-sizing: border-box;
     }
 
-    /* 2. Resize Handles */
+    /* Resize Handles */
     #dmna-resize-se {
       position: absolute; width: 0; height: 0; right: 0; bottom: 0;
       border-bottom: 7px solid #0073ff;
       border-left: 7px solid transparent;
       cursor: nwse-resize; z-index: 9991;
       filter: drop-shadow(-1px -1px 0 rgba(255, 255, 255, 0.5));
+      transition: opacity 0.2s ease;
     }
     #dmna-resize-se::after {
       content: ''; position: absolute;
       right: -40px; bottom: -40px; width: 70px; height: 70px;
+    }
+
+    /* Hide the SE triangle when interacting */
+    #dmna-box.interacting #dmna-resize-se {
+      opacity: 0;
     }
 
     #dmna-resize-nw {
@@ -95,7 +124,7 @@
       left: -40px; top: -40px; width: 70px; height: 70px;
     }
 
-    /* 3. Drag Handles */
+    /* Drag Handles */
     #dmna-drag-sw {
       position: absolute; width: 0; height: 0; left: 0; bottom: 0;
       cursor: move; z-index: 9991;
@@ -114,7 +143,7 @@
       right: -40px; top: -40px; width: 70px; height: 70px;
     }
 
-    /* 4. Popover */
+    /* Popover */
     #dmna-popover {
       position: absolute; z-index: 9992; display: flex; gap: 15px;
       background: white; padding: 10px 16px; border-radius: 14px;
@@ -144,7 +173,7 @@
     #dmna-ok { background: #e8f5e9; color: #2e7d32; }
     #dmna-no { background: #ffebee; color: #c62828; }
 
-    /* 5. Floating Toggle Button */
+    /* Floating Toggle Button */
     #dmna-float-btn {
       position: absolute;
       left: 0; top: 0;
@@ -158,7 +187,6 @@
       transform-origin: 0 0;
       will-change: transform, background, box-shadow;
       transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
-      /* Important: Disable default touch actions to prevent native scrolling/menu */
       touch-action: none;
     }
     #dmna-float-btn.active {
@@ -173,7 +201,7 @@
       transform: scale(1.2);
     }
 
-    /* 6. Toast Message */
+    /* Toast Message */
     #dmna-toast {
       visibility: hidden; min-width: 160px;
       background-color: rgba(30, 30, 30, 0.95); color: #fff;
@@ -188,7 +216,7 @@
     }
     #dmna-toast.show { visibility: visible; opacity: 1; }
 
-    /* 7. Sidebar Link Styling */
+    /* Sidebar Link */
     #dmna-sidebar-link {
       color: #7b8c9d !important;
       transition: all 0.3s ease;
@@ -203,7 +231,6 @@
     body.dmna-active #image { cursor: crosshair !important; }
   `;
 
-  // Inject Styles
   if (typeof GM_addStyle !== 'undefined') {
     GM_addStyle(STYLES);
   } else {
@@ -212,6 +239,14 @@
     document.head.appendChild(style);
   }
 
+  // --------------------------------------------------------------------------
+  // Core Functions
+  // --------------------------------------------------------------------------
+
+  /**
+   * Displays a toast message at the bottom of the visual viewport.
+   * @param {string} msg - The message string to display.
+   */
   function showToast(msg) {
     if (!toastElement) {
       toastElement = document.createElement('div');
@@ -220,7 +255,7 @@
     }
     updateVisualViewportPositions();
     toastElement.textContent = msg;
-    void toastElement.offsetWidth;
+    void toastElement.offsetWidth; // Trigger reflow
     toastElement.className = 'show';
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
@@ -228,6 +263,10 @@
     }, 2500);
   }
 
+  /**
+   * Updates the positions of fixed UI elements (Floating Button, Toast)
+   * relative to the Visual Viewport to handle pinch-zoom and scroll correctly.
+   */
   function updateVisualViewportPositions() {
     const btn = document.getElementById('dmna-float-btn');
     const toast = document.getElementById('dmna-toast');
@@ -263,6 +302,9 @@
     }
   }
 
+  /**
+   * Initializes the script, setting up UI and event listeners.
+   */
   function init() {
     createUI();
     updateStateUI();
@@ -297,6 +339,9 @@
     }
   }
 
+  /**
+   * Creates necessary DOM elements including the floating button, note box, and popover.
+   */
   function createUI() {
     if (document.getElementById('dmna-box')) return;
 
@@ -304,8 +349,6 @@
     floatBtn.id = 'dmna-float-btn';
     floatBtn.innerHTML = '📝';
 
-    // Button interactions are now fully handled in setupButtonInteractions
-    // No separate onclick handler
     setupButtonInteractions(floatBtn);
     document.body.appendChild(floatBtn);
 
@@ -358,14 +401,12 @@
   }
 
   /**
-   * Sets up touch interactions (Tap vs Long Press Drag) for the floating button.
-   * Uses manual event handling to override default browser behavior.
-   * @param {HTMLElement} btn
+   * Sets up touch interactions for the floating button (Tap vs Long Press).
+   * Supports dragging to reposition the button.
+   * @param {HTMLElement} btn - The floating button element.
    */
   function setupButtonInteractions(btn) {
     btn.addEventListener('touchstart', (e) => {
-      // Prevent browser default (context menu, selection, magnifying glass)
-      // This is crucial for the timer to work while holding still
       e.preventDefault();
 
       isDraggingBtn = false;
@@ -373,7 +414,6 @@
       dragStartY = e.touches[0].clientY;
       dragStartMarginY = userBtnMarginY;
 
-      // Start Long Press Timer
       longPressTimer = setTimeout(() => {
         if (isPressing) {
           isDraggingBtn = true;
@@ -385,13 +425,11 @@
     }, { passive: false });
 
     btn.addEventListener('touchmove', (e) => {
-      // Always prevent scroll when touching the button
       e.preventDefault();
       e.stopPropagation();
 
       const currentY = e.touches[0].clientY;
 
-      // If we are already in drag mode, update position
       if (isDraggingBtn) {
         const dy = currentY - dragStartY;
         let newMargin = dragStartMarginY - dy;
@@ -402,7 +440,6 @@
         return;
       }
 
-      // If not in drag mode yet, check if user moved too much (cancel long press)
       if (Math.abs(currentY - dragStartY) > 10) {
         clearTimeout(longPressTimer);
         isPressing = false;
@@ -410,23 +447,23 @@
     }, { passive: false });
 
     btn.addEventListener('touchend', (e) => {
-      e.preventDefault(); // Prevent default click generation
+      e.preventDefault();
       clearTimeout(longPressTimer);
       isPressing = false;
 
       if (isDraggingBtn) {
-        // End of drag
         isDraggingBtn = false;
         btn.classList.remove('dragging');
         localStorage.setItem(POS_KEY, userBtnMarginY);
-        // Silently saved
       } else {
-        // If it wasn't a drag/long-press, treat it as a Click/Toggle
         toggleState();
       }
     });
   }
 
+  /**
+   * Toggles the enabled/disabled state of the Note Assist.
+   */
   function toggleState() {
     isEnabled = !isEnabled;
     localStorage.setItem(STATE_KEY, isEnabled);
@@ -441,6 +478,9 @@
     }
   }
 
+  /**
+   * Updates the button and sidebar link styles based on current state.
+   */
   function updateStateUI() {
     const floatBtn = document.getElementById('dmna-float-btn');
     const sidebarLink = document.getElementById('dmna-sidebar-link');
@@ -462,6 +502,10 @@
     }
   }
 
+  /**
+   * Handles image click events to spawn the note box.
+   * @param {MouseEvent} e - The click event.
+   */
   function onImageClick(e) {
     if (!isEnabled) return;
     if (e.target.closest('#dmna-box') ||
@@ -496,6 +540,13 @@
     showBox(startX, startY, size, size);
   }
 
+  /**
+   * Shows the note box at specific coordinates.
+   * @param {number} x - Left position.
+   * @param {number} y - Top position.
+   * @param {number} w - Width.
+   * @param {number} h - Height.
+   */
   function showBox(x, y, w, h) {
     boxElement.style.left = `${x}px`;
     boxElement.style.top = `${y}px`;
@@ -505,11 +556,17 @@
     updatePopoverPosition();
   }
 
+  /**
+   * Hides the note box and popover menu.
+   */
   function hideBox() {
     boxElement.style.display = 'none';
     popoverElement.style.display = 'none';
   }
 
+  /**
+   * Updates the position of the action popover relative to the note box.
+   */
   function updatePopoverPosition() {
     const rect = boxElement.getBoundingClientRect();
     const boxCenterX = rect.left + window.scrollX + (rect.width / 2);
@@ -529,6 +586,9 @@
     popoverElement.style.display = 'flex';
   }
 
+  /**
+   * Initializes drag and resize event listeners for the note box handles.
+   */
   function setupDragAndResize() {
     let mode = null;
     let startX, startY, startLeft, startTop, startW, startH;
@@ -543,6 +603,10 @@
       else return;
 
       e.preventDefault();
+
+      // Add 'interacting' class to hide triangle
+      boxElement.classList.add('interacting');
+
       const pt = e.touches ? e.touches[0] : e;
       startX = pt.clientX;
       startY = pt.clientY;
@@ -634,6 +698,9 @@
 
     const onEnd = () => {
       mode = null;
+      // Remove 'interacting' class to show triangle again
+      boxElement.classList.remove('interacting');
+
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
@@ -644,6 +711,10 @@
     boxElement.addEventListener('touchstart', onStart, { passive: false });
   }
 
+  /**
+   * Submits the created note data to the Danbooru API.
+   * Fetches image dimensions if necessary and handles CSRF tokens.
+   */
   async function submitNote() {
     const img = document.querySelector('#image');
     if (!img) return;
