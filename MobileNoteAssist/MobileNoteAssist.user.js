@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
-// @description  Assist creating notes on mobile with accurate scaling and touch-friendly controls.
-// @author       AkaringoP 
+// @version      1.2
+// @description  Assist creating notes on mobile with accurate scaling and touch-friendly controls. Includes draggable button.
+// @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
+// @icon         https://danbooru.donmai.us/favicon.ico
 // @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
 // @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
 // @grant        none
@@ -13,25 +14,59 @@
 (function() {
   'use strict';
 
-  /**
-   * Configuration constants.
-   */
+  // --------------------------------------------------------------------------
+  // Constants & Configuration
+  // --------------------------------------------------------------------------
+
+  /** @const {string} Key for local storage to save the enabled state. */
   const STATE_KEY = 'dmna_enabled';
-  const INITIAL_SIZE_RATIO = 0.10; // 10% of the image's smaller dimension
-  const MIN_BOX_SIZE = 15; // Minimum size in pixels
+
+  /** @const {string} Key for local storage to save the button's Y position. */
+  const POS_KEY = 'dmna_btn_margin_y';
+
+  /** @const {number} Initial box size ratio relative to the image's smaller dimension. */
+  const INITIAL_SIZE_RATIO = 0.10;
+
+  /** @const {number} Minimum size of the note box in pixels. */
+  const MIN_BOX_SIZE = 15;
+
+  /** @const {number} Minimum initial size of the note box. */
   const MIN_INITIAL_SIZE = 30;
+
+  /** @const {number} Maximum initial size of the note box. */
   const MAX_INITIAL_SIZE = 150;
 
-  // UI Positioning Constants
-  const BTN_SIZE = 35;
-  const BTN_MARGIN_X = 20;
-  const BTN_MARGIN_Y = 80;
-  const TOAST_MARGIN_BOTTOM = 20; // Distance from the visual viewport bottom
+  /** @const {number} Duration in ms to trigger the reposition mode (Long Press). */
+  const LONG_PRESS_DURATION = 1500;
 
-  /**
-   * global state variables.
-   */
+  // UI Positioning Constants
+  /** @const {number} Size of the floating button in pixels. */
+  const BTN_SIZE = 40;
+
+  /** @const {number} Horizontal margin for the floating button. */
+  const BTN_MARGIN_X = 20;
+
+  /** @const {number} Default vertical margin for the floating button. */
+  const DEFAULT_BTN_MARGIN_Y = 80;
+
+  /** @const {number} Distance of the toast message from the viewport bottom. */
+  const TOAST_MARGIN_BOTTOM = 20;
+
+  // --------------------------------------------------------------------------
+  // State Variables
+  // --------------------------------------------------------------------------
+
   let isEnabled = localStorage.getItem(STATE_KEY) === 'true';
+  let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) || DEFAULT_BTN_MARGIN_Y;
+
+  // Interaction state
+  let isDraggingBtn = false;
+  let isPressing = false;
+  let longPressTimer = null;
+  let dragStartY = 0;
+  let dragStartMarginY = 0;
+
+  // DOM Elements
   let boxElement = null;
   let handleNW = null;
   let handleSE = null;
@@ -42,16 +77,17 @@
   let toastTimer = null;
   let viewportRaf = null;
 
-  /**
-   * CSS styles for the UI components.
-   */
+  // --------------------------------------------------------------------------
+  // Styles
+  // --------------------------------------------------------------------------
+
   const STYLES = `
-    /* 1. Note Box Container */
+    /* Note Box Container */
     #dmna-box {
       position: absolute;
       width: 50px;
       height: 50px;
-      border: 2px solid #0073ff;
+      border: 1.2px solid #0073ff;
       background-color: rgba(0, 115, 255, 0.15);
       z-index: 9990;
       touch-action: none;
@@ -60,34 +96,35 @@
       box-sizing: border-box;
     }
 
-    /* 2. Resize Handles (Visible Triangles) */
+    /* Resize Handles */
     #dmna-resize-se {
       position: absolute; width: 0; height: 0; right: 0; bottom: 0;
       border-bottom: 7px solid #0073ff;
       border-left: 7px solid transparent;
       cursor: nwse-resize; z-index: 9991;
       filter: drop-shadow(-1px -1px 0 rgba(255, 255, 255, 0.5));
+      transition: opacity 0.2s ease;
     }
-    /* Expanded touch area for SE */
     #dmna-resize-se::after {
       content: ''; position: absolute;
       right: -40px; bottom: -40px; width: 70px; height: 70px;
     }
 
+    /* Hide the SE triangle when interacting */
+    #dmna-box.interacting #dmna-resize-se {
+      opacity: 0;
+    }
+
     #dmna-resize-nw {
       position: absolute; width: 0; height: 0; left: 0; top: 0;
-      border-top: 7px solid #0073ff;
-      border-right: 7px solid transparent;
       cursor: nwse-resize; z-index: 9991;
-      filter: drop-shadow(1px 1px 0 rgba(255, 255, 255, 0.5));
     }
-    /* Expanded touch area for NW */
     #dmna-resize-nw::after {
       content: ''; position: absolute;
       left: -40px; top: -40px; width: 70px; height: 70px;
     }
 
-    /* 3. Drag Handles (Invisible Zones) */
+    /* Drag Handles */
     #dmna-drag-sw {
       position: absolute; width: 0; height: 0; left: 0; bottom: 0;
       cursor: move; z-index: 9991;
@@ -106,7 +143,7 @@
       right: -40px; top: -40px; width: 70px; height: 70px;
     }
 
-    /* 4. Popover (Action Menu) */
+    /* Popover */
     #dmna-popover {
       position: absolute; z-index: 9992; display: flex; gap: 15px;
       background: white; padding: 10px 16px; border-radius: 14px;
@@ -136,34 +173,40 @@
     #dmna-ok { background: #e8f5e9; color: #2e7d32; }
     #dmna-no { background: #ffebee; color: #c62828; }
 
-    /* 5. Floating Toggle Button */
+    /* Floating Toggle Button */
     #dmna-float-btn {
-      position: absolute; /* Using absolute for manual viewport tracking */
+      position: absolute;
       left: 0; top: 0;
-      width: 35px; height: 35px; border-radius: 50%;
-      background: rgba(0, 0, 0, 0.6); color: white; font-size: 18px;
+      width: 40px; height: 40px; border-radius: 50%;
+      background: rgba(0, 0, 0, 0.6); color: white; font-size: 21px;
       border: 2px solid rgba(255, 255, 255, 0.3);
       display: flex; align-items: center; justify-content: center;
       z-index: 11000; cursor: pointer; backdrop-filter: blur(2px);
       user-select: none;
       box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
       transform-origin: 0 0;
-      will-change: transform;
-      /* Only animate visual properties, not position */
+      will-change: transform, background, box-shadow;
       transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+      touch-action: none;
     }
     #dmna-float-btn.active {
       background: #0073ff;
       border-color: white;
       box-shadow: 0 0 15px #0073ff;
     }
+    #dmna-float-btn.dragging {
+      background: #ff9800 !important;
+      border-color: #ffe0b2 !important;
+      box-shadow: 0 0 15px #ff9800 !important;
+      transform: scale(1.2);
+    }
 
-    /* 6. Toast Message */
+    /* Toast Message */
     #dmna-toast {
       visibility: hidden; min-width: 160px;
       background-color: rgba(30, 30, 30, 0.95); color: #fff;
       text-align: center; border-radius: 50px; padding: 12px 24px;
-      position: absolute; /* Using absolute for manual viewport tracking */
+      position: absolute;
       left: 0; top: 0; z-index: 11000;
       font-size: 14px; opacity: 0;
       transition: opacity 0.4s ease-in-out;
@@ -173,14 +216,14 @@
     }
     #dmna-toast.show { visibility: visible; opacity: 1; }
 
-    /* 7. Sidebar Link Styling */
+    /* Sidebar Link */
     #dmna-sidebar-link {
-      color: #7b8c9d !important; /* Dull Blue-Grey */
+      color: #7b8c9d !important;
       transition: all 0.3s ease;
       text-decoration: none;
     }
     #dmna-sidebar-link.active {
-      color: #0073ff !important; /* Bright Neon Blue */
+      color: #0073ff !important;
       font-weight: bold;
       text-shadow: 0 0 8px rgba(0, 115, 255, 0.6);
     }
@@ -188,7 +231,6 @@
     body.dmna-active #image { cursor: crosshair !important; }
   `;
 
-  // Inject Styles
   if (typeof GM_addStyle !== 'undefined') {
     GM_addStyle(STYLES);
   } else {
@@ -197,9 +239,13 @@
     document.head.appendChild(style);
   }
 
+  // --------------------------------------------------------------------------
+  // Core Functions
+  // --------------------------------------------------------------------------
+
   /**
-   * Displays a toast message at the bottom of the visible screen.
-   * @param {string} msg - The message to display.
+   * Displays a toast message at the bottom of the visual viewport.
+   * @param {string} msg - The message string to display.
    */
   function showToast(msg) {
     if (!toastElement) {
@@ -207,15 +253,10 @@
       toastElement.id = 'dmna-toast';
       document.body.appendChild(toastElement);
     }
-
-    // Update position immediately before showing to prevent jumping
     updateVisualViewportPositions();
-
     toastElement.textContent = msg;
-    // Trigger reflow
-    void toastElement.offsetWidth;
+    void toastElement.offsetWidth; // Trigger reflow
     toastElement.className = 'show';
-
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       toastElement.className = '';
@@ -223,19 +264,18 @@
   }
 
   /**
-   * Updates the positions of fixed UI elements (Button, Toast)
-   * based on the Visual Viewport to handle pinch-zoom and scroll correctly.
+   * Updates the positions of fixed UI elements (Floating Button, Toast)
+   * relative to the Visual Viewport to handle pinch-zoom and scroll correctly.
    */
   function updateVisualViewportPositions() {
     const btn = document.getElementById('dmna-float-btn');
     const toast = document.getElementById('dmna-toast');
 
-    // Fallback for browsers without Visual Viewport API
     if (!window.visualViewport) {
       const scrollX = window.pageXOffset;
       const scrollY = window.pageYOffset;
       if (btn) {
-        btn.style.transform = `translate(${scrollX + window.innerWidth - BTN_MARGIN_X - BTN_SIZE}px, ${scrollY + window.innerHeight - BTN_MARGIN_Y - BTN_SIZE}px)`;
+        btn.style.transform = `translate(${scrollX + window.innerWidth - BTN_MARGIN_X - BTN_SIZE}px, ${scrollY + window.innerHeight - userBtnMarginY - BTN_SIZE}px)`;
       }
       if (toast) {
         toast.style.transform = `translate(${scrollX + window.innerWidth / 2}px, ${scrollY + window.innerHeight - TOAST_MARGIN_BOTTOM}px) translate(-50%, 0)`;
@@ -244,40 +284,32 @@
     }
 
     const vv = window.visualViewport;
-    const invScale = 1 / vv.scale; // Inverse scale to keep visual size constant
+    const invScale = 1 / vv.scale;
     const vvPageLeft = vv.pageLeft;
     const vvPageTop = vv.pageTop;
 
-    // 1. Button Position (Bottom-Right)
     if (btn) {
       const btnScale = isEnabled ? invScale * 1.1 : invScale;
       const bx = vvPageLeft + vv.width - ((BTN_MARGIN_X + BTN_SIZE) * invScale);
-      const by = vvPageTop + vv.height - ((BTN_MARGIN_Y + BTN_SIZE) * invScale);
-
+      const by = vvPageTop + vv.height - ((userBtnMarginY + BTN_SIZE) * invScale);
       btn.style.transform = `translate(${bx}px, ${by}px) scale(${btnScale})`;
     }
 
-    // 2. Toast Position (Bottom-Center)
     if (toast && toast.classList.contains('show')) {
       const tx = vvPageLeft + (vv.width / 2);
       const ty = vvPageTop + vv.height - (TOAST_MARGIN_BOTTOM * invScale);
-
-      // translate(tx, ty): Move to the center-bottom of the visual viewport
-      // scale(invScale): Maintain visual size
-      // translate(-50%, -100%): Center the toast element itself and shift it upwards
       toast.style.transform = `translate(${tx}px, ${ty}px) scale(${invScale}) translate(-50%, -100%)`;
     }
   }
 
   /**
-   * Initializes the script logic and UI.
+   * Initializes the script, setting up UI and event listeners.
    */
   function init() {
     createUI();
     updateStateUI();
     updateVisualViewportPositions();
 
-    // Attach high-performance listeners for viewport changes
     if (window.visualViewport) {
       const handleUpdate = () => {
         if (!viewportRaf) {
@@ -290,16 +322,6 @@
       window.visualViewport.addEventListener('resize', handleUpdate);
       window.visualViewport.addEventListener('scroll', handleUpdate);
       window.addEventListener('scroll', handleUpdate);
-    }
-
-    // Event listeners for external triggers
-    const floatBtn = document.getElementById('dmna-float-btn');
-    if (floatBtn) {
-      floatBtn.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleState();
-      };
     }
 
     const sidebarLink = document.getElementById('dmna-sidebar-link');
@@ -318,18 +340,18 @@
   }
 
   /**
-   * Creates the necessary DOM elements.
+   * Creates necessary DOM elements including the floating button, note box, and popover.
    */
   function createUI() {
     if (document.getElementById('dmna-box')) return;
 
-    // Floating Button
     const floatBtn = document.createElement('div');
     floatBtn.id = 'dmna-float-btn';
     floatBtn.innerHTML = '📝';
+
+    setupButtonInteractions(floatBtn);
     document.body.appendChild(floatBtn);
 
-    // Sidebar Link
     const optionsList = document.querySelector('#post-options > ul');
     if (optionsList) {
       const li = document.createElement('li');
@@ -341,11 +363,9 @@
       optionsList.appendChild(li);
     }
 
-    // Note Box
     boxElement = document.createElement('div');
     boxElement.id = 'dmna-box';
 
-    // Handles
     handleSE = document.createElement('div');
     handleSE.id = 'dmna-resize-se';
     boxElement.appendChild(handleSE);
@@ -364,7 +384,6 @@
 
     document.body.appendChild(boxElement);
 
-    // Popover
     popoverElement = document.createElement('div');
     popoverElement.id = 'dmna-popover';
     popoverElement.innerHTML = `
@@ -382,7 +401,68 @@
   }
 
   /**
-   * Toggles the active state of the script.
+   * Sets up touch interactions for the floating button (Tap vs Long Press).
+   * Supports dragging to reposition the button.
+   * @param {HTMLElement} btn - The floating button element.
+   */
+  function setupButtonInteractions(btn) {
+    btn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+
+      isDraggingBtn = false;
+      isPressing = true;
+      dragStartY = e.touches[0].clientY;
+      dragStartMarginY = userBtnMarginY;
+
+      longPressTimer = setTimeout(() => {
+        if (isPressing) {
+          isDraggingBtn = true;
+          btn.classList.add('dragging');
+          if (navigator.vibrate) navigator.vibrate(50);
+          showToast('↕️ Reposition Mode');
+        }
+      }, LONG_PRESS_DURATION);
+    }, { passive: false });
+
+    btn.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const currentY = e.touches[0].clientY;
+
+      if (isDraggingBtn) {
+        const dy = currentY - dragStartY;
+        let newMargin = dragStartMarginY - dy;
+        const screenH = window.innerHeight;
+        newMargin = Math.max(20, Math.min(screenH - 100, newMargin));
+        userBtnMarginY = newMargin;
+        updateVisualViewportPositions();
+        return;
+      }
+
+      if (Math.abs(currentY - dragStartY) > 10) {
+        clearTimeout(longPressTimer);
+        isPressing = false;
+      }
+    }, { passive: false });
+
+    btn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      clearTimeout(longPressTimer);
+      isPressing = false;
+
+      if (isDraggingBtn) {
+        isDraggingBtn = false;
+        btn.classList.remove('dragging');
+        localStorage.setItem(POS_KEY, userBtnMarginY);
+      } else {
+        toggleState();
+      }
+    });
+  }
+
+  /**
+   * Toggles the enabled/disabled state of the Note Assist.
    */
   function toggleState() {
     isEnabled = !isEnabled;
@@ -399,7 +479,7 @@
   }
 
   /**
-   * Updates the UI based on the enabled state.
+   * Updates the button and sidebar link styles based on current state.
    */
   function updateStateUI() {
     const floatBtn = document.getElementById('dmna-float-btn');
@@ -423,8 +503,8 @@
   }
 
   /**
-   * Handles click events on the image to spawn the note box.
-   * @param {MouseEvent} e
+   * Handles image click events to spawn the note box.
+   * @param {MouseEvent} e - The click event.
    */
   function onImageClick(e) {
     if (!isEnabled) return;
@@ -444,7 +524,6 @@
     const absRight = absLeft + imgRect.width;
     const absBottom = absTop + imgRect.height;
 
-    // Calculate initial size (10% of min dimension)
     const minDimension = Math.min(imgRect.width, imgRect.height);
     let calculatedSize = minDimension * INITIAL_SIZE_RATIO;
     calculatedSize = Math.max(MIN_INITIAL_SIZE, Math.min(calculatedSize, MAX_INITIAL_SIZE));
@@ -453,7 +532,6 @@
     let startX = e.pageX - (size / 2);
     let startY = e.pageY - (size / 2);
 
-    // Boundary constraints
     if (startX < absLeft) startX = absLeft;
     if (startY < absTop) startY = absTop;
     if (startX + size > absRight) startX = absRight - size;
@@ -463,7 +541,11 @@
   }
 
   /**
-   * Shows the note box at the specified position.
+   * Shows the note box at specific coordinates.
+   * @param {number} x - Left position.
+   * @param {number} y - Top position.
+   * @param {number} w - Width.
+   * @param {number} h - Height.
    */
   function showBox(x, y, w, h) {
     boxElement.style.left = `${x}px`;
@@ -475,7 +557,7 @@
   }
 
   /**
-   * Hides the note box.
+   * Hides the note box and popover menu.
    */
   function hideBox() {
     boxElement.style.display = 'none';
@@ -483,7 +565,7 @@
   }
 
   /**
-   * Positions the popover menu relative to the box.
+   * Updates the position of the action popover relative to the note box.
    */
   function updatePopoverPosition() {
     const rect = boxElement.getBoundingClientRect();
@@ -505,7 +587,7 @@
   }
 
   /**
-   * Sets up event listeners for dragging and resizing the box.
+   * Initializes drag and resize event listeners for the note box handles.
    */
   function setupDragAndResize() {
     let mode = null;
@@ -521,6 +603,10 @@
       else return;
 
       e.preventDefault();
+
+      // Add 'interacting' class to hide triangle
+      boxElement.classList.add('interacting');
+
       const pt = e.touches ? e.touches[0] : e;
       startX = pt.clientX;
       startY = pt.clientY;
@@ -612,6 +698,9 @@
 
     const onEnd = () => {
       mode = null;
+      // Remove 'interacting' class to show triangle again
+      boxElement.classList.remove('interacting');
+
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
@@ -623,7 +712,8 @@
   }
 
   /**
-   * Submits the note creation request to the API.
+   * Submits the created note data to the Danbooru API.
+   * Fetches image dimensions if necessary and handles CSRF tokens.
    */
   async function submitNote() {
     const img = document.querySelector('#image');
@@ -686,7 +776,7 @@
       const res = await fetch('/notes', {
         method: 'POST',
         headers: { 'X-CSRF-Token': csrfToken },
-        body: formData
+        body: formData,
       });
 
       if (res.ok) {
@@ -703,5 +793,5 @@
 
   // Run initialization
   init();
-  setTimeout(init, 1000); // Fallback for delayed loading
+  setTimeout(init, 1000);
 })();
