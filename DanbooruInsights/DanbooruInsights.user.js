@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      4.3
+// @version      4.4
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
 // @match        https://danbooru.donmai.us/profile
+// @icon         https://danbooru.donmai.us/favicon.ico
 // @grant        none
 // @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruInsights
 // @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/DanbooruInsights/DanbooruInsights.user.js
@@ -253,6 +254,24 @@
         rememberedModes: newModes
       });
     }
+
+    /**
+     * Gets the sync threshold (max diff allowed to skip sync).
+     * @return {number} Threshold (default 5).
+     */
+    getSyncThreshold() {
+      return typeof this.settings.syncThreshold === 'number' ? this.settings.syncThreshold : 5;
+    }
+
+    /**
+     * Sets the sync threshold.
+     * @param {number} val
+     */
+    setSyncThreshold(val) {
+      this.save({
+        syncThreshold: parseInt(val, 10)
+      });
+    }
   }
 
   // --- 1. Context & Identity ---
@@ -284,8 +303,6 @@
         // Index description:
         // PK: id (Post ID is unique global)
         // no: User-specific sequence (1-based index)
-        // PK: id (Post ID is unique global)
-        // no: User-specific sequence (1-based index)
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general'
       });
 
@@ -296,7 +313,6 @@
         uploads: 'id, userId, date, count',
         approvals: 'id, userId, date, count',
         notes: 'id, userId, date, count',
-        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
         piestats: '[key+userId], userId, updated_at'
       });
@@ -1682,6 +1698,36 @@
           setTimeout(() => {
             const tooltip = d3.select('#danbooru-grass-tooltip');
 
+            // Helper: Smart Tooltip Positioning
+            const updateTooltip = (event, content) => {
+              tooltip.style('opacity', 1).html(content);
+
+              const node = tooltip.node();
+              if (!node) return;
+
+              const rect = node.getBoundingClientRect();
+              const viewportWidth = window.innerWidth;
+
+              // Default Position: Right (+10), Top (-28)
+              let left = event.pageX + 10;
+              let top = event.pageY - 28;
+
+              // Check for Right Overflow
+              if (left + rect.width > viewportWidth - 20) {
+                // Overflow detected: Switch to "Top-Centered"
+                // Position above the cursor, centered horizontally
+                left = event.pageX - (rect.width / 2);
+                top = event.pageY - rect.height - 15; // Move appropriately above
+
+                // Safety: Don't overflow left
+                if (left < 5) left = 5;
+              }
+
+              tooltip
+                .style('left', left + 'px')
+                .style('top', top + 'px');
+            };
+
             // --- Auto-Scroll to Current Date (Refined) ---
             const scrollContainer = document.getElementById('cal-heatmap-scroll');
             if (scrollContainer) {
@@ -1717,10 +1763,7 @@
                 const count = (datum.v !== null && datum.v !== undefined) ? datum.v : 0;
                 const dateStr = new Date(datum.t).toISOString().split('T')[0];
 
-                tooltip.style('opacity', 1)
-                  .html(`<strong>${dateStr}</strong>, ${count} ${metric}`)
-                  .style('left', (event.pageX + 10) + 'px')
-                  .style('top', (event.pageY - 28) + 'px');
+                updateTooltip(event, `<strong>${dateStr}</strong>, ${count} ${metric}`);
               })
               .on('mouseout', () => tooltip.style('opacity', 0))
               .on('click', function (event, d) {
@@ -1758,10 +1801,7 @@
               if (i >= 0 && i < legendThresholds.length) {
                 d3.select(this)
                   .on('mouseover', function (event) {
-                    tooltip.style('opacity', 1)
-                      .html(legendThresholds[i])
-                      .style('left', (event.pageX + 10) + 'px')
-                      .style('top', (event.pageY - 28) + 'px');
+                    updateTooltip(event, legendThresholds[i]);
                   })
                   .on('mouseout', () => tooltip.style('opacity', 0));
               }
@@ -2153,42 +2193,57 @@
       if (AnalyticsDataManager.isGlobalSyncing) return;
 
       const originalText = btn ? btn.innerHTML : '';
+
+      // State for Animation
       let animInterval = null;
+      let dotCount = 0;
+      const state = {
+        current: 0,
+        total: 0,
+        phase: 'FETCHING', // 'FETCHING' or 'PREPARING'
+      };
 
       if (btn) {
         btn.disabled = true;
         btn.style.cursor = 'wait';
       }
 
-      const onProgress = (current, total, msg) => {
-        if (btn) {
-          const p = total > 0 ? Math.floor((current / total) * 100) : 0;
-          btn.innerHTML = `<span style="font-size:0.8em">${p}%</span>`;
+      // Animation Loop
+      const render = () => {
+        dotCount = (dotCount % 3) + 1;
+        const dotStr = '.'.repeat(dotCount);
+        const percent = state.total > 0 ? Math.floor((state.current / state.total) * 100) : 0;
+
+        let headerHtml = '';
+        let subHtml = '';
+        let containerColor = '#ff4444';
+
+        if (state.phase === 'PREPARING') {
+          containerColor = 'inherit';
+          headerHtml = `<div style="color:#00ba7c; font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">Preparing Report${dotStr}</div>`;
+        } else {
+          containerColor = '#ff4444';
+          headerHtml = `<div style="font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">Fetching data${dotStr}</div>`;
         }
 
-        const isComplete = (total > 0 && current >= total);
+        this.updateHeaderStatus(headerHtml + subHtml, containerColor);
+      };
 
+      // Start Animation
+      render();
+      animInterval = setInterval(render, 500);
+
+      const onProgress = (current, total, msg) => {
+        state.current = current;
+        state.total = total;
+
+        const isComplete = (total > 0 && current >= total);
         if (msg === 'PREPARING' || isComplete) {
-          if (!animInterval) {
-            let dots = 1;
-            const runAnim = () => {
-              const dotStr = '.'.repeat(dots);
-              const html = `
-                      <div style="color:#00ba7c; font-weight:bold;">Synced: ${current.toLocaleString()} / ${total.toLocaleString()}</div>
-                      <div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">Preparing Report${dotStr}</div>
-                    `;
-              // Pass 'transparent' or '#fff' as base color to avoid red override, but inline styles win anyway.
-              this.updateHeaderStatus(html, 'inherit');
-              dots = (dots % 3) + 1;
-            };
-            runAnim();
-            animInterval = setInterval(runAnim, 500);
-          }
+          state.phase = 'PREPARING';
         } else {
-          // Normal progress (Red)
-          // If animation was running (unlikely to switch back), clear it? 
-          // Usually we go Fetch -> Preparing -> Done.
-          this.updateHeaderStatus(`Synced: ${current.toLocaleString()} / ${total.toLocaleString()}`, '#ff4444');
+          state.phase = 'FETCHING';
         }
       };
 
@@ -2200,11 +2255,14 @@
         // Final Status (Green)
         if (shouldRender) {
           const finalStats = await this.dataManager.getSyncStats(this.context.targetUser);
-          // We can just show "Synced" in green now
           this.updateHeaderStatus(`Synced: ${finalStats.count.toLocaleString()} / ${finalStats.count.toLocaleString()}`, '#00ba7c');
         }
 
-        if (btn) btn.innerHTML = originalText;
+        if (btn) {
+          btn.innerHTML = originalText;
+          btn.disabled = false;
+          btn.style.cursor = 'pointer';
+        }
         if (shouldRender) {
           this.renderDashboard();
           this.toggleModal(true);
@@ -2212,7 +2270,11 @@
       } catch (e) {
         if (animInterval) clearInterval(animInterval);
         console.error(e);
-        if (btn) btn.innerHTML = 'ERR';
+        if (btn) {
+          btn.innerHTML = 'ERR';
+          btn.disabled = false;
+          btn.style.cursor = 'pointer';
+        }
         this.updateHeaderStatus('Sync Failed', '#ff4444');
       }
     }
@@ -2239,21 +2301,125 @@
       const lastSync = localStorage.getItem(lastSyncKey);
       const lastSyncText = lastSync ? new Date(lastSync).toLocaleDateString() : 'Never';
 
-      // Strict sync: No tolerance for missing posts
-      const tolerance = 0;
+      // Dynamic Sync Threshold
+      const settingsManager = new SettingsManager();
+      const tolerance = settingsManager.getSyncThreshold();
       const isSynced = (total > 0 && count >= total - tolerance);
       this.isFullySynced = isSynced; // Store state for auto-sync check
 
       // Update UI
+      const statusColor = (stats.lastSync && isSynced) ? '#28a745' : '#d73a49';
+      el.innerHTML = '';
+      el.style.color = statusColor;
+      el.title = `Last synced: ${lastSyncText}`;
+
+      // Row 1: Synced Count + Settings Button
+      const row1 = document.createElement('div');
+      row1.style.display = 'flex';
+      row1.style.alignItems = 'center';
+
+      const text1 = document.createElement('span');
+      text1.textContent = `Synced: ${count.toLocaleString()} / ${(total || '?').toLocaleString()}`;
+      text1.style.color = statusColor; // Force color
+      text1.style.fontWeight = 'bold'; // Optional: Make it pop a bit more if needed, but user didn't ask. I'll stick to color.
+      row1.appendChild(text1);
+
+      // Settings Button (Gear)
+      const settingBtn = document.createElement('span');
+      settingBtn.innerHTML = '⚙️';
+      settingBtn.style.cursor = 'pointer';
+      settingBtn.style.marginLeft = '6px';
+      settingBtn.style.fontSize = '12px';
+      settingBtn.title = 'Configure Sync Threshold';
+      settingBtn.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.showSyncSettingsPopover(settingBtn);
+      };
+      row1.appendChild(settingBtn);
+      el.appendChild(row1);
+
+      // Row 2: Date / Status Text
+      const row2 = document.createElement('div');
       if (stats.lastSync && isSynced) {
-        el.innerHTML = `Synced: ${count.toLocaleString()} / ${total.toLocaleString()}<br><span style="font-size:1em; font-weight:normal; color:#28a745;">${lastSyncText}</span>`;
-        el.style.color = customColor || '#28a745'; // Green
-        el.title = `Last synced: ${lastSyncText}`;
+        row2.innerHTML = `<span style="font-size:1em; font-weight:normal; color:#28a745;">${lastSyncText}</span>`;
       } else {
-        el.innerHTML = `Synced: ${count.toLocaleString()} / ${total ? total.toLocaleString() : '?'}<br>Not fully synced`;
-        el.style.color = customColor || '#d73a49'; // Red
-        el.title = `Sync Required. Last: ${lastSyncText}`;
+        row2.textContent = 'Not fully synced';
       }
+      el.appendChild(row2);
+    }
+
+    /**
+     * Shows the Sync Settings Popover.
+     * @param {HTMLElement} target The settings button.
+     */
+    showSyncSettingsPopover(target) {
+      // Remove existing
+      const existing = document.getElementById('danbooru-grass-sync-settings');
+      if (existing) existing.remove();
+
+      const settingsManager = new SettingsManager();
+      const currentVal = settingsManager.getSyncThreshold();
+
+      const popover = document.createElement('div');
+      popover.id = 'danbooru-grass-sync-settings';
+      popover.style.position = 'absolute';
+      popover.style.zIndex = '10001';
+      popover.style.background = '#fff';
+      popover.style.border = '1px solid #ccc';
+      popover.style.borderRadius = '6px';
+      popover.style.padding = '12px';
+      popover.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+      popover.style.fontSize = '11px'; // Reduced by 20%
+      popover.style.color = '#333';
+      popover.style.width = '220px';
+
+      // Position logic
+      const rect = target.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+      popover.style.top = `${rect.top + scrollTop}px`;
+      popover.style.left = `${rect.right + scrollLeft + 10}px`;
+
+      popover.innerHTML = `
+        <div style="margin-bottom:8px; line-height:1.4;">
+          <strong>Partial Sync Threshold</strong><br>
+          Allow report view without sync if: <br>
+          (Total - Synced) <= Threshold
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+           <input type="number" id="sync-thresh-input" value="${currentVal}" min="0" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#ffffff; color:#000000;">
+           <button id="sync-thresh-save" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
+        </div>
+      `;
+
+      document.body.appendChild(popover);
+
+      // Close on click outside
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && e.target !== target) {
+          popover.remove();
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+
+      // Save Handler
+      const saveBtn = popover.querySelector('#sync-thresh-save');
+      saveBtn.onclick = () => {
+        const input = popover.querySelector('#sync-thresh-input');
+        const val = parseInt(input.value, 10);
+        if (!isNaN(val) && val >= 0) {
+          settingsManager.setSyncThreshold(val);
+          popover.remove();
+          document.removeEventListener('click', closeHandler);
+          // Refresh Header Status immediately to reflect new threshold state
+          this.updateHeaderStatus();
+        } else {
+          alert('Please enter a valid number.');
+        }
+      };
     }
 
     /**
@@ -3204,17 +3370,46 @@
       milestonesDiv.style.marginTop = '20px';
       dashboardDiv.appendChild(milestonesDiv);
 
+      let currentMilestoneStep = 'auto'; // shared state for closure
+
       const renderMilestones = async () => {
-        const milestones = await dataManager.getMilestones(this.context.targetUser, isNsfwEnabled);
-        if (milestones.length === 0) {
-          milestonesDiv.innerHTML = '';
-          return;
-        }
+        // Clear previous content but keep structure if possible? 
+        // Actually, just rebuild.
+        milestonesDiv.innerHTML = '<div style="color:#888; padding:20px 0;">Loading milestones...</div>';
+
+        const milestones = await dataManager.getMilestones(this.context.targetUser, isNsfwEnabled, currentMilestoneStep);
 
         let msHtml = '<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:8px; margin-bottom:10px;">';
         msHtml += '<h3 style="color:#333; margin:0;">🏆 Milestones</h3>';
+
+        msHtml += '<div style="display:flex; align-items:center; gap:10px;">';
+
+        // Interval Selector
+        msHtml += `<select id="analytics-milestone-step" style="border:1px solid #d0d7de; border-radius:4px; padding:2px 4px; font-size:0.85em; color:#555; background-color:#f6f8fa;">
+            <option value="auto" ${currentMilestoneStep === 'auto' ? 'selected' : ''}>Auto</option>
+            <option value="1000" ${currentMilestoneStep === 1000 ? 'selected' : ''}>Every 1k</option>
+            <option value="2500" ${currentMilestoneStep === 2500 ? 'selected' : ''}>Every 2.5k</option>
+            <option value="5000" ${currentMilestoneStep === 5000 ? 'selected' : ''}>Every 5k</option>
+        </select>`;
+
         msHtml += '<button id="analytics-milestone-toggle" style="background:none; border:none; color:#0969da; cursor:pointer; font-size:0.9em; display:none;">Show More</button>';
         msHtml += '</div>';
+        msHtml += '</div>';
+
+        if (milestones.length === 0) {
+          milestonesDiv.innerHTML = msHtml + '<div style="color:#888; font-size:0.9em;">No milestones found.</div>';
+          // Still attach listener for dropdown even if empty?
+          // Rarely empty if total > 0.
+          const sel = milestonesDiv.querySelector('#analytics-milestone-step');
+          if (sel) {
+            sel.onchange = (e) => {
+              const v = e.target.value;
+              currentMilestoneStep = v === 'auto' ? 'auto' : parseInt(v);
+              renderMilestones();
+            };
+          }
+          return;
+        }
 
         const containerId = 'analytics-milestone-container';
         msHtml += `<div id="${containerId}" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; max-height:110px; overflow:hidden; transition: max-height 0.3s ease;">`;
@@ -3226,25 +3421,38 @@
           const showThumb = isNsfwEnabled || isSafe;
 
           msHtml += `
-                <a href="/posts/${p.id}" target="_blank" style="
-                   display:flex; justify-content:space-between; align-items:center; text-decoration:none; color:inherit;
-                   background:#fff; border:1px solid #e1e4e8; border-radius:6px; padding:10px;
-                   transition: transform 0.1s;
-                " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
-                   <div>
-                       <div style="font-size:0.8em; color:#888; text-transform:uppercase; letter-spacing:0.5px;">${m.type}</div>
-                       <div style="font-size:1.1em; font-weight:bold; color:#0969da; margin-top:4px;">#${m.index}</div>
-                       <div style="font-size:0.8em; color:#555; margin-top:2px;">${new Date(p.created_at).toLocaleDateString()}</div>
-                       <div style="font-size:0.75em; color:#aaa; margin-top:4px;">Score: ${p.score}</div>
-                   </div>
-                   ${(showThumb && thumbUrl) ? `<div style="width:60px; height:60px; margin-left:10px; flex-shrink:0; background:#f0f0f0; border-radius:4px; overflow:hidden; display:flex; align-items:center; justify-content:center;"><img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;"></div>` : ''}
-                </a>
-            `;
+            <a href="/posts/${p.id}" target="_blank" style="
+               display:flex; justify-content:space-between; align-items:center; text-decoration:none; color:inherit;
+               background:#fff; border:1px solid #e1e4e8; border-radius:6px; padding:10px;
+               transition: transform 0.1s;
+            " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+               <div>
+                   <div style="font-size:0.8em; color:#888; text-transform:uppercase; letter-spacing:0.5px;">${m.type}</div>
+                   <div style="font-size:1.1em; font-weight:bold; color:#0969da; margin-top:4px;">#${m.index}</div>
+                   <div style="font-size:0.8em; color:#555; margin-top:2px;">${new Date(p.created_at).toLocaleDateString()}</div>
+                   <div style="font-size:0.75em; color:#aaa; margin-top:4px;">Score: ${p.score}</div>
+               </div>
+               ${(showThumb && thumbUrl) ? `<div style="width:60px; height:60px; margin-left:10px; flex-shrink:0; background:#f0f0f0; border-radius:4px; overflow:hidden; display:flex; align-items:center; justify-content:center;"><img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;"></div>` : ''}
+            </a>
+          `;
         });
         msHtml += '</div>';
         milestonesDiv.innerHTML = msHtml;
 
+        // Attach Dropdown Listener
+        const stepSelect = milestonesDiv.querySelector('#analytics-milestone-step');
+        if (stepSelect) {
+          stepSelect.onchange = (e) => {
+            const v = e.target.value;
+            currentMilestoneStep = v === 'auto' ? 'auto' : parseInt(v);
+            renderMilestones();
+          };
+        }
+
         // Toggle Logic
+        // Calculate rows? or just check count.
+        // If grid has auto-fill, rows depend on width.
+        // Simple check: > 6 items?
         if (milestones.length > 6) {
           const btn = milestonesDiv.querySelector('#analytics-milestone-toggle');
           const container = milestonesDiv.querySelector(`#${containerId}`);
@@ -3329,9 +3537,12 @@
         chartWrapper.style.backgroundColor = '#fff';
 
         // Axis Logic
-        let tickMax = 2000;
-        if (maxCount > 2000) {
-          tickMax = Math.ceil(maxCount / 500) * 500;
+        let tickMax = Math.ceil(maxCount / 500) * 500;
+        if (tickMax < 500) tickMax = 500;
+
+        let tickStep = 500;
+        if (tickMax <= 2000) {
+          tickStep = tickMax / 4;
         }
 
         // Create SVG
@@ -3339,9 +3550,9 @@
         let svg = `<svg viewBox="0 0 ${vWidth} ${vHeight}" style="min-width:100%; width:${vWidth}px; height:200px;">`;
 
         // 1. Grid Lines
-        const ticks = tickMax / 500;
-        for (let i = 0; i <= ticks; i++) {
-          const val = Math.round((tickMax / ticks) * i);
+        const numTicks = Math.round(tickMax / tickStep);
+        for (let i = 0; i <= numTicks; i++) {
+          const val = i * tickStep;
           const y = (vHeight - padBottom) - ((val / tickMax) * (vHeight - padBottom - padTop));
 
           // Grid Line
@@ -3392,36 +3603,90 @@
         // 3. Promotions Overlay
         if (promotions && promotions.length > 0) {
           const [sY, sM] = monthly[0].date.split('-').map(Number);
-
           promotions.forEach(p => {
             const pY = p.date.getFullYear();
             const pM = p.date.getMonth() + 1;
             const pD = p.date.getDate();
-
             const monthDiff = (pY - sY) * 12 + (pM - sM);
-
-            // Check bounds (allow slight overflow calculation but hide if totally out)
-            // It should be within range since we extended minDate
-
             const daysInMonth = new Date(pY, pM, 0).getDate();
             const frac = (pD - 1) / daysInMonth;
             const idx = monthDiff + frac;
 
             if (idx < 0 || idx > monthly.length) return;
-
             const x = padLeft + (step * idx);
 
-            // Separator Line (Orange)
+            // Separator Line
             svg += `
-                    <g class="promotion-marker">
-                       <line x1="${x}" y1="${padTop}" x2="${x}" y2="${vHeight - padBottom}" stroke="#ff5722" stroke-width="2" stroke-dasharray="4 2"></line>
-                       <rect x="${x - 4}" y="${padTop}" width="8" height="${vHeight - padBottom - padTop}" fill="transparent">
-                           <title>${p.date.toLocaleDateString()}: Promoted to ${p.role}</title>
-                       </rect>
-                    </g>
-                 `;
+                <g class="promotion-marker">
+                   <line x1="${x}" y1="${padTop}" x2="${x}" y2="${vHeight - padBottom}" stroke="#ff5722" stroke-width="2" stroke-dasharray="4 2"></line>
+                   <rect x="${x - 4}" y="${padTop}" width="8" height="${vHeight - padBottom - padTop}" fill="transparent">
+                       <title>${p.date.toLocaleDateString()}: Promoted to ${p.role}</title>
+                   </rect>
+                </g>
+             `;
           });
         }
+
+        // 4. Milestone Stars (Every 1000th)
+        const milestones1k = await dataManager.getMilestones(this.context.targetUser, isNsfwEnabled, 1000);
+
+        // Map milestones to months
+        milestones1k.forEach(m => {
+          const pDate = new Date(m.post.created_at);
+          const mKey = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+
+          // Find matching month index
+          const monthIdx = monthly.findIndex(mo => mo.date === mKey);
+          if (monthIdx !== -1) {
+            const x = padLeft + (step * monthIdx) + (step * 0.75) / 2; // Center of bar
+
+            // Handle stacking if multiple in same month (though rare with 1k step, possible for bulk)
+            // We'll calculate stack offset dynamically if needed, but for now assuming low collision or simple stack
+            // Let's filter milestones per month loop is safer? 
+            // Better: Iterate monthly and filter milestones there to manage stacking Y.
+          }
+        });
+
+        // Re-loop for unified stacking
+        monthly.forEach((mo, idx) => {
+          const mKey = mo.date;
+          const stars = milestones1k.filter(m => {
+            const pDate = new Date(m.post.created_at);
+            const k = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+            return k === mKey;
+          });
+
+          if (stars.length > 0) {
+            const x = padLeft + (step * idx) + (step / 2);
+
+            stars.forEach((m, si) => {
+              const y = 14 + (si * 18); // Center-based spacing
+
+              let fill = '#ffd700';
+              let stroke = '#b8860b';
+              let style = 'filter: drop-shadow(0px 1px 1px rgba(0,0,0,0.3));';
+              let animClass = ''; // Use for static class too
+
+              if (m.index === 1) {
+                fill = '#00e676'; // Green for #1
+                stroke = '#00a050';
+              } else if (m.index % 10000 === 0) {
+                fill = '#ffb300'; // Deep Gold
+                animClass = 'star-shiny';
+              }
+
+              // Star SVG
+              svg += `
+                     <a href="/posts/${m.post.id}" target="_blank" style="cursor: pointer;">
+                        <text class="${animClass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${fill}" stroke="${stroke}" stroke-width="0.5" style="${style}">
+                           ★
+                           <title>Milestone #${m.index} (${new Date(m.post.created_at).toLocaleDateString()})</title>
+                        </text>
+                     </a>
+                   `;
+            });
+          }
+        });
 
         svg += '</svg>';
 
@@ -3435,6 +3700,12 @@
         style.textContent = `
           .bar-group rect { transition: fill 0.2s; }
           .bar-group rect:hover { fill: #216e39; }
+          
+          .star-shiny {
+             font-size: 15px;
+             stroke-width: 0.1px !important; 
+             filter: drop-shadow(0 0 5px #ffd700); /* Stronger yellow glow */
+          }
         `;
         chartDiv.appendChild(style);
 
@@ -3474,14 +3745,22 @@
         scatterWrapper.style.marginTop = '24px';
         scatterWrapper.style.marginBottom = '20px';
 
-        // Header (Outside the box)
+        // Header Container (Flex) - Simplified
+        const headerContainer = document.createElement('div');
+        headerContainer.style.display = 'flex';
+        headerContainer.style.alignItems = 'center';
+        headerContainer.style.borderBottom = '1px solid #eee';
+        headerContainer.style.paddingBottom = '10px';
+        headerContainer.style.marginBottom = '15px';
+
+        // Title
         const header = document.createElement('h3');
-        header.textContent = '📊 Score Distribution';
+        header.textContent = '📊 Post Performance';
         header.style.color = '#333';
-        header.style.borderBottom = '1px solid #eee';
-        header.style.paddingBottom = '10px';
-        header.style.marginBottom = '15px';
-        scatterWrapper.appendChild(header);
+        header.style.margin = '0';
+        headerContainer.appendChild(header);
+
+        scatterWrapper.appendChild(headerContainer);
 
         // Widget Box (The white box)
         const scatterDiv = document.createElement('div');
@@ -3494,17 +3773,127 @@
 
         scatterWrapper.appendChild(scatterDiv);
 
+        // Metric Toggle (Top Left inside Widget)
+        const toggleContainer = document.createElement('div');
+        toggleContainer.style.position = 'absolute';
+        toggleContainer.style.top = '15px';
+        toggleContainer.style.left = '15px';
+        toggleContainer.style.zIndex = '5';
+        toggleContainer.style.display = 'flex';
+        toggleContainer.style.gap = '10px';
+        toggleContainer.style.fontSize = '0.9em';
+
+        let currentScatterMode = 'score'; // 'score' or 'tags'
+        let selectedYear = null; // Year Zoom State
+
+        const makeToggleBtn = (id, label, active, tooltip = null) => {
+          const btn = document.createElement('button');
+          btn.style.border = '1px solid #d0d7de';
+          btn.style.borderRadius = '20px';
+          btn.style.padding = '2px 10px';
+          btn.style.background = active ? '#0969da' : '#fff';
+          btn.style.color = active ? '#fff' : '#333';
+          btn.style.cursor = 'pointer';
+          btn.style.transition = 'all 0.2s';
+          btn.style.fontSize = '12px';
+          btn.style.display = 'flex';
+          btn.style.alignItems = 'center';
+          btn.style.gap = '5px';
+
+          const span = document.createElement('span');
+          span.textContent = label;
+          btn.appendChild(span);
+
+          if (tooltip) {
+            const help = document.createElement('span');
+            help.textContent = '❔';
+            help.style.cursor = 'help';
+            help.title = tooltip;
+            help.style.fontSize = '0.9em';
+            help.style.opacity = '0.8';
+            btn.appendChild(help);
+          }
+
+          btn.onclick = () => {
+            if (currentScatterMode === id) return;
+            currentScatterMode = id;
+            Array.from(toggleContainer.children).forEach(b => {
+              const isMe = b.textContent.includes(label);
+              b.style.background = '#fff';
+              b.style.color = '#333';
+              if (isMe) {
+                b.style.background = '#0969da';
+                b.style.color = '#fff';
+              }
+            });
+            renderScatter();
+          };
+          return btn;
+        };
+
+        toggleContainer.appendChild(makeToggleBtn('score', 'Score', true));
+        toggleContainer.appendChild(makeToggleBtn('tags', 'Tag Count', false, 'General Tags Only'));
+
+        scatterDiv.appendChild(toggleContainer);
+
+        // Reset Scale Button (Back Button)
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = '<';
+        resetBtn.style.position = 'absolute';
+        resetBtn.style.bottom = '10px'; // Moved lower
+        resetBtn.style.left = '15px';
+        resetBtn.style.zIndex = '5';
+        resetBtn.style.border = '1px solid #d0d7de';
+        resetBtn.style.background = '#fff';
+        resetBtn.style.borderRadius = '4px';
+        resetBtn.style.padding = '2px 8px';
+        resetBtn.style.cursor = 'pointer';
+        resetBtn.style.fontSize = '11px';
+        resetBtn.style.display = 'none';
+
+        resetBtn.onclick = () => {
+          selectedYear = null;
+          resetBtn.style.display = 'none';
+          yearLabel.style.display = 'none';
+          renderScatter();
+        };
+        scatterDiv.appendChild(resetBtn);
+
+        // Year Indicator (Where Reset Button was)
+        const yearLabel = document.createElement('div');
+        yearLabel.style.position = 'absolute';
+        yearLabel.style.bottom = '40px'; // Higher than reset btn
+        yearLabel.style.left = '15px';
+        yearLabel.style.zIndex = '4';
+        yearLabel.style.fontSize = '16px';
+        yearLabel.style.fontWeight = 'bold';
+        yearLabel.style.color = '#000000';
+        yearLabel.style.pointerEvents = 'none';
+        yearLabel.style.display = 'none';
+        scatterDiv.appendChild(yearLabel);
+
         // Filters UI (Top Right)
         const filterContainer = document.createElement('div');
         filterContainer.style.position = 'absolute';
         filterContainer.style.top = '15px';
         filterContainer.style.right = '15px';
+        filterContainer.style.zIndex = '5';
         filterContainer.style.background = 'rgba(255,255,255,0.9)';
         filterContainer.style.padding = '2px 8px';
         filterContainer.style.borderRadius = '12px';
         filterContainer.style.border = '1px solid #eee';
         filterContainer.style.display = 'flex';
-        filterContainer.style.gap = '8px';
+        filterContainer.style.alignItems = 'center';
+        filterContainer.style.gap = '15px'; // Increased gap for count
+
+        // Visible Count Label
+        const countLabel = document.createElement('span');
+        countLabel.textContent = '...';
+        countLabel.style.fontSize = '12px';
+        countLabel.style.fontWeight = 'bold';
+        countLabel.style.color = '#333';
+        countLabel.style.marginRight = '5px';
+        filterContainer.appendChild(countLabel);
 
         const ratings = {
           g: { label: 'G', color: '#4caf50' }, // Green
@@ -3638,41 +4027,96 @@
           overlayDiv.innerHTML = '';
 
           // Bounds
-          const padL = 40, padR = 20, padT = 30, padB = 30;
+          const padL = 40, padR = 20, padT = 60, padB = 50; // Increased padB for reset button
           const drawW = w - padL - padR;
           const drawH = h - padT - padB;
 
           let minDate = Infinity;
           let maxDate = -Infinity;
-          let maxScore = 0;
+          let maxVal = 0;
 
-          // Safe Min/Max Calculation (Avoid Stack Overflow)
-          for (const d of scatterData) {
-            if (d.d < minDate) minDate = d.d;
-            if (d.d > maxDate) maxDate = d.d;
-            if (d.s > maxScore) maxScore = d.s;
+          // Determine Time Range
+          if (selectedYear) {
+            minDate = new Date(selectedYear, 0, 1).getTime();
+            maxDate = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
+
+            resetBtn.style.display = 'block';
+            yearLabel.textContent = selectedYear;
+            yearLabel.style.display = 'block';
+          } else {
+            resetBtn.style.display = 'none';
+            yearLabel.style.display = 'none'; // Hide
+
+            // Full Range Calc
+            for (const d of scatterData) {
+              if (d.d < minDate) minDate = d.d;
+              if (d.d > maxDate) maxDate = d.d;
+            }
+            // Add small buffer if empty or minimal
+            if (minDate === Infinity) { minDate = Date.now(); maxDate = minDate + 86400000; }
+            else {
+              // Snap minDate to Jan 1st of the start year for clean origin
+              const startY = new Date(minDate).getFullYear();
+              minDate = new Date(startY, 0, 1).getTime();
+            }
           }
 
-          maxScore = Math.ceil(maxScore / 100) * 100;
-          if (maxScore < 100) maxScore = 100;
+          // Determine Max Value (Metrics) visible in this range?
+          // Or global max? Usually specific range max is more useful for zooming.
 
           const timeRange = maxDate - minDate || 1;
 
+          // Re-scan for maxVal within the view window
+          // If we zoom, we want the Y-scale to adapt to the visible data points? 
+          // User didn't specify, but adaptive is usually better.
+          // Let's stick to global or filtered?
+          // "Just show that year's data". Let's adapt Y to that year's data for better visibility.
+
+          for (const d of scatterData) {
+            if (d.d >= minDate && d.d <= maxDate) {
+              const val = currentScatterMode === 'tags' ? (d.t || 0) : d.s;
+              if (val > maxVal) maxVal = val;
+            }
+          }
+          if (maxVal === 0) maxVal = 100; // Default
+
+          // Dynamic Scale Step
+          let stepY = 100;
+          if (currentScatterMode === 'tags') {
+            if (maxVal < 50) stepY = 10;
+            else if (maxVal < 200) stepY = 25;
+            else stepY = 50;
+          } else {
+            if (maxVal < 200) stepY = 50;
+            else if (maxVal < 1000) stepY = 100;
+            else stepY = 500;
+          }
+
+          // Round MaxVal up to next step
+          maxVal = Math.ceil(maxVal / stepY) * stepY;
+          if (maxVal < stepY) maxVal = stepY;
+
+
           // Update Scale for Interaction
-          Object.assign(currentScale, { minDate, maxDate, maxScore, timeRange, padL, padT, drawW, drawH });
+          Object.assign(currentScale, { minDate, maxDate, maxVal, timeRange, padL, padT, drawW, drawH, mode: currentScatterMode });
 
           // Filter Data
-          const visiblePoints = scatterData.filter(pt => activeFilters[pt.r]);
+          const visiblePoints = scatterData.filter(d => {
+            // Date Range Check (Crucial for correct count)
+            if (d.d < minDate || d.d > maxDate) return false;
+            return activeFilters[d.r];
+          });
+
+          countLabel.textContent = `${visiblePoints.length} items`;
 
           // 1. Draw Grid/Axes
           ctx.beginPath();
           ctx.strokeStyle = '#eee';
           ctx.lineWidth = 1;
 
-          // Y Grid - Step 100
-          const stepY = 100;
-          for (let val = 0; val <= maxScore; val += stepY) {
-            const y = padT + drawH - (val / maxScore) * drawH;
+          // Y Grid
+          for (let val = 0; val <= maxVal; val += stepY) {
+            const y = padT + drawH - (val / maxVal) * drawH;
             ctx.moveTo(padL, y);
             ctx.lineTo(w - padR, y);
 
@@ -3690,30 +4134,65 @@
           ctx.lineTo(w - padR, padT + drawH);
           ctx.stroke();
 
-          // X Axis Labels (Years)
-          const startYear = new Date(minDate).getFullYear();
-          const endYear = new Date(maxDate).getFullYear();
+          // X Axis Labels
           ctx.fillStyle = '#666';
           ctx.textAlign = 'center';
 
-          for (let y = startYear; y <= endYear; y++) {
-            const d = new Date(y, 0, 1).getTime();
-            if (d < minDate || d > maxDate) continue;
-            const x = padL + ((d - minDate) / timeRange) * drawW;
+          if (selectedYear) {
+            // Month View (Jan, Feb...)
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            months.forEach((m, i) => {
+              const stepW = drawW / 12;
+              const x = padL + (stepW * i) + (stepW / 2);
+              ctx.fillText(m, x, padT + drawH + 15);
 
-            ctx.fillText(y, x, padT + drawH + 15);
+              if (i > 0) {
+                const tickX = padL + (stepW * i);
+                ctx.beginPath();
+                ctx.moveTo(tickX, padT + drawH);
+                ctx.lineTo(tickX, padT + drawH + 5);
+                ctx.stroke();
+              }
+            });
+          } else {
+            // Year View
+            const startYear = new Date(minDate).getFullYear();
+            const endYear = new Date(maxDate).getFullYear();
 
-            // Tick
-            ctx.beginPath();
-            ctx.moveTo(x, padT + drawH);
-            ctx.lineTo(x, padT + drawH + 5);
-            ctx.stroke();
+            for (let y = startYear; y <= endYear; y++) {
+              const d = new Date(y, 0, 1).getTime();
+              // Calculate position
+              const x = padL + ((d - minDate) / timeRange) * drawW;
+
+              // Draw if within bounds
+              if (x >= padL - 5 && x <= w - padR + 5) {
+                // Label
+                // Center year in its slot? 
+                const nextD = new Date(y + 1, 0, 1).getTime();
+                const xNext = padL + ((nextD - minDate) / timeRange) * drawW;
+                const xCenter = (x + xNext) / 2;
+
+                // Draw label roughly centered
+                if (xCenter > padL - 10 && xCenter < w - padR + 10) {
+                  ctx.fillText(y, xCenter, padT + drawH + 15);
+                }
+
+                // Tick
+                ctx.beginPath();
+                ctx.moveTo(x, padT + drawH);
+                ctx.lineTo(x, padT + drawH + 5);
+                ctx.stroke();
+              }
+            }
           }
 
           // 2. Draw Points
           visiblePoints.forEach(pt => {
+            if (pt.d < minDate || pt.d > maxDate) return;
+
+            const val = currentScatterMode === 'tags' ? (pt.t || 0) : pt.s;
             const x = padL + ((pt.d - minDate) / timeRange) * drawW;
-            const y = padT + drawH - (pt.s / maxScore) * drawH;
+            const y = padT + drawH - (val / maxVal) * drawH;
 
             let color = '#ccc';
             if (pt.r === 'g') color = '#4caf50';
@@ -3725,7 +4204,9 @@
             ctx.fillRect(x - 1, y - 1, 2, 2);
           });
 
-          // 3. Render Overlays (Promotions & Special Dates)
+          // 3. Render Overlays
+          // ... (Keep existing overlay logic) ... 
+          // We can simplify and just re-implement the short helper
           const addOverlayLine = (dateObjOrStr, color, title, isDashed, thickness = '2px') => {
             const d = new Date(dateObjOrStr).getTime();
             if (d < minDate || d > maxDate) return;
@@ -3746,31 +4227,88 @@
             overlayDiv.appendChild(line);
           };
 
+          // Join Date Overlay
+          if (this.context.targetUser && this.context.targetUser.joinDate) {
+            const jd = new Date(this.context.targetUser.joinDate);
+            addOverlayLine(jd, '#00E676', `${jd.toLocaleDateString()}: Joined Danbooru`, true, '2px');
+          }
+
           if (promotions) {
             promotions.forEach(p => {
               addOverlayLine(p.date, '#ff5722', `${p.date.toLocaleDateString()}: ${p.role}`, true);
             });
           }
 
-          // Special Date: 2021-11-24
-          // Grey dashed, thinner
-          addOverlayLine('2021-11-24', '#bbb', 'All users could vote since this day.', true, '1px');
+          if (currentScatterMode === 'score') {
+            addOverlayLine('2021-11-24', '#bbb', 'All users could vote since this day.', true, '1px');
+          }
         };
 
         dashboardDiv.appendChild(scatterWrapper);
 
         // Initial Render after layout
         requestAnimationFrame(renderScatter);
-
-        // Add resize listener just in case
-        // (Optional, not strictly needed for MVP but good for reliability)
         window.addEventListener('resize', renderScatter);
 
+        // Click Listener for Year Zoom
+        // Click Listener for Year Zoom
+        canvas.addEventListener('click', (e) => {
+          if (Date.now() - lastDragEndTime < 100) return;
+
+          const rect = canvasContainer.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+
+          // Check bounds
+          // Bottom padding area (X-axis labels)
+          // Restrict to label area (e.g., +40px from axis) to prevent footer clicks
+          const axisY = currentScale.padT + currentScale.drawH;
+          if (y > axisY && y < axisY + 40 && !selectedYear) {
+            // Calculate clicked date
+            // t = (x - padL) / drawW * range + min
+            const t = ((x - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+            const clickedDate = new Date(t);
+            const clickedYear = clickedDate.getFullYear();
+
+            // Valid year check?
+            if (clickedYear >= new Date(currentScale.minDate).getFullYear() && clickedYear <= new Date(currentScale.maxDate).getFullYear()) {
+              selectedYear = clickedYear;
+              renderScatter();
+            }
+          }
+        });
+
+        // Hover Effect for Year Labels
+        canvas.addEventListener('mousemove', (e) => {
+          if (dragStart) return; // Disable hover effect during drag
+
+          const rect = canvasContainer.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+
+          let isHand = false;
+          // Check bounds for X-axis labels
+          const axisY = currentScale.padT + currentScale.drawH;
+          if (y > axisY && y < axisY + 40 && !selectedYear) {
+            const t = ((x - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+            const hoveredYear = new Date(t).getFullYear();
+            if (hoveredYear >= new Date(currentScale.minDate).getFullYear() && hoveredYear <= new Date(currentScale.maxDate).getFullYear()) {
+              isHand = true;
+            }
+          }
+
+          canvas.style.cursor = isHand ? 'pointer' : 'default';
+        });
         // Drag Event Listeners
         let dragStart = null;
+        let ignoreNextClick = false;
+        let lastDragEndTime = 0;
 
         canvas.addEventListener('mousedown', (e) => {
           if (e.button !== 0) return;
+          // Reset ignore flag on new press
+          ignoreNextClick = false;
+
           const rect = canvasContainer.getBoundingClientRect();
           const x = e.clientX - rect.left;
           const y = e.clientY - rect.top;
@@ -3790,8 +4328,17 @@
         window.addEventListener('mousemove', (e) => {
           if (!dragStart) return;
           const rect = canvasContainer.getBoundingClientRect();
-          const currentX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
-          const currentY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+          const mx = e.clientX - rect.left;
+          const my = e.clientY - rect.top;
+
+          // Constraints
+          const rL = currentScale.padL;
+          const rT = currentScale.padT;
+          const rW = currentScale.drawW;
+          // Max Y is now bottom of canvas to cover negative values
+
+          const currentX = Math.max(rL, Math.min(rL + rW, mx));
+          const currentY = Math.max(rT, Math.min(rect.height, my));
 
           const x = Math.min(dragStart.x, currentX);
           const y = Math.min(dragStart.y, currentY);
@@ -3814,6 +4361,12 @@
           const endX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
           const endY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
 
+          // If moved significantly, it was a drag
+          if (Math.abs(endX - ds.x) >= 5 || Math.abs(endY - ds.y) >= 5) {
+            ignoreNextClick = true; // Prevent click-to-zoom
+            lastDragEndTime = Date.now();
+          }
+
           if (Math.abs(endX - ds.x) < 5 && Math.abs(endY - ds.y) < 5) return;
 
           const x1 = Math.min(ds.x, endX);
@@ -3824,20 +4377,38 @@
           const dateMin = ((x1 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
           const dateMax = ((x2 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
 
-          const scoreMin = ((currentScale.padT + currentScale.drawH - y2) / currentScale.drawH) * currentScale.maxScore;
-          const scoreMax = ((currentScale.padT + currentScale.drawH - y1) / currentScale.drawH) * currentScale.maxScore;
+          const valMin = ((currentScale.padT + currentScale.drawH - y2) / currentScale.drawH) * currentScale.maxVal;
+          const valMax = ((currentScale.padT + currentScale.drawH - y1) / currentScale.drawH) * currentScale.maxVal;
 
           const result = scatterData.filter(d => {
             if (!activeFilters[d.r]) return false;
-            return d.d >= dateMin && d.d <= dateMax && d.s >= scoreMin && d.s <= scoreMax;
+            const val = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
+            return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
           });
 
           if (result.length === 0) return;
 
           // Pass full list to popover (sorted)
-          const sortedList = result.sort((a, b) => b.s - a.s);
+          const sortedList = result.sort((a, b) => {
+            const vA = currentScale.mode === 'tags' ? (a.t || 0) : a.s;
+            const vB = currentScale.mode === 'tags' ? (b.t || 0) : b.s;
+            return vB - vA;
+          });
 
-          showPopover(e.clientX, e.clientY, sortedList, dateMin, dateMax, scoreMin, scoreMax);
+          // Compute Actual Range from Data (to avoid showing -73 when min is -2)
+          let aDMin = Infinity, aDMax = -Infinity;
+          let aVMin = Infinity, aVMax = -Infinity;
+
+          sortedList.forEach(d => {
+            if (d.d < aDMin) aDMin = d.d;
+            if (d.d > aDMax) aDMax = d.d;
+
+            const v = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
+            if (v < aVMin) aVMin = v;
+            if (v > aVMax) aVMax = v;
+          });
+
+          showPopover(e.clientX, e.clientY, sortedList, aDMin, aDMax, aVMin, aVMax);
         });
 
         const showPopover = (mx, my, items, dMin, dMax, sMin, sMax) => {
@@ -3846,6 +4417,7 @@
           const sm1 = Math.floor(sMin);
           const sm2 = Math.ceil(sMax);
           const totalCount = items.length;
+          const isTags = currentScale.mode === 'tags';
           let visibleLimit = 50;
 
           const renderItems = (start, limit) => {
@@ -3854,6 +4426,7 @@
 
             slice.forEach(it => {
               const itDate = new Date(it.d).toLocaleDateString();
+              const val = isTags ? (it.t || 0) : it.s;
               let color = '#ccc';
               if (it.r === 'g') color = '#4caf50';
               else if (it.r === 's') color = '#ffb74d';
@@ -3865,7 +4438,7 @@
                    <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
                    <span style="color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px; width: 60px;">#${it.id}</span>
                    <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
-                   <span style="font-weight: bold; color: #333; font-size: 13px;">${it.s}</span>
+                   <span style="font-weight: bold; color: #333; font-size: 13px;">${val}</span>
                  </div>
                `;
             });
@@ -3877,7 +4450,7 @@
              <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: start;">
                <div style="display:flex; flex-direction:column;">
                   <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
-                  <span style="font-size: 11px; color: #666; margin-top:2px;">Score: ${sm1} ~ ${sm2}</span>
+                  <span style="font-size: 11px; color: #666; margin-top:2px;">${isTags ? 'Tag Count' : 'Score'}: ${sm1} ~ ${sm2}</span>
                </div>
                <div style="display:flex; align-items:center; gap: 10px; margin-top:2px;">
                  <span id="pop-count-label" style="font-size: 12px; color: #888;">${Math.min(visibleLimit, totalCount)} / ${totalCount} items</span>
@@ -4048,7 +4621,7 @@
     /**
      * Retrieves key milestone posts (e.g. 1st, 100th, 1000th ...).
      */
-    async getMilestones(userInfo, isNsfwEnabled = false) {
+    async getMilestones(userInfo, isNsfwEnabled = false, customStep = 'auto') {
       const uploaderId = parseInt(userInfo.id);
       if (!uploaderId) return [];
 
@@ -4058,56 +4631,57 @@
       // Define Milestones based on Total Count logic
       let targets = [];
 
-      // Case 1: Small (< 1,500) -> 1, 100, 200...
-      if (total < 1500) {
+      if (customStep !== 'auto' && typeof customStep === 'number') {
         targets.push(1);
-        for (let i = 100; i <= total; i += 100) {
+        for (let i = customStep; i <= total; i += customStep) {
           targets.push(i);
         }
-      }
-      // Case 2: Medium (1,500 ~ 10,000) -> 1, 100, 500, 1000, 1500, 2000...
-      else if (total <= 10000) {
-        targets.push(1);
-        if (total >= 100) targets.push(100);
-        // Step 500 starting from 500
-        for (let i = 500; i <= total; i += 500) {
-          targets.push(i);
+      } else {
+        // Case 1: Small (< 1,500) -> 1, 100, 200...
+        if (total < 1500) {
+          targets.push(1);
+          for (let i = 100; i <= total; i += 100) {
+            targets.push(i);
+          }
         }
-      }
-      // Case 4: Huge (> 100,000) -> 1, 100, 1000, 5000, 10000, ... (Step 5000)
-      else if (total > 100000) {
-        targets.push(1);
-        if (total >= 100) targets.push(100);
-        if (total >= 1000) targets.push(1000);
+        // Case 2: Medium (1,500 ~ 10,000) -> 1, 100, 500, 1000, 1500, 2000...
+        else if (total <= 10000) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          // Step 500 starting from 500
+          for (let i = 500; i <= total; i += 500) {
+            targets.push(i);
+          }
+        }
+        // Case 4: Huge (> 100,000) -> 1, 100, 1000, 5000, 10000, ... (Step 5000)
+        else if (total > 100000) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          if (total >= 1000) targets.push(1000);
 
-        for (let i = 5000; i <= total; i += 5000) {
-          targets.push(i);
+          for (let i = 5000; i <= total; i += 5000) {
+            targets.push(i);
+          }
         }
-      }
-      // Case 3: Very Large (> 50,000) -> 1, 100, 1000, 2500, 5000, ... (Step 2500)
-      else if (total > 50000) {
-        targets.push(1);
-        if (total >= 100) targets.push(100);
-        if (total >= 1000) targets.push(1000);
+        // Case 3: Very Large (> 50,000) -> 1, 100, 1000, 2500, 5000, ... (Step 2500)
+        else if (total > 50000) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          if (total >= 1000) targets.push(1000);
 
-        for (let i = 2500; i <= total; i += 2500) {
-          targets.push(i);
+          for (let i = 2500; i <= total; i += 2500) {
+            targets.push(i);
+          }
+        }
+        // Case 2: Large (> 10,000) -> 1, 100, 1000, 2000...
+        else {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          for (let i = 1000; i <= total; i += 1000) {
+            targets.push(i);
+          }
         }
       }
-      // Case 2: Large (> 10,000) -> 1, 100, 1000, 2000...
-      else {
-        targets.push(1);
-        if (total >= 100) targets.push(100);
-        for (let i = 1000; i <= total; i += 1000) {
-          targets.push(i);
-        }
-      }
-
-      // Always include the Latest post if distinct?
-      // "Latest" is naturally the total count, but might not match a nice number.
-      // User says "40860" -> 40000 is milestone, but 40860 is current.
-      // Usually "Latest" card is separate in summary, but milestones are history.
-      // Let's stick to the generated nice numbers.
 
       // Ensure unique and sort ASC
       targets = [...new Set(targets)].sort((a, b) => a - b);
@@ -4133,33 +4707,32 @@
 
       if (missingIds.length > 0) {
         try {
-          const idsStr = missingIds.join(',');
-          // Note: Danbooru 'tags' param for ID search: "id:1,2,3"
-          // limit=100 should cover typical milestone count
-          const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,preview_file_url,file_url,rating`;
+          // Chunk requests if too many
+          const chunkSize = 100;
+          for (let i = 0; i < missingIds.length; i += chunkSize) {
+            const chunk = missingIds.slice(i, i + chunkSize);
+            const idsStr = chunk.join(',');
+            const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,preview_file_url,file_url,rating`;
 
-          const res = await fetch(url);
-          if (res.ok) {
-            const fetchedItems = await res.json();
-            // Update local matches objects
-            fetchedItems.forEach(item => {
-              const local = matches.find(m => m.id === item.id);
-              if (local) {
-                local.preview_file_url = item.preview_file_url;
-                local.file_url = item.file_url;
-                // Ensure rating matches just in case
-                local.rating = item.rating;
-              }
-            });
+            const res = await fetch(url);
+            if (res.ok) {
+              const fetchedItems = await res.json();
+              // Update local matches objects
+              fetchedItems.forEach(item => {
+                const local = matches.find(m => m.id === item.id);
+                if (local) {
+                  local.preview_file_url = item.preview_file_url;
+                  local.file_url = item.file_url;
+                  // Ensure rating matches just in case
+                  local.rating = item.rating;
+                }
+              });
+            }
           }
         } catch (e) {
           console.warn("[Danbooru Grass] Failed to fetch missing milestone thumbnails", e);
         }
       }
-
-      // Also fetch "Latest" specifically if not covered?
-      // Actually latest is `no == total`.
-      // If we want "LATEST" label specifically.
 
       // Map back to result structure
       // Create lookup
@@ -4167,36 +4740,8 @@
 
       const results = [];
 
-      // Explicit Latest (User Request implies Latest is separate or top?)
-      // User screenshot had "LATEST" card.
-      // Let's add it if we can.
-      const latestPost = await this.db.posts.where('uploader_id').equals(uploaderId).reverse().sortBy('no').then(r => r[0]);
-      if (latestPost) {
-        results.push({ type: 'Latest', post: latestPost, index: latestPost.no });
-      }
-
-      // Add targets (Reverse order to show Biggest first like screenshot? Or Ascending?)
-      // User text: "#1, #100, #1000... show me" -> This lists Ascending.
-      // Screenshot: Shows Descending (Latest, 40k, 39k...).
-      // User complaint: "milestone... is backwards" -> ambiguous.
-      // "Backwards" might mean "I see #40k but I want #1...?" OR "I see #1 but I want #40k...?"
-      // Context: "Total uploads 40860 so #1, ... like this" -> IMPLIES ASCENDING list in the text.
-      // BUT, usually milestones are "Achieved 40k!" (Recent is exciting).
-      // Let's provide ASCENDING based on the text list example.
-      // "Up to 1500, first... then... #1, #100..." -> He lists 1 first.
-
-      // HOWEVER, if I show #1 first, user has to scroll to see recent?
-      // Maybe user wants "History" view.
-      // I will implement ASCENDING so #1 is first as text suggested.
-
-      // Wait, "milestone calculation is backwards" (Milestones are calculated backwards/wrongly?).
-      // In previous code I did: `results.sort((a, b) => b.index - a.index); ` (Descending).
-      // So user definitely wants ASCENDING.
-
       targets.forEach(t => {
-        // Avoid duplicate if it matches Latest
-        if (latestPost && t === latestPost.no) return;
-
+        // Just push specific targets
         const p = map.get(t);
         if (p) {
           // Label logic
@@ -4208,19 +4753,12 @@
         }
       });
 
-      // Check Sort Order again:
-      // User wants "#1, #100, #1000...".
-      // Current array push order: Latest, 1, 100, 1000...
       // Let's sort strictly by Index ASC.
       results.sort((a, b) => a.index - b.index);
 
-      // Move Latest to the END? Or keep it sorted?
-      // If Latest is #40860, and we have #40000.
-      // Sorted: 1 ... 40000, 40860(Latest).
-      // This matches "#1, #100...".
-
       return results;
     }
+
 
     /**
      * Aggregates post counts by month.
@@ -4383,7 +4921,7 @@
         const tags = resp.related_tags;
 
         // Limit to Top 10 Concurrent Fetch
-        const top10 = await this.mapConcurrent(tags.slice(0, 10), 5, async (item) => {
+        const top10 = await this.mapConcurrent(tags.slice(0, 10), 2, async (item) => {
           const tagName = item.tag.name;
           const displayName = tagName.replace(/_/g, ' ');
 
@@ -4458,7 +4996,7 @@
         const candidates = tags.slice(0, 20);
 
         // Concurrent Filter checks - Limit 5
-        const filteredResults = await this.mapConcurrent(candidates, 5, async (item) => {
+        const filteredResults = await this.mapConcurrent(candidates, 2, async (item) => {
           const tagName = item.tag.name;
           const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
           try {
@@ -4470,7 +5008,7 @@
         const filtered = filteredResults.filter(item => item !== null);
 
         // Concurrent Fetch Data for Top 10 - Limit 5
-        const top10 = await this.mapConcurrent(filtered.slice(0, 10), 5, async (item) => {
+        const top10 = await this.mapConcurrent(filtered.slice(0, 10), 2, async (item) => {
           const tagName = item.tag.name;
           const displayName = tagName.replace(/_/g, ' ');
 
@@ -4525,6 +5063,8 @@
         while (index < items.length) {
           const i = index++;
           results[i] = await fn(items[i]);
+          // Rate limit protection
+          await new Promise(r => setTimeout(r, 250));
         }
       }
       await Promise.all(Array.from({ length: concurrency }, next));
@@ -4557,7 +5097,7 @@
         const candidates = tags.slice(0, 20);
 
         // Concurrent Filter checks (Sub-copyright) - Limit 5
-        const filteredResults = await this.mapConcurrent(candidates, 5, async (item) => {
+        const filteredResults = await this.mapConcurrent(candidates, 2, async (item) => {
           const tagName = item.tag.name;
           const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
           try {
@@ -4570,7 +5110,7 @@
         const filtered = filteredResults.filter(item => item !== null);
 
         // Concurrent Fetch Data for Top 10 - Limit 5
-        const top10 = await this.mapConcurrent(filtered.slice(0, 10), 5, async (item) => {
+        const top10 = await this.mapConcurrent(filtered.slice(0, 10), 2, async (item) => {
           const tagName = item.tag.name;
           const displayName = tagName.replace(/_/g, ' ');
 
@@ -4712,8 +5252,9 @@
         // Rating: g, s, q, e
         const r = post.rating;
         const s = post.score || 0;
+        const t = post.tag_count_general || 0;
 
-        result.push({ id: post.id, d, s, r });
+        result.push({ id: post.id, d, s, t, r });
       });
 
       return result;
