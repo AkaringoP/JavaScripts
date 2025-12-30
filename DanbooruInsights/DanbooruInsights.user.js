@@ -534,7 +534,7 @@
         let dateKey;
         let idKey;
         const startDate = `${year}-01-01`;
-        const endDate = `${year}-12-31`;
+        const endDate = `${parseInt(year) + 1}-01-01`;
 
         // Params common to all
         const baseParams = {
