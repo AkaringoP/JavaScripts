@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      4.4
+// @version      4.5
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -583,45 +583,113 @@
         const userIdVal = userInfo.id || userInfo.name;
         // const idPrefix = `${userIdVal}_`; // unused
 
+        // 0. Integrity Check (Past Years Only - Uploads Only)
+        // Fix for partial data persistence issues
+        let forceFullFetch = false;
+
+        if (metric === 'uploads' && year < new Date().getFullYear()) {
+          try {
+            const normalizedName = userInfo.name.replace(/ /g, '_');
+            // Align Remote check to strict year (Dec 31st) to match Local check
+            const strictEndDate = `${year + 1}-01-01`;
+            const checkRange = `${startDate}...${strictEndDate}`;
+            const queryTags = `user:${normalizedName} date:${checkRange}`;
+
+            // A. Remote Count
+            const remoteCount = await this.fetchRemoteCount(queryTags);
+
+            // B. Local Count
+            // Align Local check to match Remote (wide) range
+            const matchedEndDate = `${year}-12-31`;
+
+            const localRecords = await table.where('id')
+              .between(
+                `${userIdVal}_${startDate}`,
+                `${userIdVal}_${matchedEndDate}\uffff`,
+                true,
+                true // Inclusive to match Remote's "..." behavior on Jan 1st
+              )
+              .toArray(); // Get actual records to sum counts
+
+            const localCount = localRecords.reduce((acc, cur) => acc + (cur.count || 0), 0);
+
+            // C. Compare (Tolerance: 2)
+            if (Math.abs(remoteCount - localCount) > 2) {
+              console.warn(`[Danbooru Grass] Data mismatch detected for ${year}. Forcing full sync.`);
+
+              // Safe Deletion: Strictly perform deletion up to Dec 31st of the current year.
+              // Previously, using endDate (Jan 1st next year) + \uffff caused "2025-01-01" to be deleted
+              // because "2025-01-01" < "2025-01-01\uffff".
+              const deleteEndDate = `${year}-12-31`;
+
+              // Force fetch from start
+              await table.where('id')
+                .between(
+                  `${userIdVal}_${startDate}`,
+                  `${userIdVal}_${deleteEndDate}\uffff`,
+                  true,
+                  true // Inclusive: Delete up to Dec 31st fully.
+                ).delete();
+
+              forceFullFetch = true; // Flag to skip "lastEntry" check below
+            } else {
+              // Data is good using 'lastEntry' Logic below
+            }
+          } catch (e) {
+            console.warn('[Danbooru Grass] Integrity check failed (Network/API), proceeding with cache.', e);
+          }
+        }
+
         // 1. Check for latest cached date for this user in this year
         // We use the ID range to efficiently find the last entry for this user.
         // ID format: "UserId_YYYY-MM-DD"
         let fetchFromDate = startDate;
 
         // Query range for this specific year to see where we left off
-        const lastEntry = await table.where('id')
-          .between(
-            `${userIdVal}_${startDate}`,
-            `${userIdVal}_${endDate}\uffff`,
-            true,
-            true
-          )
-          .last();
+        let lastEntry = null;
+        if (!forceFullFetch) {
+          lastEntry = await table.where('id')
+            .between(
+              `${userIdVal}_${startDate}`,
+              `${userIdVal}_${endDate}\uffff`,
+              true,
+              true
+            )
+            .last();
+        }
 
         if (lastEntry) {
           console.log(`[Danbooru Grass] Found cached data up to ${lastEntry.date}`);
-          // Safety Buffer: Start fetching from 3 days prior to the last cached date
+
           const lastDate = new Date(lastEntry.date);
-          lastDate.setDate(lastDate.getDate() - 3);
+          const currentYear = new Date().getFullYear();
 
-          const bufferDateStr = lastDate.toISOString().slice(0, 10);
+          // Check if this is a past year and we effectively have data up to the end
+          // (lastEntry.date is Dec 30, Dec 31, or Jan 01 next year)
+          // endDate is "YYYY+1-01-01"
+          const isYearComplete = year < currentYear && lastEntry.date >= `${year}-12-30`;
 
-          // Ensure we don't go before the year start
-          fetchFromDate = bufferDateStr < startDate ? startDate : bufferDateStr;
+          if (isYearComplete) {
+            // If year is fully cached, DO NOT rollback 3 days.
+            // Set to endDate so the optimization check passes.
+            fetchFromDate = endDate;
+          } else {
+            // Normal Safety Buffer: Start fetching from 3 days prior
+            lastDate.setDate(lastDate.getDate() - 3);
+            const bufferDateStr = lastDate.toISOString().slice(0, 10);
+            // Ensure we don't go before the year start
+            fetchFromDate = bufferDateStr < startDate ? startDate : bufferDateStr;
+          }
         }
 
         // Optimization: If cached up to Dec 31st of that year, and year is past, skip fetch.
         const todayStr = new Date().toISOString().slice(0, 10);
         if (fetchFromDate >= endDate && year < new Date().getFullYear()) {
           console.log('[Danbooru Grass] Year complete in cache. Skipping fetch.');
-        } else if (
-          fetchFromDate === todayStr &&
-          year === new Date().getFullYear()
-        ) {
-          // If we already have data up to today, we might still want to refresh 'today'
+
         } else {
           // Set API Params
-          const fetchRange = `${fetchFromDate}..${endDate}`;
+          const fetchRange = `${fetchFromDate}...${endDate}`;
           const normalizedName = userInfo.name.replace(/ /g, '_');
 
           if (metric === 'uploads') {
@@ -674,10 +742,11 @@
         }
 
         // 5. Return Full Year Data from Cache
+        const dataEndDate = `${year}-12-31`; // Strictly return data only for this year
         const fullYearData = await table.where('id')
           .between(
             `${userIdVal}_${startDate}`,
-            `${userIdVal}_${endDate}\uffff`,
+            `${userIdVal}_${dataEndDate}\uffff`,
             true,
             true
           )
@@ -855,7 +924,23 @@
 
       return stats;
     }
+
+    /**
+     * Fetches the total post count for a given tag query.
+     * @param {string} tags Tag query string.
+     * @return {Promise<number>} Total count.
+     */
+    async fetchRemoteCount(tags) {
+      const url = `${this.baseUrl}/counts/posts.json?tags=${encodeURIComponent(tags)}`;
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const json = await resp.json();
+      return json.counts && typeof json.counts.posts === 'number'
+        ? json.counts.posts
+        : 0;
+    }
   }
+
 
   // --- 4. Graph Renderer (UI) ---
   /**
@@ -1633,20 +1718,13 @@
       );
 
       // --- GUARD: Empty Data Guard ---
+      // Removed to allow empty graph rendering
+      /*
       if (source.length === 0) {
-        // If no data, CalHeatmap v3 (or wrappers) might crash on paint with empty source.
-        // Or specific options trigger it. To be safe/clean, we show a message.
-        if (container) {
-          container.innerHTML = `
-            <div style="text-align:center; padding:40px; color:#888;">
-              <div style="font-size:2em; margin-bottom:10px;">📉</div>
-              No contributions found for <strong>${year}</strong>.<br>
-              <span style="font-size:0.9em;">(Try clicking the "Refresh" or "Sync" button if this is unexpected)</span>
-            </div>
-          `;
-        }
+        ...
         return;
       }
+      */
 
       const currentThresholds = this.settingsManager.getThresholds(metric);
 
