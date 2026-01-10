@@ -572,7 +572,7 @@
           year,
           timestamp: Date.now()
         });
-        console.log(`[Danbooru Grass] Marked ${year} as complete for ${metric}.`);
+        // console.log(`[Danbooru Grass] Marked ${year} as complete for ${metric}.`);
       } catch (e) {
         console.warn('Failed to mark year complete', e);
       }
@@ -650,7 +650,7 @@
         // [New] Check Completion Cache
         const isYearCompleteCache = await this.checkYearCompletion(userIdVal, metric, year);
         if (isYearCompleteCache) {
-          console.log(`[Danbooru Grass] Year ${year} is already complete in cache. Skipping fetch.`);
+          // console.log(`[Danbooru Grass] Year ${year} is already complete in cache. Skipping fetch.`);
         }
 
         // 0. Integrity Check (Past Years Only - Uploads Only)
@@ -745,7 +745,7 @@
         }
 
         if (lastEntry) {
-          console.log(`[Danbooru Grass] Found cached data up to ${lastEntry.date}`);
+          // console.log(`[Danbooru Grass] Found cached data up to ${lastEntry.date}`);
 
           const lastDate = new Date(lastEntry.date);
           const currentYear = new Date().getFullYear();
@@ -816,7 +816,7 @@
                 const distFromEnd = todayYear - targetYear;
 
                 if (distFromStart >= 0 && distFromStart < distFromEnd) {
-                  console.log(`[Danbooru Grass] Smart Fetch: Starting from ${promotionDate} (ASC) is faster.`);
+                  // console.log(`[Danbooru Grass] Smart Fetch: Starting from ${promotionDate} (ASC) is faster.`);
                   fetchDirection = 'asc';
                   params['search[order]'] = 'event_at_asc';
                   // Stop when we pass the target year
@@ -863,11 +863,11 @@
 
           // 2. Fetch missing range
           if (!isYearCompleteCache) {
-            console.log(`[Danbooru Grass] Fetching delta for ${metric} (${fetchDirection}). Stop: ${stopDate || 'None'}`);
+            // console.log(`[Danbooru Grass] Fetching delta for ${metric} (${fetchDirection}). Stop: ${stopDate || 'None'}`);
 
             // Pass explicit stopDate
             const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection);
-            console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
+            // console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
 
             // 3. Aggregate
             const dailyCounts = {};
@@ -2489,9 +2489,9 @@
         footer.appendChild(legend);
       }
 
-      console.log(
-        `[Danbooru Grass] Rendering graph for ${year}. Data points: ${source.length}`
-      );
+      // console.log(
+      //   `[Danbooru Grass] Rendering graph for ${year}. Data points: ${source.length}`
+      // );
 
       // --- GUARD: Empty Data Guard ---
       // Removed to allow empty graph rendering
@@ -2546,7 +2546,7 @@
         theme: 'light',
       })
         .then(() => {
-          console.log('[Danbooru Grass] Render complete.');
+          // console.log('[Danbooru Grass] Render complete.');
           // Render Summary Grid Heatmap
           this.updateSummaryGrid(hourlyData, metric);
 
@@ -2831,7 +2831,7 @@
     }
 
     async run() {
-      console.log('🌱 Starting GrassApp...');
+      // console.log('🌱 Starting GrassApp...');
       const context = this.context;
 
       // We pass the Shared DB instance to DataManager
@@ -2959,8 +2959,11 @@
       this.modalId = 'danbooru-grass-analytics-modal';
     }
 
+    /**
+     * Initializes and runs the Analytics application.
+     */
     run() {
-      console.log('📊 Analytics App Initializing...');
+      // console.log('📊 Analytics App Initializing...');
       this.injectStyles();
       this.createModal(); // Create hidden modal
       this.injectButton(); // Add entry button
@@ -6414,7 +6417,7 @@
 
         // 1. Get total count
         let total = await this.getTotalPostCount(userInfo);
-        console.log(`[Danbooru Grass] Sync Goal: ${total} `);
+        // console.log(`[Danbooru Grass] Sync Goal: ${total} `);
 
         // 2. Resume Check
         // Strategy: overlapping sync (1 month back) to catch updates (score/tags)
@@ -6427,7 +6430,8 @@
           const cutOffDate = new Date(newestDate);
           cutOffDate.setMonth(cutOffDate.getMonth() - 1);
 
-          console.log(`[Danbooru Grass] Newest Post: ${newestDate.toISOString().split('T')[0]}, Re-syncing from: ${cutOffDate.toISOString().split('T')[0]}`);
+
+          // console.log(`[Danbooru Grass] Newest Post: ${newestDate.toISOString().split('T')[0]}, Re-syncing from: ${cutOffDate.toISOString().split('T')[0]}`);
 
           // Find the first post that is OLDER than cutOffDate to determine startId
           let found = false;
@@ -6451,12 +6455,12 @@
           // Fix: Count ONLY this user's posts below startId
           // Using filter() on the collection because composite index might not exist for (id, uploader_id)
           currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter(p => p.id <= startId).count();
-          console.log(`[Danbooru Grass] Resuming count from ${currentNo} (ID: ${startId})`);
+          // console.log(`[Danbooru Grass] Resuming count from ${currentNo} (ID: ${startId})`);
         } else {
-          console.log('[Danbooru Grass] Full sync count starting from 0');
+          // console.log('[Danbooru Grass] Full sync count starting from 0');
         }
 
-        console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
+        // console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
 
         // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced".
         // We must assume "Unknown" and proceed to try and fetch new posts.
@@ -6468,7 +6472,7 @@
         // Actually, user wants "Update". So if we calculated a startId, we should run.
 
         if (startId === 0 && total > 0 && currentNo >= total) {
-          console.log('[Danbooru Grass] Already synced (Goal reached).');
+          // console.log('[Danbooru Grass] Already synced (Goal reached).');
           reportProgress(currentNo, total);
           return;
         }
@@ -6648,7 +6652,7 @@
           }
 
           if (shouldDelete) {
-            console.log(`[Danbooru Grass] Cleaning up stale data for User ID: ${uid}`);
+            // console.log(`[Danbooru Grass] Cleaning up stale data for User ID: ${uid}`);
             await this.db.posts.where('uploader_id').equals(uid).delete();
             await this.db.piestats.where('userId').equals(uid).delete(); // Also clear stats for this user
             localStorage.removeItem(syncKey);
@@ -6660,7 +6664,7 @@
     }
 
     async refreshAllStats(userInfo) {
-      console.log(`[Analytics] Refreshing all stats for user ${userInfo.name}`);
+      // console.log(`[Analytics] Refreshing all stats for user ${userInfo.name}`);
       const forceRefresh = true;
       try {
         await Promise.all([
@@ -6670,7 +6674,7 @@
           this.getFavCopyrightDistribution(userInfo, forceRefresh),
           this.getBreastsDistribution(userInfo, forceRefresh)
         ]);
-        console.log(`[Analytics] All stats refreshed for user ${userInfo.name}`);
+        // console.log(`[Analytics] All stats refreshed for user ${userInfo.name}`);
       } catch (e) {
         console.warn('[Analytics] Failed to refresh stats', e);
       }
@@ -6681,7 +6685,7 @@
       const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
       // const userIdStr = String(userInfo.id); // Not used anymore for Analytics clean
 
-      console.log(`[Analytics] Clearing Analytics data for user ${uploaderId}...`);
+      // console.log(`[Analytics] Clearing Analytics data for user ${uploaderId}...`);
 
       // 1. Delete posts (uploader_id is INT)
       await this.db.posts.where('uploader_id').equals(uploaderId).delete();
@@ -6693,7 +6697,7 @@
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
       localStorage.removeItem(lastSyncKey);
 
-      console.log(`[Analytics] Cleared Analytics data (posts & piestats) for user ${uploaderId}`);
+      // console.log(`[Analytics] Cleared Analytics data (posts & piestats) for user ${uploaderId}`);
     }
   }
 
@@ -6707,7 +6711,7 @@
       return;
     }
 
-    console.log(`[Danbooru Grass] Initializing for ${context.targetUser.name}`);
+    // console.log(`[Danbooru Grass] Initializing for ${context.targetUser.name}`);
 
     // Shared Singletons
     const db = new Database();
