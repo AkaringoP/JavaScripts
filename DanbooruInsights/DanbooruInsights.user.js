@@ -316,6 +316,18 @@
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
         piestats: '[key+userId], userId, updated_at'
       });
+
+      // [v4] Completed Years Cache
+      // Tracks if a full year data has been successfully fetched/synced.
+      // PK: [userId+metric+year] (Compound key)
+      this.version(4).stores({
+        uploads: 'id, userId, date, count',
+        approvals: 'id, userId, date, count',
+        notes: 'id, userId, date, count',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general', // Analytics
+        piestats: '[key+userId], userId, updated_at', // Pie Stats
+        completed_years: '[userId+metric+year], year' // Full Year Cache Status
+      });
     }
   }
 
@@ -519,6 +531,43 @@
     }
 
     /**
+     * Checks if a year is already marked as complete for a specific user and metric.
+     * @param {string} userId
+     * @param {string} metric
+     * @param {number} year
+     * @return {Promise<boolean>}
+     */
+    async checkYearCompletion(userId, metric, year) {
+      try {
+        const record = await this.db.completed_years.get({ userId, metric, year });
+        return !!record;
+      } catch (e) {
+        console.warn('Failed to check completion status', e);
+        return false;
+      }
+    }
+
+    /**
+     * Marks a year as complete for a specific user and metric.
+     * @param {string} userId
+     * @param {string} metric
+     * @param {number} year
+     */
+    async markYearComplete(userId, metric, year) {
+      try {
+        await this.db.completed_years.put({
+          userId,
+          metric,
+          year,
+          timestamp: Date.now()
+        });
+        console.log(`[Danbooru Grass] Marked ${year} as complete for ${metric}.`);
+      } catch (e) {
+        console.warn('Failed to mark year complete', e);
+      }
+    }
+
+    /**
      * Fetches metric data for a given year, using cache when possible.
      * @param {string} metric 'uploads', 'approvals', or 'notes'.
      * @param {Object} userInfo User info object.
@@ -583,11 +632,17 @@
         const userIdVal = userInfo.id || userInfo.name;
         // const idPrefix = `${userIdVal}_`; // unused
 
+        // [New] Check Completion Cache
+        const isYearCompleteCache = await this.checkYearCompletion(userIdVal, metric, year);
+        if (isYearCompleteCache) {
+          console.log(`[Danbooru Grass] Year ${year} is already complete in cache. Skipping fetch.`);
+        }
+
         // 0. Integrity Check (Past Years Only - Uploads Only)
         // Fix for partial data persistence issues
         let forceFullFetch = false;
 
-        if (metric === 'uploads' && year < new Date().getFullYear()) {
+        if (!isYearCompleteCache && metric === 'uploads' && year < new Date().getFullYear()) {
           try {
             const normalizedName = userInfo.name.replace(/ /g, '_');
             // Align Remote check to strict year (Dec 31st) to match Local check
@@ -613,9 +668,9 @@
 
             const localCount = localRecords.reduce((acc, cur) => acc + (cur.count || 0), 0);
 
-            // C. Compare (Tolerance: 2)
-            if (Math.abs(remoteCount - localCount) > 2) {
-              console.warn(`[Danbooru Grass] Data mismatch detected for ${year}. Forcing full sync.`);
+            // C. Compare (Strict)
+            if (remoteCount !== localCount) {
+              console.warn(`[Danbooru Grass] Data mismatch detected for ${year} (Remote: ${remoteCount}, Local: ${localCount}). Forcing full sync.`);
 
               // Safe Deletion: Strictly perform deletion up to Dec 31st of the current year.
               // Previously, using endDate (Jan 1st next year) + \uffff caused "2025-01-01" to be deleted
@@ -643,11 +698,14 @@
         // 1. Check for latest cached date for this user in this year
         // We use the ID range to efficiently find the last entry for this user.
         // ID format: "UserId_YYYY-MM-DD"
-        let fetchFromDate = startDate;
+        // 1. Check for latest cached date for this user in this year
+        // We use the ID range to efficiently find the last entry for this user.
+        // ID format: "UserId_YYYY-MM-DD"
+        let fetchFromDate = null; // Default to null (Fetch ALL if no cache)
 
         // Query range for this specific year to see where we left off
         let lastEntry = null;
-        if (!forceFullFetch) {
+        if (!forceFullFetch && !isYearCompleteCache) {
           lastEntry = await table.where('id')
             .between(
               `${userIdVal}_${startDate}`,
@@ -665,9 +723,7 @@
           const currentYear = new Date().getFullYear();
 
           // Check if this is a past year and we effectively have data up to the end
-          // (lastEntry.date is Dec 30, Dec 31, or Jan 01 next year)
-          // endDate is "YYYY+1-01-01"
-          const isYearComplete = year < currentYear && lastEntry.date >= `${year}-12-30`;
+          const isYearComplete = year < currentYear;
 
           if (isYearComplete) {
             // If year is fully cached, DO NOT rollback 3 days.
@@ -677,69 +733,143 @@
             // Normal Safety Buffer: Start fetching from 3 days prior
             lastDate.setDate(lastDate.getDate() - 3);
             const bufferDateStr = lastDate.toISOString().slice(0, 10);
-            // Ensure we don't go before the year start
-            fetchFromDate = bufferDateStr < startDate ? startDate : bufferDateStr;
+            // Ensure we don't go before the year start IF using range queries
+            // But for Approvals (no range), we just want the checkpoint.
+            // For now, keeping logical consistency:
+            // If fetching range-based, fetchFromDate needs to be valid.
+            fetchFromDate = bufferDateStr;
           }
         }
 
         // Optimization: If cached up to Dec 31st of that year, and year is past, skip fetch.
         const todayStr = new Date().toISOString().slice(0, 10);
-        if (fetchFromDate >= endDate && year < new Date().getFullYear()) {
+
+        if (fetchFromDate && fetchFromDate >= endDate && year < new Date().getFullYear()) {
           console.log('[Danbooru Grass] Year complete in cache. Skipping fetch.');
 
         } else {
-          // Set API Params
-          const fetchRange = `${fetchFromDate}...${endDate}`;
+          // Set API Params & Fetch Strategy
           const normalizedName = userInfo.name.replace(/ /g, '_');
+          let stopDate = null; // Default: No client-side stop (server-side handled)
 
-          if (metric === 'uploads') {
-            params.tags = `user:${normalizedName} date:${fetchRange}`;
-          } else if (metric === 'approvals') {
-            params['search[post_tags_match]'] =
-              `approver:${normalizedName} date:${fetchRange}`;
-          } else if (metric === 'notes') {
-            params['search[created_at]'] = fetchRange;
+
+          let fetchDirection = 'desc';
+
+          if (metric === 'approvals') {
+            // [Strategy A] Client-Side Delta Fetching (Approvals)
+            params['search[post_tags_match]'] = `approver:${normalizedName}`;
+
+            // Optimization: Bidirectional Fetching
+            // If fetching past years with empty cache, check if starting from promotion date is faster.
+            const todayYear = new Date().getFullYear();
+
+            // Only optimize if we are looking at a past year AND we don't have recent cache
+            // (If we have cache, delta fetch from present is usually fine, but let's see)
+            if (year < todayYear && !fetchFromDate) {
+              const promotionDate = await this.fetchPromotionDate(userInfo.name);
+              if (promotionDate) {
+                const promoYear = parseInt(promotionDate.slice(0, 4));
+                const targetYear = year;
+
+                // Distance from Promotion Date vs Distance from Today
+                const distFromStart = targetYear - promoYear;
+                const distFromEnd = todayYear - targetYear;
+
+                if (distFromStart >= 0 && distFromStart < distFromEnd) {
+                  console.log(`[Danbooru Grass] Smart Fetch: Starting from ${promotionDate} (ASC) is faster.`);
+                  fetchDirection = 'asc';
+                  params['search[order]'] = 'event_at_asc';
+                  // Stop when we pass the target year
+                  stopDate = `${year}-12-31`;
+                }
+              }
+            }
+
+            // Fallback (DESC)
+            if (fetchDirection === 'desc') {
+              // Current logic: Stop at cached date (fetchFromDate)
+              // NEW Requirement: Also stop if we go out of the CURRENT VIEW YEAR (older than year-01-01).
+              // stopDate should be the LATER (larger string) of fetchFromDate vs year-01-01.
+              // Logic: We fetch backwards (2026 -> 2025). We stop if itemDate < stopDate.
+              // So stopDate must be the boundary.
+
+              const yearStart = `${year}-01-01`;
+              if (fetchFromDate) {
+                // If we have cache, we stop at cache OR year start, whichever is NEWER (higher value).
+                // e.g. Cache=2024, YearStart=2017. Max='2024'. Stop at 2024. Correct.
+                // e.g. Cache=2010, YearStart=2017. Max='2017'. Stop at 2017. Correct.
+                stopDate = fetchFromDate > yearStart ? fetchFromDate : yearStart;
+              } else {
+                // No cache. Stop at year start.
+                stopDate = yearStart;
+              }
+            }
+
+          } else {
+            // [Strategy B] Server-Side Range Filtering (Uploads, Notes)
+            // Use range query to strictly limit what the API returns.
+            const rangeStart = fetchFromDate || startDate;
+            const fetchRange = `${rangeStart}...${endDate}`;
+
+            if (metric === 'uploads') {
+              params.tags = `user:${normalizedName} date:${fetchRange}`;
+            } else if (metric === 'notes') {
+              params['search[created_at]'] = fetchRange;
+            }
+
+            // Server limits the range, so we don't need client-side stopDate (redundant but harmless)
+            stopDate = null;
           }
 
           // 2. Fetch missing range
-          console.log(`[Danbooru Grass] Fetching delta: ${fetchRange}`);
-          const items = await this.fetchAllPages(endpoint, params);
-          console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
+          if (!isYearCompleteCache) {
+            console.log(`[Danbooru Grass] Fetching delta for ${metric} (${fetchDirection}). Stop: ${stopDate || 'None'}`);
 
-          // 3. Aggregate
-          const dailyCounts = {};
+            // Pass explicit stopDate
+            const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection);
+            console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
 
-          items.forEach((item) => {
-            const rawDate = item[dateKey] || item['created_at'];
-            if (!rawDate) return;
+            // 3. Aggregate
+            const dailyCounts = {};
 
-            // Validation: Strict User ID Check
-            if (
-              userInfo.id &&
-              item[idKey] &&
-              String(item[idKey]) !== String(userInfo.id)
-            ) {
-              return;
+            items.forEach((item) => {
+              const rawDate = item[dateKey] || item['created_at'];
+              if (!rawDate) return;
+
+              // Validation: Strict User ID Check
+              if (
+                userInfo.id &&
+                item[idKey] &&
+                String(item[idKey]) !== String(userInfo.id)
+              ) {
+                return;
+              }
+
+              const dateStr = rawDate.slice(0, 10);
+              dailyCounts[dateStr] = (dailyCounts[dateStr] || 0) + 1;
+            });
+
+            // 4. Upsert into DB
+            const bulkData = Object.entries(dailyCounts).map(([date, count]) => {
+              return {
+                id: `${userIdVal}_${date}`,
+                userId: userIdVal,
+                date: date,
+                count: count,
+              };
+            });
+
+            if (bulkData.length > 0) {
+              await table.bulkPut(bulkData);
             }
 
-            const dateStr = rawDate.slice(0, 10);
-            dailyCounts[dateStr] = (dailyCounts[dateStr] || 0) + 1;
-          });
-
-          // 4. Upsert into DB
-          const bulkData = Object.entries(dailyCounts).map(([date, count]) => {
-            return {
-              id: `${userIdVal}_${date}`,
-              userId: userIdVal,
-              date: date,
-              count: count,
-            };
-          });
-
-          if (bulkData.length > 0) {
-            await table.bulkPut(bulkData);
+            // Mark as complete if it's a past year
+            if (year < new Date().getFullYear()) {
+              await this.markYearComplete(userIdVal, metric, year);
+            }
           }
-        }
+        } // End else (fetch logic)
+
 
         // 5. Return Full Year Data from Cache
         const dataEndDate = `${year}-12-31`; // Strictly return data only for this year
@@ -807,12 +937,23 @@
      * @param {Object} params API parameters.
      * @return {Promise<Array>} List of all fetched items.
      */
-    async fetchAllPages(endpoint, params) {
+    /**
+     * Fetches pages for a given endpoint until stopDate is reached or all pages are fetched.
+     * @param {string} endpoint API endpoint.
+     * @param {Object} params API parameters.
+     * @param {string|null} stopDate ISO Date string (YYYY-MM-DD). If encountered, stop fetching.
+     * @param {string} dateKey Key to check date against (default 'created_at').
+     * @param {string} direction 'desc' (default) or 'asc'.
+     * @return {Promise<Array>} List of all fetched items up to stopDate.
+     */
+    async fetchAllPages(endpoint, params, stopDate = null, dateKey = 'created_at', direction = 'desc') {
       let allItems = [];
       let page = 1;
-      const BATCH_SIZE = 5; // 🚀 Batch size: 5 pages at a time
-      const DELAY_BETWEEN_BATCHES = 150; // Delay to respect server limits
+      const BATCH_SIZE = 5;
+      const DELAY_BETWEEN_BATCHES = 150;
 
+      // Outer Loop Label for breaking from nested loops
+      fetchLoop:
       while (true) {
         const promises = [];
 
@@ -825,32 +966,61 @@
           });
           const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
 
-          // Create Promise for each request
           promises.push(
             fetch(url).then(async (resp) => {
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              return resp.json();
+              return { page: currentPage, data: await resp.json() };
             }).catch((e) => {
               console.warn(`[Danbooru Grass] Page ${currentPage} failed:`, e);
-              return []; // Return empty array on failure to keep flow
+              return { page: currentPage, data: [] };
             })
           );
         }
 
-        // 2. Execute Batch (Parallel)
+        // 2. Execute Batch
         const batchResults = await Promise.all(promises);
+
+        // Sort results by page number to process in order
+        batchResults.sort((a, b) => a.page - b.page);
 
         let finished = false;
 
         // 3. Process Results
-        for (const json of batchResults) {
+        for (const res of batchResults) {
+          const json = res.data;
           if (!Array.isArray(json) || json.length === 0) {
-            finished = true; // No data means end of stream
+            finished = true;
             continue;
           }
-          allItems = allItems.concat(json);
 
-          // If less than limit, it's the last page
+          // Check for stopDate in this page
+          if (stopDate) {
+            for (const item of json) {
+              const itemDate = (item[dateKey] || '').slice(0, 10);
+
+              if (itemDate) {
+                let shouldStop = false;
+                if (direction === 'desc') {
+                  // Descending: Stop if item is OLDER (smaller) than stopDate
+                  if (itemDate < stopDate) shouldStop = true;
+                } else {
+                  // Ascending: Stop if item is NEWER (larger) than stopDate
+                  if (itemDate > stopDate) shouldStop = true;
+                }
+
+                if (shouldStop) {
+                  console.log(`[Danbooru Grass] Reached stop date (${direction}): ${stopDate} at access ${itemDate}`);
+                  finished = true;
+                  break; // Break item loop
+                }
+              }
+              allItems.push(item);
+            }
+            if (finished) break; // Break page loop
+          } else {
+            allItems = allItems.concat(json);
+          }
+
           if (json.length < params.limit) {
             finished = true;
           }
@@ -859,18 +1029,42 @@
         if (finished) break;
 
         page += BATCH_SIZE;
-
-        // Safety Break
         if (page > 1000) {
           console.warn('[Danbooru Grass] Hit safety page limit.');
           break;
         }
-
-        // 4. Batch Delay
         await new Promise((r) => setTimeout(r, DELAY_BETWEEN_BATCHES));
       }
       return allItems;
     }
+
+    /**
+     * Fetches the promotion date (when user became Approver) if applicable.
+     * @param {string} userName
+     * @return {Promise<string|null>} Date string (YYYY-MM-DD) or null.
+     */
+    async fetchPromotionDate(userName) {
+      try {
+        // Cache Check (Simple in-memory or could use Settings)
+        // For now, let's just fetch. It's rare.
+        const encodedName = encodeURIComponent(userName);
+        const url = `${this.baseUrl}/user_feedbacks.json?search[body_matches]=to+Approver&search[category]=neutral&search[hide_bans]=No&search[user_name]=${encodedName}&limit=1`;
+
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        const json = await resp.json();
+
+        if (Array.isArray(json) && json.length > 0) {
+          return json[0].created_at ? json[0].created_at.slice(0, 10) : null;
+        }
+        return null; // Not found (maybe invited differently or too old)
+      } catch (e) {
+        console.warn('Failed to fetch promotion date', e);
+        return null;
+      }
+    }
+
+
 
     /**
      * Gets statistics about the cache usage.
@@ -1361,6 +1555,13 @@
         footer.style.marginTop = '10px';
         mainContainer.appendChild(footer);
 
+        // Container for Left Controls (Settings + Toggle)
+        const footerLeft = document.createElement('div');
+        footerLeft.style.display = 'flex';
+        footerLeft.style.alignItems = 'center';
+        footerLeft.style.gap = '8px'; // Spacing between buttons
+        footer.appendChild(footerLeft);
+
         // 3.1 Settings Button (Left)
         const settingsBtn = document.createElement('div');
         settingsBtn.id = 'danbooru-grass-settings';
@@ -1437,7 +1638,105 @@
             e.stopPropagation();
           }
         };
-        footer.appendChild(settingsBtn);
+        footerLeft.appendChild(settingsBtn);
+
+        // 3.1.2 Toggle Button (Chevron)
+        const toggleBtn = document.createElement('div');
+        toggleBtn.id = 'danbooru-grass-toggle-panel';
+        toggleBtn.title = 'Show Details';
+        toggleBtn.style.cssText = `
+          padding: 2px 8px;
+          border: 1px solid #d0d7de;
+          border-radius: 6px;
+          background-color: #f6f8fa;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          color: #57606a;
+        `;
+        // Chevron Down SVG
+        const chevronDown = `<svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;"><path d="M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z"></path></svg>`;
+        const chevronUp = `<svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;"><path d="M3.22 9.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1-1.06 1.06L8 6.06 4.28 9.78a.75.75 0 0 1-1.06 0Z"></path></svg>`;
+
+        toggleBtn.innerHTML = chevronDown;
+
+        toggleBtn.onmouseover = () => { toggleBtn.style.backgroundColor = '#eaeef2'; };
+        toggleBtn.onmouseout = () => { toggleBtn.style.backgroundColor = '#f6f8fa'; };
+
+        footerLeft.appendChild(toggleBtn);
+
+        // 3.1.3 Panel Container - Restructure for correct alignment
+        // Check if we already have the column wrapper
+        let columnWrapper = document.getElementById('danbooru-grass-column');
+        if (!columnWrapper) {
+          // If mainContainer is attached to the wrapper (or elsewhere), we need to wrap it.
+          if (mainContainer.parentNode) {
+            columnWrapper = document.createElement('div');
+            columnWrapper.id = 'danbooru-grass-column';
+            columnWrapper.style.display = 'flex';
+            columnWrapper.style.flexDirection = 'column';
+            columnWrapper.style.flex = '1';
+            columnWrapper.style.minWidth = '300px';
+
+            // Insert wrapper where mainContainer is
+            mainContainer.parentNode.insertBefore(columnWrapper, mainContainer);
+            // Move mainContainer inside wrapper
+            columnWrapper.appendChild(mainContainer);
+
+            // Ensure mainContainer takes full width of the column
+            mainContainer.style.flex = 'none'; // Reset flex
+            mainContainer.style.width = '100%';
+          }
+        }
+
+        let panel = document.getElementById('danbooru-grass-panel');
+        if (!panel) {
+          panel = document.createElement('div');
+          panel.id = 'danbooru-grass-panel';
+          panel.style.cssText = `
+                width: 270px;
+                max-width: 270px;
+                background: var(--card-background-color, #fff);
+                border: 1px solid #d0d7de;
+                border-radius: 8px;
+                margin-top: 10px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                
+                /* Animation Styles */
+                height: 0;
+                opacity: 0;
+                padding: 0 15px;
+                overflow: hidden;
+                transition: height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+                display: block;
+            `;
+          // Append panel to the new column wrapper
+          if (columnWrapper) {
+            columnWrapper.appendChild(panel);
+          } else {
+            // Fallback (shouldn't happen if wrapper logic works)
+            mainContainer.parentNode.appendChild(panel);
+          }
+        }
+
+        // Toggle Logic
+        let isExpanded = false;
+        toggleBtn.onclick = () => {
+          isExpanded = !isExpanded;
+          if (isExpanded) {
+            panel.style.height = '200px'; // Explicit height as requested
+            panel.style.opacity = '1';
+            panel.style.padding = '15px';
+            toggleBtn.innerHTML = chevronUp;
+            toggleBtn.title = 'Hide Details';
+          } else {
+            panel.style.height = '0';
+            panel.style.opacity = '0';
+            panel.style.padding = '0 15px';
+            toggleBtn.innerHTML = chevronDown;
+            toggleBtn.title = 'Show Details';
+          }
+        };
 
         // 3.1.5 Settings Popover
         const popover = document.createElement('div');
@@ -1962,6 +2261,22 @@
       for (let y = currentYear; y >= startYear; y--) years.push(y);
 
       const updateView = async () => {
+        let availableYears = [...years]; // Default full list
+
+        // Filter years for Approvals based on promotion date
+        if (currentMetric === 'approvals') {
+          const promoDate = await dataManager.fetchPromotionDate(context.targetUser.name);
+          if (promoDate) {
+            const promoYear = parseInt(promoDate.slice(0, 4), 10);
+            availableYears = availableYears.filter(y => y >= promoYear);
+            // Safety: If currentYear is older than promoYear, switch to promoYear
+            if (currentYear < promoYear) {
+              currentYear = promoYear;
+              console.log(`[Danbooru Grass] Adjusted year to ${promoYear} (Promotion Year)`);
+            }
+          }
+        }
+
         const onYearChange = (y) => {
           currentYear = y;
           updateView();
@@ -1975,7 +2290,7 @@
             currentYear,
             currentMetric,
             context.targetUser,
-            years,
+            availableYears,
             onYearChange,
             async () => {
               renderer.setLoading(true);
@@ -1985,7 +2300,7 @@
           );
 
           renderer.updateControls(
-            years,
+            availableYears,
             currentYear,
             currentMetric,
             onYearChange,
@@ -2014,7 +2329,7 @@
             currentYear,
             currentMetric,
             context.targetUser,
-            years,
+            availableYears,
             onYearChange,
             async () => {
               renderer.setLoading(true);
