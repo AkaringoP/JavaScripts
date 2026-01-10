@@ -12,6 +12,8 @@ This userscript injects a GitHub-style contribution graph and a comprehensive an
 
 ## Features
 
+* **Hourly Activity Analysis**: New heatmap grid to visualize contribution patterns by time of day (AM/PM).
+* **Advanced Approvals Tracking**: Dedicated detail view for approvals, tracking exact post IDs and daily counts.
 * **Contribution Visualization**: Draws a calendar heatmap similar to GitHub's contribution graph.
 * **Advanced Analytics Dashboard**: A dedicated modal providing detailed stats like total uploads, top posts, and tag distributions.
 * **Detailed Post Analysis**: Includes a **Scatter Plot** to visualize post scores over time and a **Monthly Activity** chart.
@@ -23,20 +25,18 @@ This userscript injects a GitHub-style contribution graph and a comprehensive an
 
 ## Version History
 
-### v4.0 (Latest)
+### v5.0 (Latest)
 
-* **📊 Comprehensive Analytics Dashboard**: Added a new dashboard view accessible via a button next to the username.
-  * **Tag Distribution**: Visualizes post breakdown by Rating, Character, and Copyright.
-  * **Milestones**: Tracks posting milestones (e.g., 1st, 100th, 1000th upload).
-  * **Top Posts**: Highlights your highest-rated content.
-* **📈 Scatter Plot Widget**: A powerful tool to visualize the correlation between upload date and post score.
-  * **Interactive Filtering**: Filter standard/nsfw ratings dynamically.
-  * **Zoom & Select**: Drag to zoom into specific time ranges or score brackets.
-* **🔄 Enhanced Data Sync**: Improved synchronization logic with progress indicators and background processing.
-* **✨ UI/UX Refinements**:
-  * **Popovers**: Added detailed popovers for scatter plot points with direct links.
-  * **Smart Positioning**: Popovers automatically adjust to stay on-screen.
-  * **Close Logic**: Easy-to-use close buttons and click-outside behavior for modals.
+* **Hourly Activity Analysis**: Introduced a new **Hourly Summary Grid** that visualizes contribution intensity by time of day (00:00 - 23:00). This provides deep insights into peak activity hours for uploads, approvals, and notes, complete with a dynamic heatmap and legend.
+* **Advanced Approvals Module**: Implemented a specialized data fetching and storage engine for **Approvals**. It now tracks exact Post IDs for every approval action, enabling a paginated "Detail View" to browse all approved posts for any specific day.
+* **Robust Data Architecture**: Completely refactored the caching layer (`completed_years`, `hourly_stats`) and sync logic. This ensures perfect data consistency across years, robust handling of API limits, and seamless integration of new metrics without affecting legacy data.
+
+### v4.x
+
+* **Analytics Dashboard**: Added a comprehensive dashboard with Tag Distribution, Milestones, and Top Posts analysis.
+* **Scatter Plot**: Visualized post scores over time with interactive filtering and zoom capabilities.
+* **Enhanced Sync**: Improved synchronization with background processing and progress indicators.
+* **UI/UX**: Refined popovers, smart positioning, and better modal interactions.
 
 ### v3.x
 

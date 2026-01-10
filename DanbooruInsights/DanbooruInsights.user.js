@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      4.5
+// @version      5.0
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -32,7 +32,8 @@
         name: 'Light',
         bg: '#ffffff',
         empty: '#ebedf0',
-        text: '#24292f'
+        text: '#24292f',
+        levels: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39']
       },
       solarized_light: {
         name: 'Solarized Light',
@@ -73,7 +74,8 @@
         name: 'Midnight',
         bg: '#000000',
         empty: '#222222',
-        text: '#f0f6fc'
+        text: '#f0f6fc',
+        levels: ['#222222', '#0e4429', '#006d32', '#26a641', '#39d353']
       },
       solarized_dark: {
         name: 'Solarized Dark',
@@ -225,6 +227,11 @@
           '--grass-scrollbar-thumb',
           theme.scrollbar || '#d0d7de'
         );
+        // Apply Level Colors
+        const levels = theme.levels || ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
+        levels.forEach((color, i) => {
+          root.style.setProperty(`--grass-level-${i}`, color);
+        });
       }
       this.save({
         theme: themeKey
@@ -326,7 +333,9 @@
         notes: 'id, userId, date, count',
         posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general', // Analytics
         piestats: '[key+userId], userId, updated_at', // Pie Stats
-        completed_years: '[userId+metric+year], year' // Full Year Cache Status
+        completed_years: 'id, userId, metric, year', // Full Year Cache Status
+        approvals_detail: 'id, userId', // Detailed Post IDs for Approvals
+        hourly_stats: 'id, userId, metric, year' // Hourly aggregation (24 rows/year)
       });
     }
   }
@@ -538,8 +547,9 @@
      * @return {Promise<boolean>}
      */
     async checkYearCompletion(userId, metric, year) {
+      const id = `${userId}_${metric}_${year}`;
       try {
-        const record = await this.db.completed_years.get({ userId, metric, year });
+        const record = await this.db.completed_years.get(id);
         return !!record;
       } catch (e) {
         console.warn('Failed to check completion status', e);
@@ -556,6 +566,7 @@
     async markYearComplete(userId, metric, year) {
       try {
         await this.db.completed_years.put({
+          id: `${userId}_${metric}_${year}`,
           userId,
           metric,
           year,
@@ -590,6 +601,10 @@
           limit: 200,
         };
 
+        const normalizedName = (userInfo.name || '').replace(/ /g, '_');
+        // Hourly Stats: Initialize empty
+        let hourlyCounts = new Array(24).fill(0);
+
         switch (metric) {
           case 'uploads':
             endpoint = '/posts.json';
@@ -609,7 +624,7 @@
             params = {
               ...baseParams,
               'search[category]': 'Approval',
-              only: 'creator_id,event_at',
+              only: 'creator_id,post_id,event_at',
             };
             break;
           case 'notes':
@@ -644,7 +659,7 @@
 
         if (!isYearCompleteCache && metric === 'uploads' && year < new Date().getFullYear()) {
           try {
-            const normalizedName = userInfo.name.replace(/ /g, '_');
+            // normalizedName is already defined above
             // Align Remote check to strict year (Dec 31st) to match Local check
             const strictEndDate = `${year + 1}-01-01`;
             const checkRange = `${startDate}...${strictEndDate}`;
@@ -698,22 +713,35 @@
         // 1. Check for latest cached date for this user in this year
         // We use the ID range to efficiently find the last entry for this user.
         // ID format: "UserId_YYYY-MM-DD"
-        // 1. Check for latest cached date for this user in this year
-        // We use the ID range to efficiently find the last entry for this user.
-        // ID format: "UserId_YYYY-MM-DD"
         let fetchFromDate = null; // Default to null (Fetch ALL if no cache)
 
         // Query range for this specific year to see where we left off
         let lastEntry = null;
+        let existingHourlyStats = []; // Store existing hourly stats for delta merging
+
         if (!forceFullFetch && !isYearCompleteCache) {
           lastEntry = await table.where('id')
             .between(
               `${userIdVal}_${startDate}`,
-              `${userIdVal}_${endDate}\uffff`,
+              `${userIdVal}_${year}-12-31\uffff`,
               true,
               true
             )
             .last();
+
+          // Load existing hourly stats for delta merge
+          existingHourlyStats = await this.db.hourly_stats.where('id')
+            .between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false)
+            .toArray();
+
+          // Populate current hourlyCounts from DB
+          if (existingHourlyStats.length > 0) {
+            existingHourlyStats.forEach(stat => {
+              if (stat.hour >= 0 && stat.hour < 24) {
+                hourlyCounts[stat.hour] = stat.count;
+              }
+            });
+          }
         }
 
         if (lastEntry) {
@@ -744,20 +772,32 @@
         // Optimization: If cached up to Dec 31st of that year, and year is past, skip fetch.
         const todayStr = new Date().toISOString().slice(0, 10);
 
+        // Optimization Heuristic REMOVED.
+        // Reason: It causes false positives when boundary data from the NEXT year (e.g., Jan 1st) exists.
+        // We strictly rely on 'isYearCompleteCache' now.
+        /*
         if (fetchFromDate && fetchFromDate >= endDate && year < new Date().getFullYear()) {
           console.log('[Danbooru Grass] Year complete in cache. Skipping fetch.');
 
         } else {
+        */
+        {
           // Set API Params & Fetch Strategy
-          const normalizedName = userInfo.name.replace(/ /g, '_');
-          let stopDate = null; // Default: No client-side stop (server-side handled)
-
-
+          let stopDate = null;
           let fetchDirection = 'desc';
+
+          // hourlyCounts is already defined above
 
           if (metric === 'approvals') {
             // [Strategy A] Client-Side Delta Fetching (Approvals)
-            params['search[post_tags_match]'] = `approver:${normalizedName}`;
+            // Fix: Use strict creator_id search instead of post_tags_match.
+            // post_tags_match finds posts, but post_events return ALL events for those posts (including others').
+            // Using creator_id ensures we only get events BY this user.
+            if (userInfo.id) {
+              params['search[creator_id]'] = userInfo.id;
+            } else {
+              params['search[creator_name]'] = userInfo.name;
+            }
 
             // Optimization: Bidirectional Fetching
             // If fetching past years with empty cache, check if starting from promotion date is faster.
@@ -842,26 +882,66 @@
                 item[idKey] &&
                 String(item[idKey]) !== String(userInfo.id)
               ) {
+                console.warn(`[Danbooru Grass] ID Mismatch! Expected: ${userInfo.id}, Got: ${item[idKey]}. Item Date: ${rawDate}`);
                 return;
               }
 
               const dateStr = rawDate.slice(0, 10);
-              dailyCounts[dateStr] = (dailyCounts[dateStr] || 0) + 1;
+              if (!dailyCounts[dateStr]) {
+                dailyCounts[dateStr] = { count: 0, postList: [] };
+              }
+              dailyCounts[dateStr].count += 1;
+              if (item.post_id) {
+                dailyCounts[dateStr].postList.push(item.post_id);
+              }
+
+              // Hourly Aggregation
+              const itemDate = new Date(rawDate);
+              const hour = itemDate.getHours();
+              if (!isNaN(hour) && hour >= 0 && hour < 24) {
+                hourlyCounts[hour]++;
+              }
             });
 
             // 4. Upsert into DB
-            const bulkData = Object.entries(dailyCounts).map(([date, count]) => {
-              return {
-                id: `${userIdVal}_${date}`,
+            const bulkData = [];
+            const detailData = [];
+
+            Object.entries(dailyCounts).forEach(([date, entry]) => {
+              const id = `${userIdVal}_${date}`;
+              bulkData.push({
+                id,
                 userId: userIdVal,
-                date: date,
-                count: count,
-              };
+                date,
+                count: entry.count,
+              });
+
+              if (metric === 'approvals') {
+                detailData.push({
+                  id,
+                  userId: userIdVal,
+                  post_list: entry.postList,
+                });
+              }
             });
 
             if (bulkData.length > 0) {
               await table.bulkPut(bulkData);
             }
+            if (detailData.length > 0) {
+              await this.db.approvals_detail.bulkPut(detailData);
+            }
+
+            // We save the full accumulated array (existing + new)
+            const hourlyBulk = hourlyCounts.map((count, h) => ({
+              id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, '0')}`,
+              userId: userIdVal,
+              metric: metric,
+              year: year,
+              hour: h,
+              count: count
+            }));
+            await this.db.hourly_stats.bulkPut(hourlyBulk);
 
             // Mark as complete if it's a past year
             if (year < new Date().getFullYear()) {
@@ -885,7 +965,25 @@
         const resultMap = {};
         fullYearData.forEach((i) => resultMap[i.date] = i.count);
 
-        return resultMap;
+        // If cached complete, we need to load hourly stats from DB as we skipped the fetch block
+        // (If not complete, we populated 'hourlyCounts' above during fetch/merge)
+        // CHECK: If isYearCompleteCache is true, we must load.
+        // If we fetched data (else block), hourlyCounts is already populated.
+        if (isYearCompleteCache) {
+          const cachedHourly = await this.db.hourly_stats.where('id')
+            .between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false)
+            .toArray();
+
+          // Reset and fill
+          hourlyCounts.fill(0);
+          cachedHourly.forEach(stat => {
+            if (stat.hour >= 0 && stat.hour < 24) {
+              hourlyCounts[stat.hour] = stat.count;
+            }
+          });
+        }
+
+        return { daily: resultMap, hourly: hourlyCounts };
 
       } catch (e) {
         console.error('[Danbooru Grass] Data fetch failed:', e);
@@ -901,29 +999,23 @@
      */
     async clearCache(metric, userInfo) {
       try {
-        let storeName;
-        switch (metric) {
-          case 'uploads':
-            storeName = 'uploads';
-            break;
-          case 'approvals':
-            storeName = 'approvals';
-            break;
-          case 'notes':
-            storeName = 'notes';
-            break;
-          default:
-            return;
-        }
-        const table = this.db[storeName];
         const userIdVal = userInfo.id || userInfo.name;
+        const tablesToClear = ['uploads', 'approvals', 'approvals_detail', 'notes', 'completed_years', 'hourly_stats'];
 
-        // Delete all entries for this user in this store
-        const items = await table.where('userId').equals(userIdVal).primaryKeys();
-        await table.bulkDelete(items);
-        console.log(
-          `[Danbooru Grass] Cleared ${items.length} items from ${storeName} for ${userIdVal}`
-        );
+        console.log(`[Danbooru Grass] Clearing all GrassApp cache for user ${userIdVal}...`);
+
+        for (const storeName of tablesToClear) {
+          const table = this.db[storeName];
+          // Delete all entries for this user in this store
+          const items = await table.where('userId').equals(userIdVal).primaryKeys();
+          if (items.length > 0) {
+            await table.bulkDelete(items);
+            console.log(
+              `[Danbooru Grass] Cleared ${items.length} items from ${storeName} for ${userIdVal}`
+            );
+          }
+        }
+
         return true;
       } catch (e) {
         console.error('[Danbooru Grass] Clear cache failed:', e);
@@ -971,8 +1063,8 @@
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
               return { page: currentPage, data: await resp.json() };
             }).catch((e) => {
-              console.warn(`[Danbooru Grass] Page ${currentPage} failed:`, e);
-              return { page: currentPage, data: [] };
+              console.error(`[Danbooru Grass] Critical Error on Page ${currentPage}:`, e);
+              throw e; // Fail fast to prevent data corruption
             })
           );
         }
@@ -1223,6 +1315,7 @@
       this.settingsManager.applyTheme(currentTheme);
 
       wrapper.appendChild(container);
+      this.populateSummaryGrid();
 
       // Create Tooltip Element globally
       if (!document.getElementById('danbooru-grass-tooltip')) {
@@ -1272,6 +1365,227 @@
     }
 
     /**
+     * Populates the summary grid with 24 empty large grass cells inside the collapsible panel,
+     * including AM/PM and hourly labels.
+     */
+    populateSummaryGrid() {
+      const panel = document.getElementById('danbooru-grass-panel');
+      if (!panel) return;
+
+      panel.innerHTML = '';
+
+      const wrapper = document.createElement('div');
+      wrapper.id = 'danbooru-grass-summary-grid-wrapper';
+
+      // 0. Header (Added per user request)
+      const header = document.createElement('div');
+      header.id = 'danbooru-grass-summary-header';
+      header.style.cssText = `
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 2px;
+        color: var(--grass-text, #24292f);
+      `;
+      header.textContent = 'Hourly Distribution'; // Initial text
+      wrapper.appendChild(header);
+
+      // 1. Top Labels Row (0/12, 6/18)
+      const topLabels = document.createElement('div');
+      topLabels.className = 'summary-top-labels';
+
+      const label0 = document.createElement('div');
+      label0.className = 'summary-label top-label-item';
+      label0.textContent = '0 / 12';
+      label0.style.left = '11px'; // Center of first cell (22px/2)
+
+      const label6 = document.createElement('div');
+      label6.className = 'summary-label top-label-item';
+      label6.textContent = '6 / 18';
+      label6.style.left = `${11 + (22 + 4) * 6}px`; // Center of 7th cell
+
+      topLabels.appendChild(label0);
+      topLabels.appendChild(label6);
+      wrapper.appendChild(topLabels);
+
+      // 2. Middle Row (Side Labels + Grid)
+      const midRow = document.createElement('div');
+      midRow.className = 'summary-row-container';
+
+      const sideLabels = document.createElement('div');
+      sideLabels.className = 'summary-side-labels';
+
+      const labelAM = document.createElement('div');
+      labelAM.className = 'summary-label';
+      labelAM.textContent = 'AM';
+
+      const labelPM = document.createElement('div');
+      labelPM.className = 'summary-label';
+      labelPM.textContent = 'PM';
+
+      sideLabels.appendChild(labelAM);
+      sideLabels.appendChild(labelPM);
+
+      const grid = document.createElement('div');
+      grid.id = 'danbooru-grass-summary-grid';
+      for (let i = 0; i < 24; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'large-grass-cell';
+        grid.appendChild(cell);
+      }
+
+      midRow.appendChild(sideLabels);
+      midRow.appendChild(grid);
+      wrapper.appendChild(midRow);
+
+      // 3. Legend Row (Added per user request)
+      const legendRow = document.createElement('div');
+      legendRow.id = 'danbooru-grass-summary-legend';
+      legendRow.style.cssText = `
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--grass-text, #57606a);
+      `;
+      // Initial Placeholder
+      legendRow.innerHTML = '<span style="margin-right:2px">Less</span>' +
+        [0, 1, 2, 3, 4].map(l => `<div class="legend-rect" data-level="${l}" style="width:10px; height:10px; border-radius:2px; background:var(--grass-level-${l})"></div>`).join('') +
+        '<span style="margin-left:2px">More</span>';
+
+      wrapper.appendChild(legendRow);
+
+      panel.appendChild(wrapper);
+    }
+
+    /**
+     * Updates the summary grid cells with heatmap colors based on hourly data.
+     * @param {Array<number>} hourlyCounts Array of 24 integers (0-23).
+     * @param {string} metric Current metric for thresholds.
+     */
+    updateSummaryGrid(hourlyCounts, metric) {
+      const grid = document.getElementById('danbooru-grass-summary-grid');
+      if (!grid) return;
+
+      const cells = grid.querySelectorAll('.large-grass-cell');
+      if (cells.length !== 24) return;
+
+      // If no data, reset to empty
+      if (!hourlyCounts) {
+        cells.forEach(cell => {
+          cell.style.background = 'var(--grass-empty-cell, #ebedf0)';
+          // Add empty state tooltip events? No, just clear
+          cell.onmouseenter = null;
+          cell.onmouseleave = null;
+          cell.removeAttribute('title');
+        });
+        // Update header if exists
+        const header = document.getElementById('danbooru-grass-summary-header');
+        if (header) header.textContent = `Hourly ${metric} Distribution`;
+        return;
+      }
+
+      // Update Header
+      const header = document.getElementById('danbooru-grass-summary-header');
+      if (header) header.textContent = `Hourly ${metric} Distribution`;
+
+      // Dynamic Relative Scale (User Request: 5 Segments from 0 to Max)
+      // Range is divided into 5 equal parts (0-20%, 20-40%, 40-60%, 60-80%, 80-100%)
+      // This maps to Levels 0, 1, 2, 3, 4.
+      // Small counts in the bottom 20% will appear as Level 0 (Empty/Gray).
+      const max = Math.max(...hourlyCounts, 1);
+
+      cells.forEach((cell, i) => {
+        const count = hourlyCounts[i] || 0;
+        let level = 0;
+
+        if (count > 0) {
+          // Calculate level: 0 to 4
+          level = Math.floor((count / max) * 5);
+          // Clamp to max level 4 (for the top 100% case which results in 5)
+          if (level > 4) level = 4;
+        }
+
+        // Apply color
+        cell.style.background = `var(--grass-level-${level})`;
+        // Remove native tooltip
+        cell.removeAttribute('title');
+
+        // Add custom tooltip events
+        cell.onmouseenter = (e) => {
+          const tooltip = document.getElementById('danbooru-grass-tooltip');
+          if (!tooltip) return;
+
+          tooltip.style.opacity = '1';
+          tooltip.innerHTML = `<strong>${i.toString().padStart(2, '0')}:00</strong>, ${count} ${metric}`;
+
+          const rect = cell.getBoundingClientRect();
+          const tooltipRect = tooltip.getBoundingClientRect();
+
+          // Center above the cell (Add window.scrollX/Y for absolute position)
+          let left = rect.left + window.scrollX + (rect.width / 2) - (tooltipRect.width / 2);
+          let top = rect.top + window.scrollY - tooltipRect.height - 8;
+
+          tooltip.style.left = `${left}px`;
+          tooltip.style.top = `${top}px`;
+        };
+
+        cell.onmouseleave = () => {
+          const tooltip = document.getElementById('danbooru-grass-tooltip');
+          if (tooltip) tooltip.style.opacity = '0';
+        };
+      });
+
+      // Update Legend Tooltips with Dynamic Ranges
+      const legend = document.getElementById('danbooru-grass-summary-legend');
+      if (legend) {
+        const step = max / 5;
+        const rects = legend.querySelectorAll('.legend-rect');
+        rects.forEach(r => {
+          const l = parseInt(r.getAttribute('data-level'));
+          let minRange, maxRange;
+
+          if (l === 0) {
+            minRange = 0;
+            maxRange = Math.floor(step);
+          } else {
+            minRange = Math.floor(step * l) + 1;
+            maxRange = Math.floor(step * (l + 1));
+          }
+
+          if (l === 4) maxRange = max; // Clamp max
+
+          // Remove native tooltip
+          r.removeAttribute('title');
+
+          // Add custom dark tooltip
+          r.onmouseenter = (e) => {
+            const tooltip = document.getElementById('danbooru-grass-tooltip');
+            if (!tooltip) return;
+
+            tooltip.style.opacity = '1';
+            tooltip.innerHTML = `${minRange} - ${maxRange}`;
+
+            const rect = r.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+
+            let left = rect.left + window.scrollX + (rect.width / 2) - (tooltipRect.width / 2);
+            let top = rect.top + window.scrollY - tooltipRect.height - 8;
+
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${top}px`;
+          };
+
+          r.onmouseleave = () => {
+            const tooltip = document.getElementById('danbooru-grass-tooltip');
+            if (tooltip) tooltip.style.opacity = '0';
+          };
+        });
+      }
+    }
+
+    /**
      * Toggles the loading state UI.
      * @param {boolean} isLoading True to show loading state.
      */
@@ -1293,8 +1607,17 @@
      * @param {Function} onRefresh Callback for refresh.
      */
     async renderGraph(dataMap, year, metric, userInfo, availableYears, onYearChange, onRefresh) {
+      // Handle new data format { daily, hourly } or legacy map
+      let dailyData = dataMap;
+      let hourlyData = null;
+
+      if (dataMap && dataMap.daily) {
+        dailyData = dataMap.daily;
+        hourlyData = dataMap.hourly;
+      }
+
       // Update Header with Total Count and Embedded Year Selector
-      const total = Object.values(dataMap || {}).reduce((acc, v) => acc + v, 0);
+      const total = Object.values(dailyData || {}).reduce((acc, v) => acc + v, 0);
       const header = document.querySelector('#danbooru-grass-container h2');
 
       if (header) {
@@ -1353,11 +1676,12 @@
       const container = document.getElementById('cal-heatmap');
       if (!container) return;
 
-      const source = Object.entries(dataMap || {}).map(([k, v]) => ({
+      const source = Object.entries(dailyData || {}).map(([k, v]) => ({
         date: k,
         value: v
       }));
       const sanitizedName = userName.replace(/ /g, '_');
+      const userIdVal = userInfo.id || userInfo.name;
 
       const getUrl = (date, count) => {
         if (!date) return null;
@@ -1492,6 +1816,154 @@
             padding: 2px 4px;
             border: 1px solid #d0d7de;
             border-radius: 4px;
+          }
+
+          /* Approvals Detail Popover */
+          #danbooru-approvals-popover {
+            position: absolute;
+            background: #fff;
+            color: #24292f;
+            border: 1px solid #d0d7de;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            border-radius: 10px;
+            padding: 16px;
+            z-index: 100005;
+            display: none;
+            width: 320px;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+          }
+          #danbooru-approvals-popover .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+          }
+          #danbooru-approvals-popover .header-title {
+            font-weight: 600;
+            font-size: 14px;
+          }
+          #danbooru-approvals-popover .close-btn {
+            cursor: pointer;
+            color: #888;
+            font-size: 18px;
+            line-height: 1;
+          }
+          /* Summary Grid Layout */
+          #danbooru-grass-summary-grid-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: fit-content;
+            margin: 0 auto;
+            padding: 10px;
+            background: var(--grass-bg, rgba(128, 128, 128, 0.05));
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.05);
+          }
+          #danbooru-grass-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 4px;
+            width: fit-content;
+          }
+          .summary-row-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+          }
+          .summary-side-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-around;
+            height: 48px; /* 22px * 2 + 4px gap */
+            padding-top: 2px;
+          }
+          .summary-top-labels {
+            display: flex;
+            margin-left: 28px; /* Match width of side labels + gap */
+            position: relative;
+            height: 14px;
+          }
+          .summary-label {
+             fill: var(--grass-text, #24292f);
+             color: var(--grass-text, #24292f);
+             font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+             font-size: 10px;
+             white-space: nowrap;
+          }
+          .top-label-item {
+            position: absolute;
+            transform: translateX(-50%);
+          }
+          .large-grass-cell {
+            width: 22px;
+            height: 22px;
+            background-color: var(--grass-empty-cell, #ebedf0);
+            border-radius: 4px;
+            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+          }
+          .large-grass-cell:hover {
+            transform: scale(1.1);
+            background-color: var(--grass-text, #30363d);
+            opacity: 0.15;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+          }
+          #danbooru-approvals-popover .gallery-btn {
+            cursor: pointer;
+            color: #0969da;
+            display: flex;
+            align-items: center;
+            padding: 2px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            text-decoration: none;
+          }
+          #danbooru-approvals-popover .gallery-btn:hover {
+            background: #f0f7ff;
+            color: #054ada;
+          }
+          #danbooru-approvals-popover .post-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+          }
+          #danbooru-approvals-popover .post-link {
+            display: block;
+            text-align: center;
+            padding: 4px;
+            background: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #0969da;
+            text-decoration: none;
+          }
+          #danbooru-approvals-popover .post-link:hover {
+            background: #0969da;
+            color: #fff;
+          }
+          #danbooru-approvals-popover .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+          }
+          #danbooru-approvals-popover .page-btn {
+            padding: 2px 8px;
+            border: 1px solid #d0d7de;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          #danbooru-approvals-popover .page-btn:disabled {
+            opacity: 0.5;
+            cursor: default;
           }
         `;
         document.head.appendChild(style);
@@ -1694,9 +2166,9 @@
           panel = document.createElement('div');
           panel.id = 'danbooru-grass-panel';
           panel.style.cssText = `
-                width: 270px;
-                max-width: 270px;
-                background: var(--card-background-color, #fff);
+                width: fit-content;
+                min-width: 310px;
+                background: var(--grass-bg, #fff);
                 border: 1px solid #d0d7de;
                 border-radius: 8px;
                 margin-top: 10px;
@@ -1705,7 +2177,7 @@
                 /* Animation Styles */
                 height: 0;
                 opacity: 0;
-                padding: 0 15px;
+                padding: 0 10px;
                 overflow: hidden;
                 transition: height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
                 display: block;
@@ -1719,20 +2191,25 @@
           }
         }
 
+        if (panel) {
+          // Always ensure the grid structure exists so updateSummaryGrid works
+          this.populateSummaryGrid();
+        }
+
         // Toggle Logic
         let isExpanded = false;
         toggleBtn.onclick = () => {
           isExpanded = !isExpanded;
           if (isExpanded) {
-            panel.style.height = '200px'; // Explicit height as requested
+            panel.style.height = '150px'; // Increased to fit Header + Grid + Legend
             panel.style.opacity = '1';
-            panel.style.padding = '15px';
+            panel.style.padding = '10px';
             toggleBtn.innerHTML = chevronUp;
             toggleBtn.title = 'Hide Details';
           } else {
             panel.style.height = '0';
             panel.style.opacity = '0';
-            panel.style.padding = '0 15px';
+            panel.style.padding = '0 10px';
             toggleBtn.innerHTML = chevronDown;
             toggleBtn.title = 'Show Details';
           }
@@ -2028,7 +2505,7 @@
       const currentThresholds = this.settingsManager.getThresholds(metric);
 
       window.cal.paint({
-        itemSelector: '#cal-heatmap-scroll',
+        itemSelector: scrollWrapper, // Pass element directly
         range: 12,
         domain: {
           type: 'month',
@@ -2046,7 +2523,6 @@
           width: 11,
           height: 11,
           gutter: 2,
-          label: null,
         },
         // Align start date to Local Jan 1st 00:00, represented as UTC to match data
         date: {
@@ -2071,6 +2547,9 @@
       })
         .then(() => {
           console.log('[Danbooru Grass] Render complete.');
+          // Render Summary Grid Heatmap
+          this.updateSummaryGrid(hourlyData, metric);
+
           // Re-apply Styles and Interaction
           setTimeout(() => {
             const tooltip = d3.select('#danbooru-grass-tooltip');
@@ -2143,24 +2622,25 @@
                 updateTooltip(event, `<strong>${dateStr}</strong>, ${count} ${metric}`);
               })
               .on('mouseout', () => tooltip.style('opacity', 0))
-              .on('click', function (event, d) {
-                const datum = d || d3.select(this).datum();
-                if (!datum || !datum.t) return;
-                // Enable click even if value is 0
+              .on('click', (event, d) => {
+                const datum = d;
+                if (!datum || !datum.t) {
+                  return;
+                }
+
                 const count = (datum.v !== null && datum.v !== undefined) ? datum.v : 0;
                 const dateStr = new Date(datum.t).toISOString().split('T')[0];
-                const link = getUrl(dateStr, count);
-                if (link) window.open(link, '_blank');
+
+                if (metric === 'approvals' && count > 0) {
+                  this.showApprovalsDetail(dateStr, userIdVal, event);
+                } else {
+                  const link = getUrl(dateStr, count);
+                  if (link) window.open(link, '_blank');
+                }
               });
 
             // 2. Tooltips for Legend Cells
             // Calculate ranges based on thresholds [t1, t2, t3, t4]
-            // Box 0: Less than t1 (usually 0 if t1=1)
-            // Box 1: t1 to t2-1
-            // Box 2: t2 to t3-1
-            // Box 3: t3 to t4-1
-            // Box 4: t4+
-
             const t = this.settingsManager.getThresholds(metric);
             const legendThresholds = [
               `${t[0] > 1 ? `0-${t[0] - 1}` : '0'} (Less)`,
@@ -2171,7 +2651,6 @@
             ];
 
             // Select the 6 manual colored divs in the legend
-            // We target > div because we built the legend with standard HTML divs, not SVG.
             const legendDivs = d3.selectAll('#danbooru-grass-legend > div');
 
             legendDivs.each(function (d, i) {
@@ -2187,6 +2666,8 @@
         })
         .catch((err) => {
           console.error('[Danbooru Grass] Render failed:', err);
+          // Still update summary grid on failure
+          this.updateSummaryGrid(hourlyData, metric);
         });
     }
 
@@ -2216,6 +2697,120 @@
       `;
       const btn = document.getElementById('grass-retry-btn');
       if (btn) btn.onclick = onRetry;
+    }
+
+    /**
+     * Shows a paginated popover list of post IDs for approval metric.
+     * @param {string} dateStr YYYY-MM-DD
+     * @param {string} userId
+     * @param {MouseEvent} event
+     */
+    async showApprovalsDetail(dateStr, userId, event) {
+      const popoverId = 'danbooru-approvals-popover';
+      let pop = document.getElementById(popoverId);
+      if (!pop) {
+        pop = document.createElement('div');
+        pop.id = popoverId;
+        document.body.appendChild(pop);
+      }
+
+      const detailId = `${userId}_${dateStr}`;
+      const detail = await this.db.approvals_detail.get(detailId);
+
+      if (!detail) {
+        console.warn(`[Danbooru Grass] No entry found in approvals_detail for ID: ${detailId}. Did you clear cache?`);
+        return;
+      }
+      if (!detail.post_list || detail.post_list.length === 0) {
+        console.warn(`[Danbooru Grass] Entry found but post_list is empty:`, detail);
+        return;
+      }
+
+      const posts = detail.post_list;
+      const total = posts.length;
+      const limit = 100;
+      let currentPage = 1;
+      const totalPages = Math.ceil(total / limit);
+
+      const renderPage = (page) => {
+        currentPage = page;
+        const start = (page - 1) * limit;
+        const end = Math.min(start + limit, total);
+        const pagePosts = posts.slice(start, end);
+
+        pop.innerHTML = `
+          <div class="header">
+            <div class="header-title">${dateStr} Approvals (${total})</div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <a href="/posts?tags=id:${pagePosts.join(',')}" target="_blank" class="gallery-btn" title="View Current Page as Gallery">
+                <svg aria-hidden="true" height="18" viewBox="0 0 16 16" version="1.1" width="18" data-view-component="true" style="fill: currentColor;">
+                  <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.75.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-1.19l-4.22 4.22a.75.75 0 1 1-1.06-1.06L12.44 3.5h-1.19a.75.75 0 0 1-.75-.75Z"></path>
+                </svg>
+              </a>
+              <div class="close-btn">&times;</div>
+            </div>
+          </div>
+          <div class="post-grid">
+            ${pagePosts.map(id => `<a href="/posts/${id}" target="_blank" class="post-link">#${id}</a>`).join('')}
+          </div>
+          <div class="pagination">
+            <button class="page-btn" id="popover-prev" ${page === 1 ? 'disabled' : ''}>&lt;</button>
+            <span>${page} / ${totalPages}</span>
+            <button class="page-btn" id="popover-next" ${page === totalPages ? 'disabled' : ''}>&gt;</button>
+          </div>
+        `;
+
+        pop.querySelector('.close-btn').onclick = () => { pop.style.display = 'none'; };
+        pop.querySelector('#popover-prev').onclick = (e) => {
+          e.stopPropagation();
+          renderPage(currentPage - 1);
+        };
+        pop.querySelector('#popover-next').onclick = (e) => {
+          e.stopPropagation();
+          renderPage(currentPage + 1);
+        };
+      };
+
+      renderPage(1);
+
+      // Positioning
+      pop.style.setProperty('display', 'block', 'important');
+      const rect = pop.getBoundingClientRect();
+
+      let left = event.pageX + 10;
+      let top = event.pageY - 20; // Start slightly below mouse
+
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const scrollX = window.scrollX || window.pageXOffset;
+      const scrollY = window.scrollY || window.pageYOffset;
+
+      // Flip if overflow right
+      if (left + rect.width > scrollX + viewportWidth - 20) {
+        left = event.pageX - rect.width - 10;
+      }
+      // Flip if overflow bottom
+      if (top + rect.height > scrollY + viewportHeight - 20) {
+        top = event.pageY - rect.height - 10;
+      }
+      // Safety: Don't overflow left or top of document
+      if (left < scrollX + 10) left = scrollX + 10;
+      if (top < scrollY + 10) top = scrollY + 10;
+
+      pop.style.left = `${left}px`;
+      pop.style.top = `${top}px`;
+
+      // Close on outside click
+      const closeHandler = (e) => {
+        if (!pop.contains(e.target)) {
+          pop.style.setProperty('display', 'none', 'important');
+          document.removeEventListener('mousedown', closeHandler);
+        }
+      };
+      // Delay attachment to avoid immediate close from current click
+      setTimeout(() => {
+        document.addEventListener('mousedown', closeHandler);
+      }, 100);
     }
   }
 
@@ -6083,22 +6678,22 @@
 
     async clearUserData(userInfo) {
       if (!userInfo.id) return;
-      const uploaderId = parseInt(userInfo.id);
+      const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
+      // const userIdStr = String(userInfo.id); // Not used anymore for Analytics clean
 
-      // Delete posts for this user
+      console.log(`[Analytics] Clearing Analytics data for user ${uploaderId}...`);
+
+      // 1. Delete posts (uploader_id is INT)
       await this.db.posts.where('uploader_id').equals(uploaderId).delete();
+
+      // 2. Delete Pie Stats (userId is INT in updatePieStats)
       await this.db.piestats.where('userId').equals(uploaderId).delete();
 
-      // Clear legacy tables if they exist/used
-      await this.db.uploads.where('userId').equals(uploaderId).delete();
-      await this.db.approvals.where('userId').equals(uploaderId).delete();
-      await this.db.notes.where('userId').equals(uploaderId).delete();
-
-      // Clear metadata
+      // Clear metadata (Last Sync Time)
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
       localStorage.removeItem(lastSyncKey);
 
-      console.log(`[Analytics] Cleared data for user ${uploaderId}`);
+      console.log(`[Analytics] Cleared Analytics data (posts & piestats) for user ${uploaderId}`);
     }
   }
 
