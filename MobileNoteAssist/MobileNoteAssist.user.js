@@ -1,13 +1,11 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Assist creating notes on mobile with accurate scaling and touch-friendly controls. Includes draggable button.
+// @version      2.0
+// @description  Assist creating notes on mobile
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
 // @icon         https://danbooru.donmai.us/favicon.ico
-// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
-// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -18,101 +16,79 @@
   // Constants & Configuration
   // --------------------------------------------------------------------------
 
-  /** @const {string} Key for local storage to save the enabled state. */
   const STATE_KEY = 'dmna_enabled';
-
-  /** @const {string} Key for local storage to save the button's Y position. */
   const POS_KEY = 'dmna_btn_margin_y';
-
-  /** @const {number} Initial box size ratio relative to the image's smaller dimension. */
   const INITIAL_SIZE_RATIO = 0.10;
-
-  /** @const {number} Minimum size of the note box in pixels. */
   const MIN_BOX_SIZE = 15;
-
-  /** @const {number} Minimum initial size of the note box. */
   const MIN_INITIAL_SIZE = 30;
-
-  /** @const {number} Maximum initial size of the note box. */
   const MAX_INITIAL_SIZE = 150;
-
-  /** @const {number} Duration in ms to trigger the reposition mode (Long Press). */
   const LONG_PRESS_DURATION = 1500;
 
-  // UI Positioning Constants
-  /** @const {number} Size of the floating button in pixels. */
   const BTN_SIZE = 40;
-
-  /** @const {number} Horizontal margin for the floating button. */
   const BTN_MARGIN_X = 20;
-
-  /** @const {number} Default vertical margin for the floating button. */
   const DEFAULT_BTN_MARGIN_Y = 80;
-
-  /** @const {number} Distance of the toast message from the viewport bottom. */
   const TOAST_MARGIN_BOTTOM = 20;
+
+  const TAG_MAP = {
+    translated: 'translated',
+    request: 'translation_request',
+    check: 'check_translation',
+    partial: 'partially_translated',
+  };
 
   // --------------------------------------------------------------------------
   // State Variables
   // --------------------------------------------------------------------------
 
   let isEnabled = localStorage.getItem(STATE_KEY) === 'true';
-  let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) || DEFAULT_BTN_MARGIN_Y;
+  let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) ||
+      DEFAULT_BTN_MARGIN_Y;
 
-  // Interaction state
   let isDraggingBtn = false;
   let isPressing = false;
   let longPressTimer = null;
   let dragStartY = 0;
   let dragStartMarginY = 0;
 
-  // DOM Elements
   let boxElement = null;
   let handleNW = null;
   let handleSE = null;
   let handleSW = null;
   let handleNE = null;
   let popoverElement = null;
+  let inputElement = null;
   let toastElement = null;
   let toastTimer = null;
   let viewportRaf = null;
+
+  let allPostTags = new Set();
+  let postOriginalWidth = 0;
+  let postOriginalHeight = 0;
+  let initialToggleState = {};
 
   // --------------------------------------------------------------------------
   // Styles
   // --------------------------------------------------------------------------
 
   const STYLES = `
-    /* Note Box Container */
     #dmna-box {
-      position: absolute;
-      width: 50px;
-      height: 50px;
-      border: 1.2px solid #0073ff;
-      background-color: rgba(0, 115, 255, 0.15);
-      z-index: 9990;
-      touch-action: none;
+      position: absolute; width: 50px; height: 50px;
+      border: 1.2px solid #0073ff; background-color: rgba(0, 115, 255, 0.15);
+      z-index: 9990; touch-action: none;
       box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
-      display: none;
-      box-sizing: border-box;
+      display: none; box-sizing: border-box;
     }
+    #dmna-box.interacting #dmna-resize-se { opacity: 0; }
 
-    /* Resize Handles */
     #dmna-resize-se {
       position: absolute; width: 0; height: 0; right: 0; bottom: 0;
       border-bottom: 7px solid #0073ff;
       border-left: 7px solid transparent;
-      cursor: nwse-resize; z-index: 9991;
-      filter: drop-shadow(-1px -1px 0 rgba(255, 255, 255, 0.5));
-      transition: opacity 0.2s ease;
+      cursor: nwse-resize; z-index: 9991; transition: opacity 0.2s ease;
     }
     #dmna-resize-se::after {
-      content: ''; position: absolute;
-      right: -40px; bottom: -40px; width: 70px; height: 70px;
-    }
-
-    /* Hide the SE triangle when interacting */
-    #dmna-box.interacting #dmna-resize-se {
-      opacity: 0;
+      content: ''; position: absolute; right: -40px; bottom: -40px;
+      width: 70px; height: 70px;
     }
 
     #dmna-resize-nw {
@@ -120,18 +96,17 @@
       cursor: nwse-resize; z-index: 9991;
     }
     #dmna-resize-nw::after {
-      content: ''; position: absolute;
-      left: -40px; top: -40px; width: 70px; height: 70px;
+      content: ''; position: absolute; left: -40px; top: -40px;
+      width: 70px; height: 70px;
     }
 
-    /* Drag Handles */
     #dmna-drag-sw {
       position: absolute; width: 0; height: 0; left: 0; bottom: 0;
       cursor: move; z-index: 9991;
     }
     #dmna-drag-sw::after {
-      content: ''; position: absolute;
-      left: -40px; bottom: -40px; width: 70px; height: 70px;
+      content: ''; position: absolute; left: -40px; bottom: -40px;
+      width: 70px; height: 70px;
     }
 
     #dmna-drag-ne {
@@ -139,95 +114,101 @@
       cursor: move; z-index: 9991;
     }
     #dmna-drag-ne::after {
-      content: ''; position: absolute;
-      right: -40px; top: -40px; width: 70px; height: 70px;
+      content: ''; position: absolute; right: -40px; top: -40px;
+      width: 70px; height: 70px;
     }
 
-    /* Popover */
     #dmna-popover {
-      position: absolute; z-index: 9992; display: flex; gap: 15px;
-      background: white; padding: 10px 16px; border-radius: 14px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-      display: none; border: 1px solid #ddd;
-      --arrow-offset: 0px;
+      position: absolute; z-index: 9992;
+      display: none; flex-direction: column; gap: 10px;
+      background: #1f232b; padding: 14px; border-radius: 14px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      border: 1px solid #3e4451; width: 230px;
+      --arrow-offset: 0px; color: #fff;
+      transition: opacity 0.2s ease; opacity: 1;
     }
+    #dmna-popover.interacting { opacity: 0.2; }
+
     #dmna-popover::after {
       content: ""; position: absolute; top: -10px;
       left: calc(50% + var(--arrow-offset)); margin-left: -10px;
       border-width: 0 10px 10px 10px; border-style: solid;
-      border-color: transparent transparent white transparent;
-    }
-    #dmna-popover::before {
-      content: ""; position: absolute; top: -11px;
-      left: calc(50% + var(--arrow-offset)); margin-left: -10px;
-      border-width: 0 10px 10px 10px; border-style: solid;
-      border-color: transparent transparent #ddd transparent;
+      border-color: transparent transparent #1f232b transparent;
     }
 
+    #dmna-input {
+      width: 100%; height: 36px;
+      background: #2c323d; border: 1px solid #3e4451; color: white;
+      border-radius: 6px; padding: 6px; font-size: 14px; resize: none;
+      box-sizing: border-box; font-family: sans-serif;
+    }
+    #dmna-input:focus { outline: 2px solid #0073ff; border-color: transparent; }
+
+    #dmna-tags { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
+    .dmna-toggle-row { display: flex; justify-content: space-between; align-items: center; }
+    .dmna-toggle-label { font-size: 13px; font-weight: 500; color: #ced4da; }
+
+    .dmna-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
+    .dmna-switch input { opacity: 0; width: 0; height: 0; }
+    .dmna-slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #555; transition: .3s; border-radius: 20px;
+    }
+    .dmna-slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px;
+      left: 2px; bottom: 2px; background-color: white;
+      transition: .3s; border-radius: 50%;
+    }
+    input:checked + .dmna-slider { background-color: #0073ff; }
+    input:checked + .dmna-slider:before { transform: translateX(16px); }
+
+    .dmna-btn-group {
+      display: flex; gap: 10px; justify-content: space-around;
+      width: 100%; margin-top: 4px;
+    }
     .dmna-btn {
-      width: 42px; height: 42px; border-radius: 50%; border: none;
-      font-size: 20px; display: flex; align-items: center; justify-content: center;
+      width: 100%; height: 36px; border-radius: 8px; border: none;
+      font-size: 18px; display: flex; align-items: center; justify-content: center;
       cursor: pointer; transition: transform 0.1s;
     }
-    .dmna-btn:active { transform: scale(0.9); }
+    .dmna-btn:active { transform: scale(0.95); }
     #dmna-ok { background: #e8f5e9; color: #2e7d32; }
     #dmna-no { background: #ffebee; color: #c62828; }
 
-    /* Floating Toggle Button */
     #dmna-float-btn {
-      position: absolute;
-      left: 0; top: 0;
+      position: absolute; left: 0; top: 0;
       width: 40px; height: 40px; border-radius: 50%;
       background: rgba(0, 0, 0, 0.6); color: white; font-size: 21px;
       border: 2px solid rgba(255, 255, 255, 0.3);
       display: flex; align-items: center; justify-content: center;
       z-index: 11000; cursor: pointer; backdrop-filter: blur(2px);
-      user-select: none;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-      transform-origin: 0 0;
-      will-change: transform, background, box-shadow;
-      transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
-      touch-action: none;
+      user-select: none; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+      transform-origin: 0 0; will-change: transform; touch-action: none;
     }
     #dmna-float-btn.active {
-      background: #0073ff;
-      border-color: white;
-      box-shadow: 0 0 15px #0073ff;
+      background: #0073ff; border-color: white; box-shadow: 0 0 15px #0073ff;
     }
     #dmna-float-btn.dragging {
-      background: #ff9800 !important;
-      border-color: #ffe0b2 !important;
-      box-shadow: 0 0 15px #ff9800 !important;
+      background: #ff9800 !important; border-color: #ffe0b2 !important;
       transform: scale(1.2);
     }
 
-    /* Toast Message */
     #dmna-toast {
       visibility: hidden; min-width: 160px;
       background-color: rgba(30, 30, 30, 0.95); color: #fff;
       text-align: center; border-radius: 50px; padding: 12px 24px;
-      position: absolute;
-      left: 0; top: 0; z-index: 11000;
+      position: absolute; left: 0; top: 0; z-index: 11000;
       font-size: 14px; opacity: 0;
-      transition: opacity 0.4s ease-in-out;
-      pointer-events: none;
-      transform-origin: 0 0;
+      transition: opacity 0.4s ease-in-out, visibility 0.4s ease-in-out;
+      pointer-events: none; transform-origin: 0 0;
       will-change: transform, opacity;
     }
     #dmna-toast.show { visibility: visible; opacity: 1; }
-
-    /* Sidebar Link */
-    #dmna-sidebar-link {
-      color: #7b8c9d !important;
-      transition: all 0.3s ease;
-      text-decoration: none;
-    }
+    #dmna-sidebar-link { color: #7b8c9d !important; text-decoration: none; }
     #dmna-sidebar-link.active {
-      color: #0073ff !important;
-      font-weight: bold;
+      color: #0073ff !important; font-weight: bold;
       text-shadow: 0 0 8px rgba(0, 115, 255, 0.6);
     }
-
     body.dmna-active #image { cursor: crosshair !important; }
   `;
 
@@ -244,8 +225,8 @@
   // --------------------------------------------------------------------------
 
   /**
-   * Displays a toast message at the bottom of the visual viewport.
-   * @param {string} msg - The message string to display.
+   * Displays a toast message to the user.
+   * @param {string} msg The message to display.
    */
   function showToast(msg) {
     if (!toastElement) {
@@ -255,7 +236,7 @@
     }
     updateVisualViewportPositions();
     toastElement.textContent = msg;
-    void toastElement.offsetWidth; // Trigger reflow
+    void toastElement.offsetWidth;
     toastElement.className = 'show';
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
@@ -264,8 +245,8 @@
   }
 
   /**
-   * Updates the positions of fixed UI elements (Floating Button, Toast)
-   * relative to the Visual Viewport to handle pinch-zoom and scroll correctly.
+   * Updates positions of fixed elements based on Visual Viewport API.
+   * Handles cases where the keyboard is open or the user has zoomed in.
    */
   function updateVisualViewportPositions() {
     const btn = document.getElementById('dmna-float-btn');
@@ -275,10 +256,14 @@
       const scrollX = window.pageXOffset;
       const scrollY = window.pageYOffset;
       if (btn) {
-        btn.style.transform = `translate(${scrollX + window.innerWidth - BTN_MARGIN_X - BTN_SIZE}px, ${scrollY + window.innerHeight - userBtnMarginY - BTN_SIZE}px)`;
+        btn.style.transform = `translate(
+          ${scrollX + window.innerWidth - BTN_MARGIN_X - BTN_SIZE}px,
+          ${scrollY + window.innerHeight - userBtnMarginY - BTN_SIZE}px)`;
       }
       if (toast) {
-        toast.style.transform = `translate(${scrollX + window.innerWidth / 2}px, ${scrollY + window.innerHeight - TOAST_MARGIN_BOTTOM}px) translate(-50%, 0)`;
+        toast.style.transform = `translate(
+          ${scrollX + window.innerWidth / 2}px,
+          ${scrollY + window.innerHeight - TOAST_MARGIN_BOTTOM}px) translate(-50%, 0)`;
       }
       return;
     }
@@ -294,18 +279,21 @@
       const by = vvPageTop + vv.height - ((userBtnMarginY + BTN_SIZE) * invScale);
       btn.style.transform = `translate(${bx}px, ${by}px) scale(${btnScale})`;
     }
-
-    if (toast && toast.classList.contains('show')) {
+    if (toast) {
       const tx = vvPageLeft + (vv.width / 2);
       const ty = vvPageTop + vv.height - (TOAST_MARGIN_BOTTOM * invScale);
-      toast.style.transform = `translate(${tx}px, ${ty}px) scale(${invScale}) translate(-50%, -100%)`;
+      toast.style.transform =
+          `translate(${tx}px, ${ty}px) scale(${invScale}) translate(-50%, -100%)`;
     }
   }
 
   /**
-   * Initializes the script, setting up UI and event listeners.
+   * Initializes the script.
    */
   function init() {
+    loadTagsFromDOM();
+    fetchPostData(true);
+
     createUI();
     updateStateUI();
     updateVisualViewportPositions();
@@ -315,6 +303,9 @@
         if (!viewportRaf) {
           viewportRaf = requestAnimationFrame(() => {
             updateVisualViewportPositions();
+            if (boxElement && boxElement.style.display === 'block') {
+              updatePopoverPosition();
+            }
             viewportRaf = null;
           });
         }
@@ -334,13 +325,162 @@
     }
 
     const img = document.querySelector('#image');
-    if (img) {
-      img.addEventListener('click', onImageClick);
+    if (img) img.addEventListener('click', onImageClick);
+  }
+
+  /**
+   * Loads initial tags from the DOM as a fallback.
+   */
+  function loadTagsFromDOM() {
+    let tagString = document.body.dataset.postTags ||
+        document.body.dataset.tags || '';
+    if (!tagString) {
+      const postDiv = document.querySelector('#image-container');
+      if (postDiv && postDiv.dataset.tags) tagString = postDiv.dataset.tags;
+    }
+    allPostTags = new Set(tagString.split(' ').filter((t) => t.trim() !== ''));
+
+    if (document.body.dataset.postWidth) {
+      postOriginalWidth = parseInt(document.body.dataset.postWidth, 10);
+      postOriginalHeight = parseInt(document.body.dataset.postHeight, 10);
     }
   }
 
   /**
-   * Creates necessary DOM elements including the floating button, note box, and popover.
+   * Fetches full post data (tags and dimensions) from the API.
+   * @param {boolean} shouldUpdateUI - Whether to update the toggle UI immediately.
+   * @return {Promise<Set<string>|null>} A promise resolving to the tag set.
+   */
+  async function fetchPostData(shouldUpdateUI = false) {
+    const postIdMatch = location.pathname.match(/\/posts\/(\d+)/);
+    const postId = postIdMatch ? postIdMatch[1] : document.body.dataset.postId;
+    if (!postId) return null;
+
+    try {
+      const res = await fetch(
+          `/posts/${postId}.json?only=tag_string,image_width,image_height`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.image_width) postOriginalWidth = data.image_width;
+        if (data.image_height) postOriginalHeight = data.image_height;
+
+        if (data && typeof data.tag_string === 'string') {
+          const freshSet = new Set(
+              data.tag_string.split(' ').filter((t) => t.trim() !== ''));
+          allPostTags = freshSet;
+          if (shouldUpdateUI && boxElement &&
+              boxElement.style.display === 'block') {
+            updateToggleStates();
+          }
+          return freshSet;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch post data', e);
+    }
+    return null;
+  }
+
+  /**
+   * Creates the HTML structure for a toggle switch row.
+   * @param {string} id - The unique identifier for the toggle.
+   * @param {string} label - The label text.
+   * @return {string} The HTML string.
+   */
+  function createToggleRow(id, label) {
+    return `
+      <div class="dmna-toggle-row">
+        <span class="dmna-toggle-label">${label}</span>
+        <label class="dmna-switch">
+          <input type="checkbox" id="dmna-tag-${id}">
+          <span class="dmna-slider"></span>
+        </label>
+      </div>
+    `;
+  }
+
+  /**
+   * Updates the visual state of the toggle switches based on current tags.
+   */
+  function updateToggleStates() {
+    const setCheck = (id, tag) => {
+      const el = document.getElementById(`dmna-tag-${id}`);
+      if (el) el.checked = allPostTags.has(tag);
+    };
+    setCheck('translated', TAG_MAP.translated);
+    setCheck('request', TAG_MAP.request);
+    setCheck('check', TAG_MAP.check);
+    setCheck('partial', TAG_MAP.partial);
+  }
+
+  /**
+   * Captures the initial state of the toggles when the box opens.
+   * Used for dirty checking.
+   */
+  function captureInitialToggleState() {
+    initialToggleState = {
+      translated: document.getElementById('dmna-tag-translated')?.checked,
+      request: document.getElementById('dmna-tag-request')?.checked,
+      check: document.getElementById('dmna-tag-check')?.checked,
+      partial: document.getElementById('dmna-tag-partial')?.checked,
+    };
+  }
+
+  /**
+   * Checks if any toggle state has changed since opening the box.
+   * @return {boolean} True if changes are detected.
+   */
+  function hasTagChanges() {
+    const current = {
+      translated: document.getElementById('dmna-tag-translated')?.checked,
+      request: document.getElementById('dmna-tag-request')?.checked,
+      check: document.getElementById('dmna-tag-check')?.checked,
+      partial: document.getElementById('dmna-tag-partial')?.checked,
+    };
+    return (
+      current.translated !== initialToggleState.translated ||
+      current.request !== initialToggleState.request ||
+      current.check !== initialToggleState.check ||
+      current.partial !== initialToggleState.partial
+    );
+  }
+
+  /**
+   * Sets up mutually exclusive logic for the tag toggles.
+   */
+  function setupTagLogic() {
+    const tTranslated = document.getElementById('dmna-tag-translated');
+    const tRequest = document.getElementById('dmna-tag-request');
+    const tPartial = document.getElementById('dmna-tag-partial');
+
+    if (tTranslated) {
+      tTranslated.addEventListener('change', () => {
+        if (tTranslated.checked) {
+          if (tRequest) tRequest.checked = false;
+          if (tPartial) tPartial.checked = false;
+        }
+      });
+    }
+    if (tRequest) {
+      tRequest.addEventListener('change', () => {
+        if (tRequest.checked) {
+          if (tTranslated) tTranslated.checked = false;
+          if (tPartial) tPartial.checked = false;
+        }
+      });
+    }
+    if (tPartial) {
+      tPartial.addEventListener('change', () => {
+        if (tPartial.checked) {
+          if (tTranslated) tTranslated.checked = false;
+          if (tRequest) tRequest.checked = false;
+        }
+      });
+    }
+  }
+
+  /**
+   * Creates the main UI elements.
    */
   function createUI() {
     if (document.getElementById('dmna-box')) return;
@@ -348,7 +488,6 @@
     const floatBtn = document.createElement('div');
     floatBtn.id = 'dmna-float-btn';
     floatBtn.innerHTML = '📝';
-
     setupButtonInteractions(floatBtn);
     document.body.appendChild(floatBtn);
 
@@ -365,32 +504,44 @@
 
     boxElement = document.createElement('div');
     boxElement.id = 'dmna-box';
-
     handleSE = document.createElement('div');
     handleSE.id = 'dmna-resize-se';
     boxElement.appendChild(handleSE);
-
     handleNW = document.createElement('div');
     handleNW.id = 'dmna-resize-nw';
     boxElement.appendChild(handleNW);
-
     handleSW = document.createElement('div');
     handleSW.id = 'dmna-drag-sw';
     boxElement.appendChild(handleSW);
-
     handleNE = document.createElement('div');
     handleNE.id = 'dmna-drag-ne';
     boxElement.appendChild(handleNE);
-
     document.body.appendChild(boxElement);
 
     popoverElement = document.createElement('div');
     popoverElement.id = 'dmna-popover';
+
     popoverElement.innerHTML = `
-      <button id="dmna-ok" class="dmna-btn">✔</button>
-      <button id="dmna-no" class="dmna-btn">✖</button>
+      <textarea id="dmna-input" placeholder="Note text..." rows="1"></textarea>
+
+      <div id="dmna-tags">
+        ${createToggleRow('translated', 'Translated')}
+        ${createToggleRow('request', 'Translation request')}
+        ${createToggleRow('check', 'Check translation')}
+        ${createToggleRow('partial', 'Partially translated')}
+      </div>
+
+      <div class="dmna-btn-group">
+        <button id="dmna-ok" class="dmna-btn">✔</button>
+        <button id="dmna-no" class="dmna-btn">✖</button>
+      </div>
     `;
     document.body.appendChild(popoverElement);
+
+    inputElement = document.getElementById('dmna-input');
+
+    updateToggleStates();
+    setupTagLogic();
 
     setupDragAndResize();
     document.getElementById('dmna-ok').addEventListener('click', submitNote);
@@ -401,19 +552,16 @@
   }
 
   /**
-   * Sets up touch interactions for the floating button (Tap vs Long Press).
-   * Supports dragging to reposition the button.
-   * @param {HTMLElement} btn - The floating button element.
+   * Sets up drag interactions for the floating button.
+   * @param {HTMLElement} btn - The button element.
    */
   function setupButtonInteractions(btn) {
     btn.addEventListener('touchstart', (e) => {
       e.preventDefault();
-
       isDraggingBtn = false;
       isPressing = true;
       dragStartY = e.touches[0].clientY;
       dragStartMarginY = userBtnMarginY;
-
       longPressTimer = setTimeout(() => {
         if (isPressing) {
           isDraggingBtn = true;
@@ -422,14 +570,12 @@
           showToast('↕️ Reposition Mode');
         }
       }, LONG_PRESS_DURATION);
-    }, { passive: false });
+    }, {passive: false});
 
     btn.addEventListener('touchmove', (e) => {
       e.preventDefault();
       e.stopPropagation();
-
       const currentY = e.touches[0].clientY;
-
       if (isDraggingBtn) {
         const dy = currentY - dragStartY;
         let newMargin = dragStartMarginY - dy;
@@ -439,18 +585,16 @@
         updateVisualViewportPositions();
         return;
       }
-
       if (Math.abs(currentY - dragStartY) > 10) {
         clearTimeout(longPressTimer);
         isPressing = false;
       }
-    }, { passive: false });
+    }, {passive: false});
 
     btn.addEventListener('touchend', (e) => {
       e.preventDefault();
       clearTimeout(longPressTimer);
       isPressing = false;
-
       if (isDraggingBtn) {
         isDraggingBtn = false;
         btn.classList.remove('dragging');
@@ -462,14 +606,13 @@
   }
 
   /**
-   * Toggles the enabled/disabled state of the Note Assist.
+   * Toggles the script's enabled state.
    */
   function toggleState() {
     isEnabled = !isEnabled;
     localStorage.setItem(STATE_KEY, isEnabled);
     updateStateUI();
     updateVisualViewportPositions();
-
     if (isEnabled) {
       showToast('✨ Note Assist ON');
     } else {
@@ -479,12 +622,11 @@
   }
 
   /**
-   * Updates the button and sidebar link styles based on current state.
+   * Updates the state UI (button active class, etc.).
    */
   function updateStateUI() {
     const floatBtn = document.getElementById('dmna-float-btn');
     const sidebarLink = document.getElementById('dmna-sidebar-link');
-
     if (isEnabled) {
       floatBtn.classList.add('active');
       document.body.classList.add('dmna-active');
@@ -503,13 +645,12 @@
   }
 
   /**
-   * Handles image click events to spawn the note box.
-   * @param {MouseEvent} e - The click event.
+   * Handles click events on the image to create a note box.
+   * @param {Event} e - The click event.
    */
   function onImageClick(e) {
     if (!isEnabled) return;
-    if (e.target.closest('#dmna-box') ||
-        e.target.closest('#dmna-popover') ||
+    if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') ||
         e.target.closest('#dmna-float-btn')) {
       return;
     }
@@ -526,7 +667,8 @@
 
     const minDimension = Math.min(imgRect.width, imgRect.height);
     let calculatedSize = minDimension * INITIAL_SIZE_RATIO;
-    calculatedSize = Math.max(MIN_INITIAL_SIZE, Math.min(calculatedSize, MAX_INITIAL_SIZE));
+    calculatedSize = Math.max(
+        MIN_INITIAL_SIZE, Math.min(calculatedSize, MAX_INITIAL_SIZE));
     const size = Math.round(calculatedSize);
 
     let startX = e.pageX - (size / 2);
@@ -541,11 +683,11 @@
   }
 
   /**
-   * Shows the note box at specific coordinates.
-   * @param {number} x - Left position.
-   * @param {number} y - Top position.
-   * @param {number} w - Width.
-   * @param {number} h - Height.
+   * Displays the note box at the specified coordinates.
+   * @param {number} x
+   * @param {number} y
+   * @param {number} w
+   * @param {number} h
    */
   function showBox(x, y, w, h) {
     boxElement.style.left = `${x}px`;
@@ -553,11 +695,16 @@
     boxElement.style.width = `${w}px`;
     boxElement.style.height = `${h}px`;
     boxElement.style.display = 'block';
+
+    if (inputElement) inputElement.value = '';
+
+    updateToggleStates();
+    captureInitialToggleState();
     updatePopoverPosition();
   }
 
   /**
-   * Hides the note box and popover menu.
+   * Hides the note box and popover.
    */
   function hideBox() {
     boxElement.style.display = 'none';
@@ -565,14 +712,14 @@
   }
 
   /**
-   * Updates the position of the action popover relative to the note box.
+   * Updates the popover position to stay near the box.
    */
   function updatePopoverPosition() {
     const rect = boxElement.getBoundingClientRect();
     const boxCenterX = rect.left + window.scrollX + (rect.width / 2);
     const boxBottomY = rect.top + window.scrollY + rect.height;
+    const popoverWidth = 230;
 
-    const popoverWidth = 140;
     const screenW = window.innerWidth;
     const minX = (popoverWidth / 2) + 10;
     const maxX = screenW - (popoverWidth / 2) - 10;
@@ -587,38 +734,41 @@
   }
 
   /**
-   * Initializes drag and resize event listeners for the note box handles.
+   * Sets up drag and resize handlers for the box.
    */
   function setupDragAndResize() {
     let mode = null;
-    let startX, startY, startLeft, startTop, startW, startH;
+    let startX;
+    let startY;
+    let startLeft;
+    let startTop;
+    let startW;
+    let startH;
 
     const onStart = (e) => {
       if (!isEnabled) return;
       const target = e.target;
-
       if (target === handleSE) mode = 'se';
       else if (target === handleNW) mode = 'nw';
-      else if (target === handleSW || target === handleNE || target === boxElement) mode = 'drag';
-      else return;
+      else if (target === handleSW || target === handleNE ||
+               target === boxElement) {
+        mode = 'drag';
+      } else return;
 
       e.preventDefault();
-
-      // Add 'interacting' class to hide triangle
       boxElement.classList.add('interacting');
+      popoverElement.classList.add('interacting');
 
       const pt = e.touches ? e.touches[0] : e;
       startX = pt.clientX;
       startY = pt.clientY;
-
       const rect = boxElement.getBoundingClientRect();
       startLeft = rect.left + window.scrollX;
       startTop = rect.top + window.scrollY;
       startW = rect.width;
       startH = rect.height;
-
       document.addEventListener('mousemove', onMove);
-      document.addEventListener('touchmove', onMove, { passive: false });
+      document.addEventListener('touchmove', onMove, {passive: false});
       document.addEventListener('mouseup', onEnd);
       document.addEventListener('touchend', onEnd);
     };
@@ -626,7 +776,6 @@
     const onMove = (e) => {
       if (!mode) return;
       e.preventDefault();
-
       const img = document.querySelector('#image');
       const imgRect = img.getBoundingClientRect();
       const boundLeft = imgRect.left + window.scrollX;
@@ -641,41 +790,29 @@
       if (mode === 'se') {
         let newW = Math.max(MIN_BOX_SIZE, startW + dx);
         let newH = Math.max(MIN_BOX_SIZE, startH + dy);
-
         if (startLeft + newW > boundRight) newW = boundRight - startLeft;
         if (startTop + newH > boundBottom) newH = boundBottom - startTop;
-
         boxElement.style.width = `${newW}px`;
         boxElement.style.height = `${newH}px`;
       } else if (mode === 'nw') {
         let deltaW = -dx;
         let deltaH = -dy;
-        let attemptW = startW + deltaW;
-        let attemptH = startH + deltaH;
-
-        if (attemptW < MIN_BOX_SIZE) {
-          deltaW = MIN_BOX_SIZE - startW;
-        }
-        if (attemptH < MIN_BOX_SIZE) {
-          deltaH = MIN_BOX_SIZE - startH;
-        }
-
+        const attemptW = startW + deltaW;
+        const attemptH = startH + deltaH;
+        if (attemptW < MIN_BOX_SIZE) deltaW = MIN_BOX_SIZE - startW;
+        if (attemptH < MIN_BOX_SIZE) deltaH = MIN_BOX_SIZE - startH;
         let newLeft = startLeft - deltaW;
         let newTop = startTop - deltaH;
         let newW = startW + deltaW;
         let newH = startH + deltaH;
-
         if (newLeft < boundLeft) {
-          const overflowX = boundLeft - newLeft;
           newLeft = boundLeft;
-          newW -= overflowX;
+          newW -= (boundLeft - (startLeft - deltaW));
         }
         if (newTop < boundTop) {
-          const overflowY = boundTop - newTop;
           newTop = boundTop;
-          newH -= overflowY;
+          newH -= (boundTop - (startTop - deltaH));
         }
-
         boxElement.style.left = `${newLeft}px`;
         boxElement.style.top = `${newTop}px`;
         boxElement.style.width = `${newW}px`;
@@ -683,13 +820,10 @@
       } else if (mode === 'drag') {
         let newX = startLeft + dx;
         let newY = startTop + dy;
-
         const maxLeft = boundRight - startW;
         const maxTop = boundBottom - startH;
-
         newX = Math.max(boundLeft, Math.min(newX, maxLeft));
         newY = Math.max(boundTop, Math.min(newY, maxTop));
-
         boxElement.style.left = `${newX}px`;
         boxElement.style.top = `${newY}px`;
       }
@@ -698,9 +832,8 @@
 
     const onEnd = () => {
       mode = null;
-      // Remove 'interacting' class to show triangle again
       boxElement.classList.remove('interacting');
-
+      popoverElement.classList.remove('interacting');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
@@ -708,12 +841,11 @@
     };
 
     boxElement.addEventListener('mousedown', onStart);
-    boxElement.addEventListener('touchstart', onStart, { passive: false });
+    boxElement.addEventListener('touchstart', onStart, {passive: false});
   }
 
   /**
-   * Submits the created note data to the Danbooru API.
-   * Fetches image dimensions if necessary and handles CSRF tokens.
+   * Submits the note creation and updates tags if changed.
    */
   async function submitNote() {
     const img = document.querySelector('#image');
@@ -728,62 +860,93 @@
     const postId = postIdMatch ? postIdMatch[1] : document.body.dataset.postId;
     const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
 
-    let originalWidth = img.naturalWidth;
-    let originalHeight = img.naturalHeight;
-
-    try {
-      const infoRes = await fetch(`/posts/${postId}.json`);
-      if (infoRes.ok) {
-        const data = await infoRes.json();
-        originalWidth = data.image_width;
-        originalHeight = data.image_height;
-      }
-    } catch (e) {
-      if (document.body.dataset.postWidth) {
-        originalWidth = parseInt(document.body.dataset.postWidth, 10);
-        originalHeight = parseInt(document.body.dataset.postHeight, 10);
-      }
+    // Fetch dimensions if not available
+    if (!postOriginalWidth || !postOriginalHeight) {
+      await fetchPostData(false);
     }
+
+    const originalWidth = postOriginalWidth || img.naturalWidth;
+    const originalHeight = postOriginalHeight || img.naturalHeight;
 
     const imgRect = img.getBoundingClientRect();
     const scaleX = originalWidth / imgRect.width;
     const scaleY = originalHeight / imgRect.height;
-
     const relX = boxRect.left - imgRect.left;
     const relY = boxRect.top - imgRect.top;
-
     const finalX = Math.round(relX * scaleX);
     const finalY = Math.round(relY * scaleY);
     const finalW = Math.round(boxRect.width * scaleX);
     const finalH = Math.round(boxRect.height * scaleY);
 
     if (finalX < 0 || finalY < 0) {
-      showToast('⚠️ Out of image bounds.');
+      showToast('⚠️ Out of bounds');
       btn.innerHTML = originHtml;
       return;
     }
 
-    const formData = new FormData();
-    formData.append('authenticity_token', csrfToken);
-    formData.append('note[post_id]', postId);
-    formData.append('note[x]', finalX);
-    formData.append('note[y]', finalY);
-    formData.append('note[width]', finalW);
-    formData.append('note[height]', finalH);
-    formData.append('note[body]', "<i>It's needs to be edited.</i>");
+    let noteBody = inputElement.value.trim();
+    if (!noteBody) noteBody = 'Translation requested';
+
+    const noteFormData = new FormData();
+    noteFormData.append('authenticity_token', csrfToken);
+    noteFormData.append('note[post_id]', postId);
+    noteFormData.append('note[x]', finalX);
+    noteFormData.append('note[y]', finalY);
+    noteFormData.append('note[width]', finalW);
+    noteFormData.append('note[height]', finalH);
+    noteFormData.append('note[body]', noteBody);
+
+    const getChecked = (id) =>
+        document.getElementById(`dmna-tag-${id}`)?.checked;
 
     try {
-      const res = await fetch('/notes', {
+      const promises = [];
+      promises.push(fetch('/notes', {
         method: 'POST',
-        headers: { 'X-CSRF-Token': csrfToken },
-        body: formData,
-      });
+        headers: {'X-CSRF-Token': csrfToken},
+        body: noteFormData,
+      }));
 
-      if (res.ok) {
-        showToast('✅ Note created! Reloading...');
+      // Safe Sync logic for tags
+      if (hasTagChanges()) {
+        const latestTagSet = await fetchPostData(false);
+        if (latestTagSet) {
+          const processTag = (id, tagName) => {
+            if (getChecked(id)) latestTagSet.add(tagName);
+            else latestTagSet.delete(tagName);
+          };
+          processTag('translated', TAG_MAP.translated);
+          processTag('request', TAG_MAP.request);
+          processTag('check', TAG_MAP.check);
+          processTag('partial', TAG_MAP.partial);
+
+          const newTagString = Array.from(latestTagSet).join(' ');
+
+          const tagFormData = new FormData();
+          tagFormData.append('authenticity_token', csrfToken);
+          tagFormData.append('post[tag_string]', newTagString);
+
+          promises.push(fetch(`/posts/${postId}.json`, {
+            method: 'PUT',
+            headers: {'X-CSRF-Token': csrfToken},
+            body: tagFormData,
+          }));
+        }
+      } else {
+        console.log('No tag changes detected. Skipping tag update.');
+      }
+
+      const results = await Promise.all(promises);
+      const allOk = results.every((r) => r.ok);
+
+      if (allOk) {
+        if (getChecked('translated')) {
+          localStorage.setItem(STATE_KEY, 'false');
+        }
+        showToast('✅ Saved! Reloading...');
         setTimeout(() => location.reload(), 800);
       } else {
-        throw new Error('Server Error');
+        throw new Error('Server returned error');
       }
     } catch (err) {
       showToast('Error: ' + err.message);
@@ -791,7 +954,6 @@
     }
   }
 
-  // Run initialization
   init();
   setTimeout(init, 1000);
 })();
