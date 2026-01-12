@@ -2,7 +2,7 @@
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
 // @version      2.0
-// @description  Assist creating notes on mobile
+// @description  Assist creating notes on mobile. 
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
 // @icon         https://danbooru.donmai.us/favicon.ico
@@ -446,40 +446,6 @@
   }
 
   /**
-   * Sets up mutually exclusive logic for the tag toggles.
-   */
-  function setupTagLogic() {
-    const tTranslated = document.getElementById('dmna-tag-translated');
-    const tRequest = document.getElementById('dmna-tag-request');
-    const tPartial = document.getElementById('dmna-tag-partial');
-
-    if (tTranslated) {
-      tTranslated.addEventListener('change', () => {
-        if (tTranslated.checked) {
-          if (tRequest) tRequest.checked = false;
-          if (tPartial) tPartial.checked = false;
-        }
-      });
-    }
-    if (tRequest) {
-      tRequest.addEventListener('change', () => {
-        if (tRequest.checked) {
-          if (tTranslated) tTranslated.checked = false;
-          if (tPartial) tPartial.checked = false;
-        }
-      });
-    }
-    if (tPartial) {
-      tPartial.addEventListener('change', () => {
-        if (tPartial.checked) {
-          if (tTranslated) tTranslated.checked = false;
-          if (tRequest) tRequest.checked = false;
-        }
-      });
-    }
-  }
-
-  /**
    * Creates the main UI elements.
    */
   function createUI() {
@@ -541,7 +507,6 @@
     inputElement = document.getElementById('dmna-input');
 
     updateToggleStates();
-    setupTagLogic();
 
     setupDragAndResize();
     document.getElementById('dmna-ok').addEventListener('click', submitNote);
@@ -718,6 +683,7 @@
     const rect = boxElement.getBoundingClientRect();
     const boxCenterX = rect.left + window.scrollX + (rect.width / 2);
     const boxBottomY = rect.top + window.scrollY + rect.height;
+
     const popoverWidth = 230;
 
     const screenW = window.innerWidth;
