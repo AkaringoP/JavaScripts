@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.1
-// @description  Assist creating translation notes with accurate scaling, safe tag sync, and touch/mouse support.
+// @version      2.2
+// @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
 // @icon         https://danbooru.donmai.us/favicon.ico
@@ -19,11 +19,11 @@
   const STATE_KEY = 'dmna_enabled';
   const POS_KEY = 'dmna_btn_margin_y';
   const INITIAL_SIZE_RATIO = 0.10;
-
+  
   const MIN_BOX_SIZE = 15;
   const MIN_INITIAL_SIZE = 30;
   const MAX_INITIAL_SIZE = 150;
-
+  
   const LONG_PRESS_DURATION = 1500;
   const BTN_SIZE = 40;
   const BTN_MARGIN_X = 20;
@@ -61,6 +61,8 @@
   let toastElement = null;
   let toastTimer = null;
   let viewportRaf = null;
+  
+  let debugFadeTimer = null;
 
   let allPostTags = new Set();
   let postOriginalWidth = 0;
@@ -74,7 +76,7 @@
   const STYLES = `
     :root {
       --touch-inner: 25%;
-      --touch-outer: 30px;
+      --touch-outer: 30px; 
     }
 
     /* Main Blue Box */
@@ -87,14 +89,12 @@
       display: none;
     }
 
-    /* * [UPDATED v4.0] Visual Triangle (SE Corner)
-     * Max size reduced to 6px (50% of previous 12px)
-     */
+    /* Visual Triangle (Max 6px) */
     #dmna-box::before {
       content: ''; position: absolute;
       right: 0; bottom: 0;
       width: 30%; height: 30%;
-      max-width: 6px; max-height: 6px; /* Reduced Max Size */
+      max-width: 6px; max-height: 6px;
       aspect-ratio: 1 / 1;
       background: linear-gradient(to top left, #0073ff 50%, transparent 50%);
       z-index: 9991; pointer-events: none;
@@ -102,42 +102,41 @@
     }
     #dmna-box.interacting::before { opacity: 0; }
 
-    /* Debug Visualization & Icons */
+    /* --- Debug Visualization Logic --- */
     .dmna-handle::after {
       content: attr(data-icon);
       position: absolute;
-
       width: calc(var(--touch-inner) + var(--touch-outer));
       height: calc(var(--touch-inner) + var(--touch-outer));
-
       display: flex; align-items: center; justify-content: center;
       font-size: 16px; font-weight: bold;
+      z-index: 9995;
+      
+      background-color: transparent;
+      border: 1px solid transparent;
+      color: transparent;
+      text-shadow: none;
+      
+      transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+    }
 
+    #dmna-box.show-debug .dmna-handle::after {
+      background-color: rgba(255, 0, 0, 0.2);
+      border-color: rgba(255, 255, 255, 0.3);
       color: #e0e0e0;
       text-shadow: 0 0 2px rgba(0,0,0,0.3);
-      background-color: rgba(255, 0, 0, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      border-radius: 4px;
-
-      transition: background-color 0.2s, border-color 0.2s, color 0.2s;
-      z-index: 9995;
     }
 
     #dmna-box.interacting .dmna-handle::after {
-      background-color: transparent;
-      border-color: transparent;
-      color: transparent;
-      text-shadow: none;
+      background-color: transparent !important;
+      border-color: transparent !important;
+      color: transparent !important;
+      text-shadow: none !important;
     }
 
     /* --- Handle Positions --- */
-
-    /* SE (Bottom-Right) Handle - Shifted Up */
     #dmna-resize-se { position: absolute; right: 0; bottom: 0; width: 0; height: 0; cursor: nwse-resize; }
-    #dmna-resize-se::after {
-      right: calc(var(--touch-outer) * -1);
-      bottom: calc((var(--touch-outer) * -1) + 15px);
-    }
+    #dmna-resize-se::after { right: calc(var(--touch-outer) * -1); bottom: calc((var(--touch-outer) * -1) + 15px); }
 
     #dmna-resize-nw { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: nwse-resize; }
     #dmna-resize-nw::after { left: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
@@ -158,6 +157,7 @@
       --arrow-offset: 0px; color: #fff;
       transition: opacity 0.2s ease; opacity: 1;
       transform-origin: top center;
+      box-sizing: border-box;
     }
     #dmna-popover.interacting { opacity: 0.2; }
 
@@ -168,13 +168,32 @@
       border-color: transparent transparent #1f232b transparent;
     }
 
+    /* Input Row Container */
+    .dmna-input-row {
+      display: flex; gap: 8px; align-items: center; width: 100%;
+    }
+
     #dmna-input {
-      width: 100%; height: 36px;
+      flex: 1;
+      min-width: 0; /* Prevents overflow */
+      height: 36px;
       background: #2c323d; border: 1px solid #3e4451; color: white;
       border-radius: 6px; padding: 6px; font-size: 14px; resize: none;
       box-sizing: border-box; font-family: sans-serif;
     }
     #dmna-input:focus { outline: 2px solid #0073ff; border-color: transparent; }
+
+    /* Eye Button */
+    #dmna-eye-btn {
+      flex: 0 0 36px;
+      width: 36px; height: 36px;
+      display: flex; align-items: center; justify-content: center;
+      background: #2c323d; border: 1px solid #3e4451; border-radius: 6px;
+      font-size: 18px; cursor: pointer; user-select: none;
+      transition: background 0.2s;
+      box-sizing: border-box;
+    }
+    #dmna-eye-btn:active { background: #3e4451; }
 
     #dmna-tags { display: flex; flex-direction: column; gap: 8px; margin: 4px 0; }
     .dmna-toggle-row { display: flex; justify-content: space-between; align-items: center; }
@@ -194,10 +213,7 @@
     input:checked + .dmna-slider { background-color: #0073ff; }
     input:checked + .dmna-slider:before { transform: translateX(16px); }
 
-    .dmna-btn-group {
-      display: flex; gap: 10px; justify-content: space-around;
-      width: 100%; margin-top: 4px;
-    }
+    .dmna-btn-group { display: flex; gap: 10px; justify-content: space-around; width: 100%; margin-top: 4px; }
     .dmna-btn {
       width: 100%; height: 36px; border-radius: 8px; border: none;
       font-size: 18px; display: flex; align-items: center; justify-content: center;
@@ -469,6 +485,24 @@
     });
   }
 
+  function showDebugZones(duration = 0) {
+    if (!boxElement) return;
+    boxElement.classList.add('show-debug');
+    if (debugFadeTimer) clearTimeout(debugFadeTimer);
+    
+    if (duration > 0) {
+      debugFadeTimer = setTimeout(() => {
+        boxElement.classList.remove('show-debug');
+      }, duration);
+    }
+  }
+
+  function hideDebugZones() {
+    if (!boxElement) return;
+    if (debugFadeTimer) clearTimeout(debugFadeTimer);
+    boxElement.classList.remove('show-debug');
+  }
+
   function createUI() {
     if (document.getElementById('dmna-box')) return;
 
@@ -491,7 +525,7 @@
 
     boxElement = document.createElement('div');
     boxElement.id = 'dmna-box';
-
+    
     handleSE = document.createElement('div');
     handleSE.id = 'dmna-resize-se';
     handleSE.className = 'dmna-handle';
@@ -522,8 +556,11 @@
     popoverElement.id = 'dmna-popover';
 
     popoverElement.innerHTML = `
-      <textarea id="dmna-input" placeholder="Note text..." rows="1"></textarea>
-
+      <div class="dmna-input-row">
+        <textarea id="dmna-input" placeholder="Enter note..." rows="1"></textarea>
+        <div id="dmna-eye-btn">👁️</div>
+      </div>
+      
       <div id="dmna-tags">
         ${createToggleRow('translated', 'Translated')}
         ${createToggleRow('request', 'Translation request')}
@@ -539,6 +576,19 @@
     document.body.appendChild(popoverElement);
 
     inputElement = document.getElementById('dmna-input');
+
+    // Setup Eye Button Interactions
+    const eyeBtn = document.getElementById('dmna-eye-btn');
+    if (eyeBtn) {
+      const startShow = (e) => { e.preventDefault(); showDebugZones(); };
+      const stopShow = (e) => { e.preventDefault(); hideDebugZones(); };
+      
+      eyeBtn.addEventListener('touchstart', startShow);
+      eyeBtn.addEventListener('touchend', stopShow);
+      eyeBtn.addEventListener('mousedown', startShow);
+      eyeBtn.addEventListener('mouseup', stopShow);
+      eyeBtn.addEventListener('mouseleave', stopShow);
+    }
 
     updateToggleStates();
     setupTagLogic();
@@ -559,7 +609,7 @@
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
       dragStartY = clientY;
       dragStartMarginY = userBtnMarginY;
-
+      
       longPressTimer = setTimeout(() => {
         if (isPressing) {
           isDraggingBtn = true;
@@ -576,7 +626,7 @@
         e.stopPropagation();
       }
       if (!isPressing) return;
-
+      
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
       if (isDraggingBtn) {
         const dy = clientY - dragStartY;
@@ -692,6 +742,8 @@
 
     if (inputElement) inputElement.value = '';
 
+    showDebugZones(1500);
+
     updateToggleStates();
     captureInitialToggleState();
     updatePopoverPosition();
@@ -720,12 +772,8 @@
 
     popoverElement.style.left = `${clampedX}px`;
     popoverElement.style.top = `${boxBottomY}px`;
-    // Position exactly 10px below to match the arrow height
     popoverElement.style.transform = `translateX(-50%) translateY(10px) scale(${invScale})`;
-
-    // Anchor to arrow tip
     popoverElement.style.transformOrigin = `calc(50% + ${arrowOffset}px) -10px`;
-
     popoverElement.style.setProperty('--arrow-offset', `${arrowOffset}px`);
     popoverElement.style.display = 'flex';
   }
@@ -948,3 +996,4 @@
   init();
   setTimeout(init, 1000);
 })();
+
