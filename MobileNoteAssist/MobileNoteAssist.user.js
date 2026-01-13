@@ -19,11 +19,12 @@
   const STATE_KEY = 'dmna_enabled';
   const POS_KEY = 'dmna_btn_margin_y';
   const INITIAL_SIZE_RATIO = 0.10;
+
   const MIN_BOX_SIZE = 15;
   const MIN_INITIAL_SIZE = 30;
   const MAX_INITIAL_SIZE = 150;
-  const LONG_PRESS_DURATION = 1500;
 
+  const LONG_PRESS_DURATION = 1500;
   const BTN_SIZE = 40;
   const BTN_MARGIN_X = 20;
   const DEFAULT_BTN_MARGIN_Y = 80;
@@ -76,6 +77,7 @@
       --touch-outer: 30px;
     }
 
+    /* Main Blue Box */
     #dmna-box {
       position: absolute; width: 50px; height: 50px;
       border: 1.2px solid #0073ff; background-color: rgba(0, 115, 255, 0.15);
@@ -85,27 +87,38 @@
       display: none;
     }
 
+    /* * [UPDATED v4.0] Visual Triangle (SE Corner)
+     * Max size reduced to 6px (50% of previous 12px)
+     */
     #dmna-box::before {
       content: ''; position: absolute;
-      right: 0; bottom: 0; width: 10px; height: 10px;
+      right: 0; bottom: 0;
+      width: 30%; height: 30%;
+      max-width: 6px; max-height: 6px; /* Reduced Max Size */
+      aspect-ratio: 1 / 1;
       background: linear-gradient(to top left, #0073ff 50%, transparent 50%);
       z-index: 9991; pointer-events: none;
       transition: opacity 0.2s;
     }
     #dmna-box.interacting::before { opacity: 0; }
 
+    /* Debug Visualization & Icons */
     .dmna-handle::after {
       content: attr(data-icon);
       position: absolute;
+
       width: calc(var(--touch-inner) + var(--touch-outer));
       height: calc(var(--touch-inner) + var(--touch-outer));
+
       display: flex; align-items: center; justify-content: center;
       font-size: 16px; font-weight: bold;
+
       color: #e0e0e0;
       text-shadow: 0 0 2px rgba(0,0,0,0.3);
       background-color: rgba(255, 0, 0, 0.2);
       border: 1px solid rgba(255, 255, 255, 0.3);
       border-radius: 4px;
+
       transition: background-color 0.2s, border-color 0.2s, color 0.2s;
       z-index: 9995;
     }
@@ -117,8 +130,14 @@
       text-shadow: none;
     }
 
+    /* --- Handle Positions --- */
+
+    /* SE (Bottom-Right) Handle - Shifted Up */
     #dmna-resize-se { position: absolute; right: 0; bottom: 0; width: 0; height: 0; cursor: nwse-resize; }
-    #dmna-resize-se::after { right: calc(var(--touch-outer) * -1); bottom: calc(var(--touch-outer) * -1); }
+    #dmna-resize-se::after {
+      right: calc(var(--touch-outer) * -1);
+      bottom: calc((var(--touch-outer) * -1) + 15px);
+    }
 
     #dmna-resize-nw { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: nwse-resize; }
     #dmna-resize-nw::after { left: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
@@ -129,6 +148,7 @@
     #dmna-drag-ne { position: absolute; right: 0; top: 0; width: 0; height: 0; cursor: move; }
     #dmna-drag-ne::after { right: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
 
+    /* Popover UI */
     #dmna-popover {
       position: absolute; z-index: 9992;
       display: none; flex-direction: column; gap: 10px;
@@ -174,7 +194,10 @@
     input:checked + .dmna-slider { background-color: #0073ff; }
     input:checked + .dmna-slider:before { transform: translateX(16px); }
 
-    .dmna-btn-group { display: flex; gap: 10px; justify-content: space-around; width: 100%; margin-top: 4px; }
+    .dmna-btn-group {
+      display: flex; gap: 10px; justify-content: space-around;
+      width: 100%; margin-top: 4px;
+    }
     .dmna-btn {
       width: 100%; height: 36px; border-radius: 8px; border: none;
       font-size: 18px; display: flex; align-items: center; justify-content: center;
@@ -424,7 +447,6 @@
     const tCheck = document.getElementById('dmna-tag-check');
     const tPartial = document.getElementById('dmna-tag-partial');
 
-    // 1. Translated ON -> Others OFF
     if (tTranslated) {
       tTranslated.addEventListener('change', () => {
         if (tTranslated.checked) {
@@ -435,7 +457,6 @@
       });
     }
 
-    // 2. Others ON -> Translated OFF
     const others = [tRequest, tCheck, tPartial];
     others.forEach(el => {
       if (el) {
@@ -471,29 +492,28 @@
     boxElement = document.createElement('div');
     boxElement.id = 'dmna-box';
 
-    // Create handles with specific classes and data-icon attributes
     handleSE = document.createElement('div');
     handleSE.id = 'dmna-resize-se';
     handleSE.className = 'dmna-handle';
-    handleSE.setAttribute('data-icon', '↘'); // Resize Icon
+    handleSE.setAttribute('data-icon', '↘');
     boxElement.appendChild(handleSE);
 
     handleNW = document.createElement('div');
     handleNW.id = 'dmna-resize-nw';
     handleNW.className = 'dmna-handle';
-    handleNW.setAttribute('data-icon', '↖'); // Resize Icon
+    handleNW.setAttribute('data-icon', '↖');
     boxElement.appendChild(handleNW);
 
     handleSW = document.createElement('div');
     handleSW.id = 'dmna-drag-sw';
     handleSW.className = 'dmna-handle';
-    handleSW.setAttribute('data-icon', '✥'); // Move Icon
+    handleSW.setAttribute('data-icon', '✥');
     boxElement.appendChild(handleSW);
 
     handleNE = document.createElement('div');
     handleNE.id = 'dmna-drag-ne';
     handleNE.className = 'dmna-handle';
-    handleNE.setAttribute('data-icon', '✥'); // Move Icon
+    handleNE.setAttribute('data-icon', '✥');
     boxElement.appendChild(handleNE);
 
     document.body.appendChild(boxElement);
@@ -531,7 +551,6 @@
     });
   }
 
-  // Updated to support Mouse Events as well
   function setupButtonInteractions(btn) {
     const handleStart = (e) => {
       if (e.type === 'touchstart') e.preventDefault();
@@ -583,7 +602,6 @@
         btn.classList.remove('dragging');
         localStorage.setItem(POS_KEY, userBtnMarginY);
       } else {
-        // Toggle if it wasn't a drag
         if (Math.abs((e.type.startsWith('touch') ? e.changedTouches[0].clientY : e.clientY) - dragStartY) < 10) {
             toggleState();
         }
@@ -593,8 +611,6 @@
     btn.addEventListener('touchstart', handleStart, {passive: false});
     btn.addEventListener('touchmove', handleMove, {passive: false});
     btn.addEventListener('touchend', handleEnd);
-
-    // PC Support
     btn.addEventListener('mousedown', handleStart);
     document.addEventListener('mousemove', (e) => { if(isPressing) handleMove(e); });
     btn.addEventListener('mouseup', handleEnd);
@@ -704,8 +720,11 @@
 
     popoverElement.style.left = `${clampedX}px`;
     popoverElement.style.top = `${boxBottomY}px`;
+    // Position exactly 10px below to match the arrow height
     popoverElement.style.transform = `translateX(-50%) translateY(10px) scale(${invScale})`;
-    popoverElement.style.transformOrigin = `calc(50% + ${arrowOffset}px) top`;
+
+    // Anchor to arrow tip
+    popoverElement.style.transformOrigin = `calc(50% + ${arrowOffset}px) -10px`;
 
     popoverElement.style.setProperty('--arrow-offset', `${arrowOffset}px`);
     popoverElement.style.display = 'flex';
