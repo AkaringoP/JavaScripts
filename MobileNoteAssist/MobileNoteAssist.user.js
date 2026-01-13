@@ -135,14 +135,22 @@
     }
 
     /* --- Handle Positions --- */
+    /* SE (Bottom-Right) - Shifted Up */
     #dmna-resize-se { position: absolute; right: 0; bottom: 0; width: 0; height: 0; cursor: nwse-resize; }
-    #dmna-resize-se::after { right: calc(var(--touch-outer) * -1); bottom: calc((var(--touch-outer) * -1) + 15px); }
+    #dmna-resize-se::after { 
+        right: calc(var(--touch-outer) * -1); 
+        bottom: calc((var(--touch-outer) * -1) + 15px); 
+    }
 
     #dmna-resize-nw { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: nwse-resize; }
     #dmna-resize-nw::after { left: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
 
+    /* SW (Bottom-Left) - Shifted Up (Requested Fix) */
     #dmna-drag-sw { position: absolute; left: 0; bottom: 0; width: 0; height: 0; cursor: move; }
-    #dmna-drag-sw::after { left: calc(var(--touch-outer) * -1); bottom: calc(var(--touch-outer) * -1); }
+    #dmna-drag-sw::after { 
+        left: calc(var(--touch-outer) * -1); 
+        bottom: calc((var(--touch-outer) * -1) + 15px); 
+    }
 
     #dmna-drag-ne { position: absolute; right: 0; top: 0; width: 0; height: 0; cursor: move; }
     #dmna-drag-ne::after { right: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
@@ -175,7 +183,7 @@
 
     #dmna-input {
       flex: 1;
-      min-width: 0; /* Prevents overflow */
+      min-width: 0;
       height: 36px;
       background: #2c323d; border: 1px solid #3e4451; color: white;
       border-radius: 6px; padding: 6px; font-size: 14px; resize: none;
