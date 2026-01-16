@@ -3443,6 +3443,115 @@
       }
     }
 
+    /**
+     * Shows a secondary modal (popover) on top of the dashboard.
+     * @param {string} title The title of the modal.
+     * @param {string} contentHtml The HTML content to display.
+     */
+    showSubModal(title, contentHtml) {
+      let subOverlay = document.getElementById(`${this.modalId}-sub-overlay`);
+
+      // Remove existing if any (simplifies logic)
+      if (subOverlay) {
+        subOverlay.remove();
+      }
+
+      subOverlay = document.createElement('div');
+      subOverlay.id = `${this.modalId}-sub-overlay`;
+
+      // Styles are inline for simplicity or we can inject them.
+      // Replicating overlay style with higher z-index
+      Object.assign(subOverlay.style, {
+        position: 'fixed',
+        top: '0',
+        left: '0',
+        width: '100%',
+        height: '100%',
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+        backdropFilter: 'blur(2px)',
+        zIndex: '11000', // Higher than main modal (10000)
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: '0',
+        transition: 'opacity 0.2s ease',
+        cursor: 'default' // reset cursor
+      });
+
+      const subWindow = document.createElement('div');
+      Object.assign(subWindow.style, {
+        backgroundColor: '#fff',
+        borderRadius: '12px',
+        boxShadow: '0 10px 25px rgba(0,0,0,0.2)',
+        width: '90%',
+        maxWidth: '800px', // Smaller than main dashboard
+        maxHeight: '90vh',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        transform: 'scale(0.95)',
+        transition: 'transform 0.2s ease'
+      });
+
+      // Header
+      const header = document.createElement('div');
+      Object.assign(header.style, {
+        padding: '15px 20px',
+        borderBottom: '1px solid #eee',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        backgroundColor: '#f9f9f9'
+      });
+
+      header.innerHTML = `<h3 style="margin:0; font-size:1.2em; color:#333;">${title}</h3>`;
+
+      const closeBtn = document.createElement('button');
+      closeBtn.innerHTML = '&times;';
+      Object.assign(closeBtn.style, {
+        background: 'none',
+        border: 'none',
+        fontSize: '1.5em',
+        lineHeight: '1',
+        cursor: 'pointer',
+        color: '#666'
+      });
+      closeBtn.onclick = () => closeSubModal();
+      header.appendChild(closeBtn);
+      subWindow.appendChild(header);
+
+      // Content
+      const contentDiv = document.createElement('div');
+      Object.assign(contentDiv.style, {
+        padding: '20px',
+        overflowY: 'auto'
+      });
+      contentDiv.innerHTML = contentHtml;
+      subWindow.appendChild(contentDiv);
+
+      subOverlay.appendChild(subWindow);
+      document.body.appendChild(subOverlay);
+
+      // Animation Entry
+      requestAnimationFrame(() => {
+        subOverlay.style.opacity = '1';
+        subWindow.style.transform = 'scale(1)';
+      });
+
+      // Close logic
+      const closeSubModal = () => {
+        subOverlay.style.opacity = '0';
+        subWindow.style.transform = 'scale(0.95)';
+        setTimeout(() => {
+          if (subOverlay.parentElement) subOverlay.remove();
+        }, 200);
+      };
+
+      subOverlay.addEventListener('click', (e) => {
+        if (e.target === subOverlay) closeSubModal();
+      });
+    }
+
     async renderDashboard() {
       const content = document.getElementById(`${this.modalId}-content`);
       if (!content) return;
@@ -4037,63 +4146,20 @@
             d3.select(this).transition().duration(200).attr('d', arc).style('opacity', '0.9').style('filter', 'none');
             tooltip.style("opacity", 0);
           })
-          .on('click', function (event, d) {
-            // Click action: open search page
-            // user:{name} {tag}
-            // except for "Others"
+          .on('click', (event, d) => {
+            // Click action: open sub-modal
             if (d.data.details.isOther) return;
-            const user = contextUser;
 
-            let query = '';
-            if (currentPieTab === 'rating') {
-              // rating:q
-              query = `rating:${d.data.details.rating}`;
-            } else if (currentPieTab === 'breasts') {
-              // user:{name} {tag} (reconstruct tag from label)
-              // Label is "Flat Chest".
-              // Original logic had tag... but we formatted it.
-              // Let's store original tag in details if possible?
-              // The label was "Flat Chest". We can lower case and replace space with underscore
-              const tag = d.data.label.toLowerCase().replace(/ /g, '_');
-              query = `user:${user.name.replace(/ /g, '_')} ${tag}`;
-            } else {
-              // character or copyright or fav_copyright
-              // d.data.details.tagName is set for these
-              if (currentPieTab === 'fav_copyright') {
-                // For fav_copyright, we need to query ordfav:{user} + {tag}
-                // But wait, the window open should probably just search for posts with that tag?
-                // User asked for "Fav_Copy chart".
-                // If I click a slice "Idolmaster", I expect to see User's Favs of Idolmaster.
-                // So query = `ordfav:${user.name} ${tagName}`.
-                // The default logic below uses `user:${user.name} ${query}`.
-                // So I need to handle the prefix differently.
-              }
-
-              if (currentPieTab === 'fav_copyright') {
-                query = `ordfav:${user.name} ${d.data.details.tagName || d.data.label}`;
-                // Open directly, bypassing the standard user:name prefix logic used below
-                const targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
-                window.open(targetUrl, '_blank');
-                return;
-              }
-
-              query = d.data.details.tagName || d.data.label;
-            }
-
-            // Base User
-            // Use closure variable or safe access
-            // this.context is available in renderDashboard, but inside d3 'function' logic 'this' is element.
-            // We can access 'pieData.user' if we set it, BUT we can also just use the valid closure scope if we are careful.
-            // Best to just use the variable we have access to from renderDashboard scope.
-            // However, 'this' in renderDashboard is the app.
-
-            // Let's rely on a strictly passed user object or global fallback.
-            // Actually, simplest is to capture it outside.
-            // user previously defined
-
-
-            const targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name} ${query}`)}`;
-            window.open(targetUrl, '_blank');
+            const title = `${d.data.label} Details`;
+            // Placeholder content for now
+            const content = `
+                <div style="padding:20px; text-align:center; color:#666;">
+                    <div style="font-size:2em; margin-bottom:10px;">📊</div>
+                    <div style="font-size:1.2em; font-weight:bold;">Character Bubble Chart</div>
+                    <div>Coming Soon for ${d.data.label}...</div>
+                </div>
+            `;
+            this.showSubModal(title, content);
           });
 
         container.appendChild(chartWrapper);
@@ -4131,11 +4197,36 @@
             ? Math.round((d.value / totalValue) * 100) + '%'
             : (d.value * 100).toFixed(1) + '%';
 
+          // Generate Link
+          let targetUrl = '#';
+          const user = contextUser;
+          let query = '';
+
+          if (!d.details.isOther) {
+            if (currentPieTab === 'rating') {
+              query = `rating:${d.details.rating}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name} ${query}`)}`;
+            } else if (currentPieTab === 'breasts') {
+              const tag = d.label.toLowerCase().replace(/ /g, '_');
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name.replace(/ /g, '_')} ${tag}`)}`;
+            } else if (currentPieTab === 'fav_copyright') {
+              query = `ordfav:${user.name} ${d.details.tagName || d.label}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
+            } else {
+              // character / copyright
+              query = d.details.tagName || d.label;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name} ${query}`)}`;
+            }
+          }
+
           return `
                  <div style="display:flex; align-items:center; font-size:0.85em; margin-bottom:5px;">
                     <div style="width:12px; height:12px; background:${d.color}; border-radius:2px; margin-right:8px; border:1px solid rgba(0,0,0,0.1); flex-shrink:0;"></div>
-                    <div style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.label}">${d.label}</div>
-                    <div style="font-weight:bold; color:#333;">${pct}</div>
+                    ${d.details.isOther
+              ? `<div style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.label}">${d.label}</div>`
+              : `<a href="${targetUrl}" target="_blank" style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:none;" title="${d.label}" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${d.label}</a>`
+            }
+                    <div style="font-weight:bold; color:#333; margin-left:auto;">${pct}</div>
                  </div>`;
         }).join('')}
          `;
