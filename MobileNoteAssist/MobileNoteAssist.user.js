@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -16,20 +16,43 @@
   // Constants & Configuration
   // --------------------------------------------------------------------------
 
+  /** @const {string} Key for local storage state. */
   const STATE_KEY = 'dmna_enabled';
+
+  /** @const {string} Key for local storage button position. */
   const POS_KEY = 'dmna_btn_margin_y';
+
+  /** @const {number} Ratio of the note box relative to the image size (0.1 = 10%). */
   const INITIAL_SIZE_RATIO = 0.10;
-  
+
+  /** @const {number} Minimum size of the note box in pixels. */
   const MIN_BOX_SIZE = 15;
+
+  /** @const {number} Minimum initial size of the note box in pixels. */
   const MIN_INITIAL_SIZE = 30;
+
+  /** @const {number} Maximum initial size of the note box in pixels. */
   const MAX_INITIAL_SIZE = 150;
-  
+
+  /** @const {number} Duration in ms to trigger long-press actions. */
   const LONG_PRESS_DURATION = 1500;
+
+  /** @const {number} Floating button size in pixels. */
   const BTN_SIZE = 40;
+
+  /** @const {number} Horizontal margin for the floating button. */
   const BTN_MARGIN_X = 20;
+
+  /** @const {number} Default vertical margin for the floating button. */
   const DEFAULT_BTN_MARGIN_Y = 80;
+
+  /** @const {number} Bottom margin for the toast message. */
   const TOAST_MARGIN_BOTTOM = 20;
 
+  /**
+   * Mapping of UI IDs to Danbooru tag strings.
+   * @const {Object<string, string>}
+   */
   const TAG_MAP = {
     translated: 'translated',
     request: 'translation_request',
@@ -45,12 +68,20 @@
   let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) ||
       DEFAULT_BTN_MARGIN_Y;
 
+  // Interaction State
   let isDraggingBtn = false;
   let isPressing = false;
   let longPressTimer = null;
   let dragStartY = 0;
   let dragStartMarginY = 0;
 
+  // Box Creation State (for PC Drag)
+  let isCreatingBox = false;
+  let createStartX = 0;
+  let createStartY = 0;
+  let createWasVisible = false;
+
+  // DOM Elements
   let boxElement = null;
   let handleNW = null;
   let handleSE = null;
@@ -59,11 +90,13 @@
   let popoverElement = null;
   let inputElement = null;
   let toastElement = null;
+
+  // Timers & RAF
   let toastTimer = null;
   let viewportRaf = null;
-  
   let debugFadeTimer = null;
 
+  // Data
   let allPostTags = new Set();
   let postOriginalWidth = 0;
   let postOriginalHeight = 0;
@@ -79,7 +112,8 @@
       --touch-outer: 30px; 
     }
 
-    /* Main Blue Box */
+    .dmna-hidden { display: none !important; }
+
     #dmna-box {
       position: absolute; width: 50px; height: 50px;
       border: 1.2px solid #0073ff; background-color: rgba(0, 115, 255, 0.15);
@@ -102,7 +136,7 @@
     }
     #dmna-box.interacting::before { opacity: 0; }
 
-    /* --- Debug Visualization Logic --- */
+    /* Debug Visualization */
     .dmna-handle::after {
       content: attr(data-icon);
       position: absolute;
@@ -111,12 +145,10 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 16px; font-weight: bold;
       z-index: 9995;
-      
       background-color: transparent;
       border: 1px solid transparent;
       color: transparent;
       text-shadow: none;
-      
       transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
     }
 
@@ -134,23 +166,15 @@
       text-shadow: none !important;
     }
 
-    /* --- Handle Positions --- */
-    /* SE (Bottom-Right) - Shifted Up */
+    /* Handle Positions */
     #dmna-resize-se { position: absolute; right: 0; bottom: 0; width: 0; height: 0; cursor: nwse-resize; }
-    #dmna-resize-se::after { 
-        right: calc(var(--touch-outer) * -1); 
-        bottom: calc((var(--touch-outer) * -1) + 15px); 
-    }
+    #dmna-resize-se::after { right: calc(var(--touch-outer) * -1); bottom: calc((var(--touch-outer) * -1) + 15px); }
 
     #dmna-resize-nw { position: absolute; left: 0; top: 0; width: 0; height: 0; cursor: nwse-resize; }
     #dmna-resize-nw::after { left: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
 
-    /* SW (Bottom-Left) - Shifted Up (Requested Fix) */
     #dmna-drag-sw { position: absolute; left: 0; bottom: 0; width: 0; height: 0; cursor: move; }
-    #dmna-drag-sw::after { 
-        left: calc(var(--touch-outer) * -1); 
-        bottom: calc((var(--touch-outer) * -1) + 15px); 
-    }
+    #dmna-drag-sw::after { left: calc(var(--touch-outer) * -1); bottom: calc((var(--touch-outer) * -1) + 15px); }
 
     #dmna-drag-ne { position: absolute; right: 0; top: 0; width: 0; height: 0; cursor: move; }
     #dmna-drag-ne::after { right: calc(var(--touch-outer) * -1); top: calc(var(--touch-outer) * -1); }
@@ -176,30 +200,22 @@
       border-color: transparent transparent #1f232b transparent;
     }
 
-    /* Input Row Container */
-    .dmna-input-row {
-      display: flex; gap: 8px; align-items: center; width: 100%;
-    }
+    .dmna-input-row { display: flex; gap: 8px; align-items: center; width: 100%; }
 
     #dmna-input {
-      flex: 1;
-      min-width: 0;
-      height: 36px;
+      flex: 1; min-width: 0; height: 36px;
       background: #2c323d; border: 1px solid #3e4451; color: white;
       border-radius: 6px; padding: 6px; font-size: 14px; resize: none;
       box-sizing: border-box; font-family: sans-serif;
     }
     #dmna-input:focus { outline: 2px solid #0073ff; border-color: transparent; }
 
-    /* Eye Button */
     #dmna-eye-btn {
-      flex: 0 0 36px;
-      width: 36px; height: 36px;
+      flex: 0 0 36px; width: 36px; height: 36px;
       display: flex; align-items: center; justify-content: center;
       background: #2c323d; border: 1px solid #3e4451; border-radius: 6px;
       font-size: 18px; cursor: pointer; user-select: none;
-      transition: background 0.2s;
-      box-sizing: border-box;
+      transition: background 0.2s; box-sizing: border-box;
     }
     #dmna-eye-btn:active { background: #3e4451; }
 
@@ -209,15 +225,8 @@
 
     .dmna-switch { position: relative; display: inline-block; width: 36px; height: 20px; }
     .dmna-switch input { opacity: 0; width: 0; height: 0; }
-    .dmna-slider {
-      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #555; transition: .3s; border-radius: 20px;
-    }
-    .dmna-slider:before {
-      position: absolute; content: ""; height: 16px; width: 16px;
-      left: 2px; bottom: 2px; background-color: white;
-      transition: .3s; border-radius: 50%;
-    }
+    .dmna-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #555; transition: .3s; border-radius: 20px; }
+    .dmna-slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .3s; border-radius: 50%; }
     input:checked + .dmna-slider { background-color: #0073ff; }
     input:checked + .dmna-slider:before { transform: translateX(16px); }
 
@@ -240,14 +249,10 @@
       z-index: 11000; cursor: pointer; backdrop-filter: blur(2px);
       user-select: none; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
       transform-origin: 0 0; will-change: transform; touch-action: none;
+      transition: opacity 0.2s, visibility 0.2s;
     }
-    #dmna-float-btn.active {
-      background: #0073ff; border-color: white; box-shadow: 0 0 15px #0073ff;
-    }
-    #dmna-float-btn.dragging {
-      background: #ff9800 !important; border-color: #ffe0b2 !important;
-      transform: scale(1.2);
-    }
+    #dmna-float-btn.active { background: #0073ff; border-color: white; box-shadow: 0 0 15px #0073ff; }
+    #dmna-float-btn.dragging { background: #ff9800 !important; border-color: #ffe0b2 !important; transform: scale(1.2); }
 
     #dmna-toast {
       visibility: hidden; min-width: 160px;
@@ -261,10 +266,7 @@
     }
     #dmna-toast.show { visibility: visible; opacity: 1; }
     #dmna-sidebar-link { color: #7b8c9d !important; text-decoration: none; }
-    #dmna-sidebar-link.active {
-      color: #0073ff !important; font-weight: bold;
-      text-shadow: 0 0 8px rgba(0, 115, 255, 0.6);
-    }
+    #dmna-sidebar-link.active { color: #0073ff !important; font-weight: bold; text-shadow: 0 0 8px rgba(0, 115, 255, 0.6); }
     body.dmna-active #image { cursor: crosshair !important; }
   `;
 
@@ -280,6 +282,10 @@
   // Core Functions
   // --------------------------------------------------------------------------
 
+  /**
+   * Displays a toast message to the user.
+   * @param {string} msg The message text to display.
+   */
   function showToast(msg) {
     if (!toastElement) {
       toastElement = document.createElement('div');
@@ -288,7 +294,7 @@
     }
     updateVisualViewportPositions();
     toastElement.textContent = msg;
-    void toastElement.offsetWidth;
+    void toastElement.offsetWidth; // Trigger reflow
     toastElement.className = 'show';
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
@@ -296,6 +302,10 @@
     }, 2500);
   }
 
+  /**
+   * Updates positions of fixed elements (float button, toast) based on the visual viewport.
+   * This is necessary to handle mobile keyboard layout changes and pinch-zooming correctly.
+   */
   function updateVisualViewportPositions() {
     const btn = document.getElementById('dmna-float-btn');
     const toast = document.getElementById('dmna-toast');
@@ -335,6 +345,9 @@
     }
   }
 
+  /**
+   * Initializes the script, binding global events and creating UI.
+   */
   function init() {
     loadTagsFromDOM();
     fetchPostData(true);
@@ -348,6 +361,7 @@
         if (!viewportRaf) {
           viewportRaf = requestAnimationFrame(() => {
             updateVisualViewportPositions();
+            // Also update popover if it's visible to handle zoom changes
             if (boxElement && boxElement.style.display === 'block') {
               updatePopoverPosition();
             }
@@ -369,10 +383,14 @@
       };
     }
 
+    // Bind creation interactions (Click/Drag)
     const img = document.querySelector('#image');
-    if (img) img.addEventListener('click', onImageClick);
+    if (img) setupCreationInteraction(img);
   }
 
+  /**
+   * Attempts to load existing post tags from the DOM as a fallback.
+   */
   function loadTagsFromDOM() {
     let tagString = document.body.dataset.postTags ||
         document.body.dataset.tags || '';
@@ -388,6 +406,11 @@
     }
   }
 
+  /**
+   * Fetches fresh post data (tags and dimensions) from the Danbooru API.
+   * @param {boolean} shouldUpdateUI If true, refreshes the toggle UI after fetching.
+   * @return {Promise<Set<string>|null>} The set of current tags, or null on failure.
+   */
   async function fetchPostData(shouldUpdateUI = false) {
     const postIdMatch = location.pathname.match(/\/posts\/(\d+)/);
     const postId = postIdMatch ? postIdMatch[1] : document.body.dataset.postId;
@@ -418,6 +441,12 @@
     return null;
   }
 
+  /**
+   * Generates the HTML for a toggle switch row.
+   * @param {string} id The identifier for the tag map.
+   * @param {string} label The display label.
+   * @return {string} HTML string.
+   */
   function createToggleRow(id, label) {
     return `
       <div class="dmna-toggle-row">
@@ -430,6 +459,9 @@
     `;
   }
 
+  /**
+   * Updates the checked state of the toggle switches based on `allPostTags`.
+   */
   function updateToggleStates() {
     const setCheck = (id, tag) => {
       const el = document.getElementById(`dmna-tag-${id}`);
@@ -441,6 +473,10 @@
     setCheck('partial', TAG_MAP.partial);
   }
 
+  /**
+   * Captures the initial state of the toggle switches when the popover is opened.
+   * Used to determine if any tag changes need to be submitted.
+   */
   function captureInitialToggleState() {
     initialToggleState = {
       translated: document.getElementById('dmna-tag-translated')?.checked,
@@ -450,6 +486,10 @@
     };
   }
 
+  /**
+   * Checks if the current toggle state differs from the initial state.
+   * @return {boolean} True if changes are detected.
+   */
   function hasTagChanges() {
     const current = {
       translated: document.getElementById('dmna-tag-translated')?.checked,
@@ -465,12 +505,16 @@
     );
   }
 
+  /**
+   * Configures the mutual exclusion logic between 'Translated' and request tags.
+   */
   function setupTagLogic() {
     const tTranslated = document.getElementById('dmna-tag-translated');
     const tRequest = document.getElementById('dmna-tag-request');
     const tCheck = document.getElementById('dmna-tag-check');
     const tPartial = document.getElementById('dmna-tag-partial');
 
+    // 1. Translated ON -> Others OFF
     if (tTranslated) {
       tTranslated.addEventListener('change', () => {
         if (tTranslated.checked) {
@@ -481,8 +525,9 @@
       });
     }
 
+    // 2. Others ON -> Translated OFF
     const others = [tRequest, tCheck, tPartial];
-    others.forEach(el => {
+    others.forEach((el) => {
       if (el) {
         el.addEventListener('change', () => {
           if (el.checked) {
@@ -493,11 +538,15 @@
     });
   }
 
+  /**
+   * Shows the visual debug zones (touch handles) for a limited time.
+   * @param {number} [duration=0] Duration in ms to show the zones. 0 keeps them shown.
+   */
   function showDebugZones(duration = 0) {
     if (!boxElement) return;
     boxElement.classList.add('show-debug');
     if (debugFadeTimer) clearTimeout(debugFadeTimer);
-    
+
     if (duration > 0) {
       debugFadeTimer = setTimeout(() => {
         boxElement.classList.remove('show-debug');
@@ -505,12 +554,18 @@
     }
   }
 
+  /**
+   * Hides the visual debug zones.
+   */
   function hideDebugZones() {
     if (!boxElement) return;
     if (debugFadeTimer) clearTimeout(debugFadeTimer);
     boxElement.classList.remove('show-debug');
   }
 
+  /**
+   * Creates all UI elements (Floating Button, Box, Popover).
+   */
   function createUI() {
     if (document.getElementById('dmna-box')) return;
 
@@ -533,7 +588,7 @@
 
     boxElement = document.createElement('div');
     boxElement.id = 'dmna-box';
-    
+
     handleSE = document.createElement('div');
     handleSE.id = 'dmna-resize-se';
     handleSE.className = 'dmna-handle';
@@ -585,12 +640,42 @@
 
     inputElement = document.getElementById('dmna-input');
 
-    // Setup Eye Button Interactions
+    // Auto-hide floating button when typing
+    if (inputElement) {
+      const floatBtn = document.getElementById('dmna-float-btn');
+      
+      // Use capture to detect focus/blur on ANY input element in the document
+      document.addEventListener('focus', (e) => {
+        const target = e.target;
+        const isTextInput = target.tagName === 'TEXTAREA' ||
+            (target.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'image', 'file', 'range', 'color'].includes(target.type));
+        
+        if (isTextInput && floatBtn) {
+          floatBtn.classList.add('dmna-hidden');
+        }
+      }, true);
+
+      document.addEventListener('blur', (e) => {
+        if (floatBtn) {
+          setTimeout(() => {
+            // Check if focus moved to another text input
+            const active = document.activeElement;
+            const isTextInput = active && (active.tagName === 'TEXTAREA' ||
+                (active.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'image', 'file', 'range', 'color'].includes(active.type)));
+            
+            if (!isTextInput) {
+              floatBtn.classList.remove('dmna-hidden');
+            }
+          }, 100);
+        }
+      }, true);
+    }
+
     const eyeBtn = document.getElementById('dmna-eye-btn');
     if (eyeBtn) {
       const startShow = (e) => { e.preventDefault(); showDebugZones(); };
       const stopShow = (e) => { e.preventDefault(); hideDebugZones(); };
-      
+
       eyeBtn.addEventListener('touchstart', startShow);
       eyeBtn.addEventListener('touchend', stopShow);
       eyeBtn.addEventListener('mousedown', startShow);
@@ -609,6 +694,11 @@
     });
   }
 
+  /**
+   * Configures interaction for the floating button (Move & Toggle).
+   * Supports both Touch and Mouse events.
+   * @param {HTMLElement} btn The floating button element.
+   */
   function setupButtonInteractions(btn) {
     const handleStart = (e) => {
       if (e.type === 'touchstart') e.preventDefault();
@@ -617,7 +707,7 @@
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
       dragStartY = clientY;
       dragStartMarginY = userBtnMarginY;
-      
+
       longPressTimer = setTimeout(() => {
         if (isPressing) {
           isDraggingBtn = true;
@@ -634,7 +724,7 @@
         e.stopPropagation();
       }
       if (!isPressing) return;
-      
+
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
       if (isDraggingBtn) {
         const dy = clientY - dragStartY;
@@ -661,7 +751,7 @@
         localStorage.setItem(POS_KEY, userBtnMarginY);
       } else {
         if (Math.abs((e.type.startsWith('touch') ? e.changedTouches[0].clientY : e.clientY) - dragStartY) < 10) {
-            toggleState();
+          toggleState();
         }
       }
     };
@@ -670,10 +760,13 @@
     btn.addEventListener('touchmove', handleMove, {passive: false});
     btn.addEventListener('touchend', handleEnd);
     btn.addEventListener('mousedown', handleStart);
-    document.addEventListener('mousemove', (e) => { if(isPressing) handleMove(e); });
+    document.addEventListener('mousemove', (e) => { if (isPressing) handleMove(e); });
     btn.addEventListener('mouseup', handleEnd);
   }
 
+  /**
+   * Toggles the script on/off.
+   */
   function toggleState() {
     isEnabled = !isEnabled;
     localStorage.setItem(STATE_KEY, isEnabled);
@@ -687,6 +780,9 @@
     }
   }
 
+  /**
+   * Updates visual state of the floating button and sidebar link.
+   */
   function updateStateUI() {
     const floatBtn = document.getElementById('dmna-float-btn');
     const sidebarLink = document.getElementById('dmna-sidebar-link');
@@ -707,16 +803,117 @@
     }
   }
 
-  function onImageClick(e) {
-    if (!isEnabled) return;
-    if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') ||
-        e.target.closest('#dmna-float-btn')) {
-      return;
-    }
+  /**
+   * Sets up box creation logic on the image.
+   * Handles "Click to Toggle" and "Drag to Create".
+   * @param {HTMLElement} img The target image element.
+   */
+  function setupCreationInteraction(img) {
+    // 1. PC Drag-to-Create
+    img.addEventListener('mousedown', (e) => {
+      if (!isEnabled || e.button !== 0) return;
+      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover')) return;
+      if (e.type.startsWith('touch')) return;
 
+      e.preventDefault();
+      isCreatingBox = true;
+      createStartX = e.pageX;
+      createStartY = e.pageY;
+
+      // Save state before drag starts to handle click-toggle correctly
+      createWasVisible = (boxElement.style.display === 'block');
+
+      document.addEventListener('mousemove', onCreateMove);
+      document.addEventListener('mouseup', onCreateEnd);
+    });
+
+    // 2. Click (Touch & Mouse Click fallthrough)
+    img.addEventListener('click', (e) => {
+      if (!isEnabled) return;
+      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') || e.target.closest('#dmna-float-btn')) return;
+      if (isCreatingBox) return; // Prevent double trigger
+
+      e.preventDefault(); e.stopPropagation();
+
+      // Toggle Logic
+      if (boxElement.style.display === 'block') {
+        hideBox();
+        showToast('Cancelled');
+      } else {
+        spawnDefaultBox(e.pageX, e.pageY);
+      }
+    });
+  }
+
+  /**
+   * Handles mouse movement during box creation drag.
+   * @param {MouseEvent} e
+   */
+  function onCreateMove(e) {
+    if (!isCreatingBox) return;
     e.preventDefault();
-    e.stopPropagation();
 
+    const currentX = e.pageX;
+    const currentY = e.pageY;
+
+    // Drag threshold to prevent accidental drags
+    const dist = Math.hypot(currentX - createStartX, currentY - createStartY);
+
+    if (dist > 5) {
+      // If we just started dragging, ensure UI is reset
+      if (boxElement.style.display === 'none' || createWasVisible) {
+        boxElement.style.display = 'block';
+        if (popoverElement) popoverElement.style.display = 'none'; // Hide popover during drag
+      }
+
+      const width = Math.abs(currentX - createStartX);
+      const height = Math.abs(currentY - createStartY);
+      const left = Math.min(currentX, createStartX);
+      const top = Math.min(currentY, createStartY);
+
+      boxElement.style.left = `${left}px`;
+      boxElement.style.top = `${top}px`;
+      boxElement.style.width = `${width}px`;
+      boxElement.style.height = `${height}px`;
+    }
+  }
+
+  /**
+   * Handles the end of a creation drag operation.
+   * @param {MouseEvent} e
+   */
+  function onCreateEnd(e) {
+    if (!isCreatingBox) return;
+    isCreatingBox = false;
+    document.removeEventListener('mousemove', onCreateMove);
+    document.removeEventListener('mouseup', onCreateEnd);
+
+    const dist = Math.hypot(e.pageX - createStartX, e.pageY - createStartY);
+
+    if (dist > 5) {
+      // Valid drag: Show full UI
+      if (inputElement) inputElement.value = '';
+      updateToggleStates();
+      captureInitialToggleState();
+      updatePopoverPosition();
+      showDebugZones(1500);
+    } else {
+      // Just a click (handled here for PC consistency)
+      if (createWasVisible) {
+        hideBox();
+        showToast('Cancelled');
+      } else {
+        spawnDefaultBox(e.pageX, e.pageY);
+      }
+    }
+  }
+
+  /**
+   * Spawns a default-sized box centered at the given coordinates.
+   * @param {number} pageX
+   * @param {number} pageY
+   */
+  function spawnDefaultBox(pageX, pageY) {
     const img = document.querySelector('#image');
     const imgRect = img.getBoundingClientRect();
     const absLeft = imgRect.left + window.scrollX;
@@ -726,12 +923,11 @@
 
     const minDimension = Math.min(imgRect.width, imgRect.height);
     let calculatedSize = minDimension * INITIAL_SIZE_RATIO;
-    calculatedSize = Math.max(
-        MIN_INITIAL_SIZE, Math.min(calculatedSize, MAX_INITIAL_SIZE));
+    calculatedSize = Math.max(MIN_INITIAL_SIZE, Math.min(calculatedSize, MAX_INITIAL_SIZE));
     const size = Math.round(calculatedSize);
 
-    let startX = e.pageX - (size / 2);
-    let startY = e.pageY - (size / 2);
+    let startX = pageX - (size / 2);
+    let startY = pageY - (size / 2);
 
     if (startX < absLeft) startX = absLeft;
     if (startY < absTop) startY = absTop;
@@ -741,6 +937,13 @@
     showBox(startX, startY, size, size);
   }
 
+  /**
+   * Shows the note box at specific coordinates.
+   * @param {number} x
+   * @param {number} y
+   * @param {number} w
+   * @param {number} h
+   */
   function showBox(x, y, w, h) {
     boxElement.style.left = `${x}px`;
     boxElement.style.top = `${y}px`;
@@ -757,11 +960,18 @@
     updatePopoverPosition();
   }
 
+  /**
+   * Hides the note box and popover.
+   */
   function hideBox() {
     boxElement.style.display = 'none';
     popoverElement.style.display = 'none';
   }
 
+  /**
+   * Updates the popover position to stay anchored to the box.
+   * Handles zoom scaling via inverse transform.
+   */
   function updatePopoverPosition() {
     const rect = boxElement.getBoundingClientRect();
     const boxCenterX = rect.left + window.scrollX + (rect.width / 2);
@@ -780,12 +990,21 @@
 
     popoverElement.style.left = `${clampedX}px`;
     popoverElement.style.top = `${boxBottomY}px`;
+    
+    // Position 10px below, apply inverse scale
     popoverElement.style.transform = `translateX(-50%) translateY(10px) scale(${invScale})`;
+    
+    // Anchor transform origin to the arrow tip
     popoverElement.style.transformOrigin = `calc(50% + ${arrowOffset}px) -10px`;
+    
     popoverElement.style.setProperty('--arrow-offset', `${arrowOffset}px`);
     popoverElement.style.display = 'flex';
   }
 
+  /**
+   * Sets up drag and resize interaction handlers for the note box.
+   * Supports both Touch and Mouse events.
+   */
   function setupDragAndResize() {
     let mode = null;
     let startX;
@@ -894,6 +1113,9 @@
     boxElement.addEventListener('touchstart', onStart, {passive: false});
   }
 
+  /**
+   * Submits the created note to the Danbooru API and updates tags if changed.
+   */
   async function submitNote() {
     const img = document.querySelector('#image');
     if (!img) return;
