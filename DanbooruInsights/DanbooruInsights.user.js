@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      5.0
+// @version      5.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -285,8 +285,13 @@
   // --- 1.5 Database (Dexie.js) ---
   /**
    * Dexie.js database for caching Danbooru Grass data.
+   * Manages schema versions and data persistence.
+   * @extends Dexie
    */
   class Database extends Dexie {
+    /**
+     * Initializes the database with defined schemas.
+     */
     constructor() {
       super('DanbooruGrassDB');
 
@@ -357,8 +362,12 @@
   // --- 1. Context & Identity ---
   /**
    * Manages the context of the current profile page.
+   * Extracts and provides user information from the DOM.
    */
   class ProfileContext {
+    /**
+     * Initializes the profile context and attempts to fetch target user info.
+     */
     constructor() {
       try {
         this.targetUser = this.getTargetUserInfo();
@@ -514,13 +523,20 @@
    * Handles API requests and caching via Dexie.js.
    */
   class DataManager {
+    /**
+     * Initializes the DataManager.
+     * @param {Database} db The Dexie database instance.
+     */
     constructor(db) {
       this.baseUrl = 'https://danbooru.donmai.us';
       this.db = db;
     }
 
     /**
-     * Retrieves cached stats if valid (within 24 hours).
+     * Retrieves cached statistics for a given user and key.
+     * @param {string} key The unique key for the stats (e.g., 'rating_dist').
+     * @param {string|number} userId The user's ID.
+     * @return {Promise<Object|null>} The cached data or null if not found.
      */
     async getStats(key, userId) {
       try {
@@ -538,7 +554,11 @@
     }
 
     /**
-     * Saves stats to cache.
+     * Saves statistics to the cache.
+     * @param {string} key The unique key for the stats.
+     * @param {string|number} userId The user's ID.
+     * @param {Object} data The data to cache.
+     * @return {Promise<void>}
      */
     async saveStats(key, userId, data) {
       try {
@@ -1038,19 +1058,14 @@
     }
 
     /**
-     * Fetches all pages for a given endpoint and params (handling pagination).
-     * @param {string} endpoint API endpoint.
-     * @param {Object} params API parameters.
-     * @return {Promise<Array>} List of all fetched items.
-     */
-    /**
-     * Fetches pages for a given endpoint until stopDate is reached or all pages are fetched.
-     * @param {string} endpoint API endpoint.
-     * @param {Object} params API parameters.
-     * @param {string|null} stopDate ISO Date string (YYYY-MM-DD). If encountered, stop fetching.
-     * @param {string} dateKey Key to check date against (default 'created_at').
-     * @param {string} direction 'desc' (default) or 'asc'.
-     * @return {Promise<Array>} List of all fetched items up to stopDate.
+     * Fetches pages from an API endpoint until a stop condition is met.
+     * Handles pagination and batching automatically.
+     * @param {string} endpoint The API endpoint (e.g., '/posts.json').
+     * @param {Object} params Query parameters for the API.
+     * @param {string|null} [stopDate=null] ISO Date string (YYYY-MM-DD). If encountered, stops fetching.
+     * @param {string} [dateKey='created_at'] Key to check date against.
+     * @param {string} [direction='desc'] Fetch direction ('desc' or 'asc').
+     * @return {Promise<Array<Object>>} List of all fetched items up to the stop condition.
      */
     async fetchAllPages(endpoint, params, stopDate = null, dateKey = 'created_at', direction = 'desc') {
       let allItems = [];
@@ -1311,6 +1326,9 @@
 
     /**
      * Helper: Fetch related tags and filter based on implications.
+     * @param {string} copyright The copyright tag to fetch related tags for.
+     * @param {Object|null} userInfo User info to scope the search (optional).
+     * @return {Promise<Array<Object>>} List of filtered related tag data.
      * @private
      */
     async _fetchAndFilterRelatedTags(copyright, userInfo) {
@@ -2987,12 +3005,22 @@
    * GrassApp: Encapsulates the contribution graph functionality (Legacy/Existing).
    */
   class GrassApp {
+    /**
+     * Initializes the GrassApp (Legacy Contribution Graph).
+     * @param {Database} db The Dexie database instance.
+     * @param {SettingsManager} settings The settings manager.
+     * @param {ProfileContext} context The current profile context.
+     */
     constructor(db, settings, context) {
       this.db = db;
       this.settings = settings;
       this.context = context;
     }
 
+    /**
+     * key entry point to run the legacy graph rendering.
+     * @return {Promise<void>}
+     */
     async run() {
       // console.log('🌱 Starting GrassApp...');
       const context = this.context;
@@ -3114,6 +3142,12 @@
    * AnalyticsApp: Manages the new Analytics feature (Button & Modal).
    */
   class AnalyticsApp {
+    /**
+     * Initializes the AnalyticsApp.
+     * @param {Database} db The Dexie database instance.
+     * @param {SettingsManager} settings The settings manager.
+     * @param {ProfileContext} context The current profile context.
+     */
     constructor(db, settings, context) {
       this.db = db;
       this.settings = settings;
@@ -3267,6 +3301,7 @@
 
     /**
      * Injects the entry button next to the username.
+     * Tries multiple heuristics to find the correct location.
      */
     injectButton() {
       // Priority 1: H1 containing the username
@@ -3453,6 +3488,12 @@
       }
     }
 
+    /**
+     * Updates the status text in the modal header.
+     * @param {string|null} [progressText=null] Text to display (e.g. "Fetching...").
+     * @param {string|null} [customColor=null] CSS color for the text.
+     * @return {Promise<void>}
+     */
     async updateHeaderStatus(progressText = null, customColor = null) {
       const el = document.getElementById(`${this.modalId}-header-status`);
       if (!el) return;
@@ -3525,7 +3566,7 @@
 
     /**
      * Shows the Sync Settings Popover.
-     * @param {HTMLElement} target The settings button.
+     * @param {HTMLElement} target The settings button element.
      */
     showSyncSettingsPopover(target) {
       // Remove existing
@@ -3630,8 +3671,9 @@
      * Shows a secondary modal (popover) on top of the dashboard.
      * @param {string} title The title of the modal.
      * @param {string} contentHtml The HTML content to display.
+     * @param {string|null} [helpHtml=null] Optional HTML content for the help tooltip.
      */
-    showSubModal(title, contentHtml) {
+    showSubModal(title, contentHtml, helpHtml = null) {
       let subOverlay = document.getElementById(`${this.modalId}-sub-overlay`);
 
       // Remove existing if any (simplifies logic)
@@ -3684,10 +3726,55 @@
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        backgroundColor: '#f9f9f9'
+        backgroundColor: '#f9f9f9',
+        position: 'relative'
       });
 
-      header.innerHTML = `<h3 style="margin:0; font-size:1.2em; color:#333;">${title}</h3>`;
+      // Simple Title Wrapper
+      const titleWrapper = document.createElement('div');
+      titleWrapper.style.display = 'flex';
+      titleWrapper.style.alignItems = 'center';
+      titleWrapper.innerHTML = `<h3 style="margin:0; font-size:1.2em; color:#333;">${title}</h3>`;
+
+      // Help Button if helpHtml exists
+      if (helpHtml) {
+        const helpBtn = document.createElement('div');
+        helpBtn.innerHTML = '❓';
+        Object.assign(helpBtn.style, {
+          marginLeft: '10px',
+          cursor: 'help',
+          fontSize: '14px',
+          color: '#888', // Replaces opacity to prevent child inheritance issues
+          position: 'relative'
+        });
+
+        // Hover Tooltip logic for Help
+        const tooltip = document.createElement('div');
+        Object.assign(tooltip.style, {
+          position: 'absolute',
+          top: '100%',
+          left: '0', // Adjust if needed
+          width: '550px',
+          background: '#000',
+          color: '#fff',
+          padding: '10px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          zIndex: '11001',
+          display: 'none',
+          boxShadow: '0 4px 10px rgba(0,0,0,0.3)',
+          marginTop: '5px'
+        });
+        tooltip.innerHTML = helpHtml;
+        helpBtn.appendChild(tooltip);
+
+        helpBtn.onmouseover = () => tooltip.style.display = 'block';
+        helpBtn.onmouseout = () => tooltip.style.display = 'none';
+
+        titleWrapper.appendChild(helpBtn);
+      }
+
+      header.appendChild(titleWrapper);
 
       const closeBtn = document.createElement('button');
       closeBtn.innerHTML = '&times;';
@@ -3735,6 +3822,11 @@
       });
     }
 
+    /**
+     * Renders the main dashboard content inside the modal.
+     * Handles sync checks, header controls, and widget initialization.
+     * @return {Promise<void>}
+     */
     async renderDashboard() {
       const content = document.getElementById(`${this.modalId}-content`);
       if (!content) return;
@@ -4078,6 +4170,14 @@
       summaryWrapper.style.gap = '15px';
       summaryWrapper.style.marginBottom = '35px'; // Increased Spacing
 
+      /**
+       * Creates a summary card HTML string.
+       * @param {string} title Card title.
+       * @param {string|number} val Main value to display.
+       * @param {string} icon Icon character or HTML.
+       * @param {string} [details=''] Additional HTML details.
+       * @return {string} HTML string.
+       */
       const makeCard = (title, val, icon, details = '') => `
             <div style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start;">
                <div style="font-size:2em; margin-right:15px; margin-top:5px;">${icon}</div>
@@ -4170,12 +4270,19 @@
       const pieData = {
         rating: null,
         character: null,
-        copyright: null,
-        fav_copyright: null
+        fav_copyright: null,
+        breasts: null,
+        hair_length: null,
+        hair_color: null,
+        copyright: null // Keep copyright last as it is default but handled specially
       };
 
       let currentPieTab = 'copyright'; // Default to Copy as requested
 
+      /**
+       * Renders the Pie Chart content based on the current tab.
+       * Handles data visualization and interaction.
+       */
       const renderPieContent = () => {
         const contextUser = this.context.targetUser;
         const data = pieData[currentPieTab];
@@ -4190,6 +4297,15 @@
           container.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available</div>';
           return;
         }
+
+        // Sort: Hair Length has a specific order (custom sort)
+        if (currentPieTab === 'hair_length') {
+          const order = ['Bald', 'Very Short Hair', 'Short Hair', 'Medium Hair', 'Long Hair', 'Very Long Hair', 'Absurdly Long Hair'];
+          data.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+        }
+        // Hair Color has specific order or standard? Let's keep frequency unless user wants rainbow order.
+        // User provided specific color map, maybe we should respect that order if frequency is not preferred?
+        // Default is fine for now (Frequency Descending).
 
         container.innerHTML = '';
         container.style.display = 'flex';
@@ -4212,26 +4328,29 @@
         ];
 
         const processedData = data.map((d, i) => {
-          // If Rating
-          if (currentPieTab === 'rating') {
+          // If Rating, Breasts, Hair Length, Hair Color (Use Count)
+          if (['rating', 'breasts', 'hair_length', 'hair_color'].includes(currentPieTab)) {
             return {
               value: d.count,
-              label: ratingLabels[d.rating] || d.rating,
-              color: ratingColors[d.rating] || '#999',
+              label: (currentPieTab === 'rating') ? (ratingLabels[d.rating] || d.rating) : d.name,
+              color: (currentPieTab === 'rating') ? (ratingColors[d.rating] || '#999') : (
+                (currentPieTab === 'hair_color' && d.color) ? d.color : (d.isOther ? '#bdbdbd' : palette[i % palette.length])
+              ),
               details: d // original data
             };
           }
-          // If Character/Copyright
+          // If Character/Copyright (Use Frequency)
           else {
+            // Determine Color
+            let sliceColor = d.isOther ? '#bdbdbd' : palette[i % palette.length];
+            if (currentPieTab === 'hair_color' && d.color) {
+              sliceColor = d.color;
+            }
+
             return {
-              value: d.frequency, // Use frequency for Pie Slice Size? Or count? 
-              // User said: "Top 10... Others... frequency... hover show frequency"
-              // Pie chart usually represents the 'whole'. Frequency 0.0356 is share.
-              // If we use frequency, the total might not be exactly 1.0 if we only have top 10 + others(calculated).
-              // Actually we calculated 'others' so sum matches 1.0.
-              // For 'others', count is 0.
+              value: d.frequency, // Use frequency for Pie Slice Size
               label: d.name,
-              color: d.isOther ? '#bdbdbd' : palette[i % palette.length],
+              color: sliceColor,
               details: d
             };
           }
@@ -4328,7 +4447,8 @@
               // User requested: Name, Post Count, Frequency
               // Note: Post Count is GLOBAL if grouping by 'related_tag' API results.
               // But user seems to want to see the stats provided by that API.
-              const percentage = (d.data.value * 100).toFixed(1) + '%';
+              // Fix: Divide by totalValue to handle both 'Frequency' (0-1) and 'Count' modes correctly.
+              const percentage = ((d.data.value / totalValue) * 100).toFixed(1) + '%';
               html = `
                   <div style="display:flex; gap:10px; align-items:center;">
                     ${d.data.details.thumb ? `<div style="width:40px; height:40px; border-radius:4px; overflow:hidden; background:#333;"><img src="${d.data.details.thumb}" style="width:100%; height:100%; object-fit:cover;"></div>` : ''}
@@ -4351,21 +4471,375 @@
             tooltip.style("opacity", 0);
           })
           .on('click', (event, d) => {
-            // Click action: open sub-modal ONLY for 'copyright' tab
-            if (currentPieTab !== 'copyright') return;
-            if (d.data.details.isOther) return;
+            // Click action
+            // 1. If Copyright: Open Bubble Chart Sub-Modal
+            if (currentPieTab === 'copyright') {
+              if (d.data.details.isOther) return;
 
-            const title = `${d.data.label} Details`;
-            // Placeholder content for now
-            const content = `
-                <div style="padding:20px; text-align:center; color:#666;">
-                    <div style="font-size:2em; margin-bottom:10px;">📊</div>
-                    <div style="font-size:1.2em; font-weight:bold;">Character Bubble Chart</div>
-                    <div>Coming Soon for ${d.data.label}...</div>
-                </div>
-            `;
-            this.showSubModal(title, content);
+              const title = `${d.data.label} Details`;
+              const targetName = this.context.targetUser.name || 'User';
+              const copyrightName = d.data.details.tagName;
+
+              const helpContent = `
+                    <div style="font-size:10px; line-height:1.4; background:#000; color:#fff; padding:12px; border-radius:6px;">
+                        <h4 style="margin:0 0 10px 0; border-bottom:1px solid #444; padding-bottom:6px; color:#ddd; font-size:1.2em;">📊 Chart Interpretation Guide</h4>
+                        
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom:12px;">
+                            <div>
+                                <div style="color:#aaa; font-weight:bold; margin-bottom:4px; border-bottom:1px solid #333;">Data Sources</div>
+                                <div style="margin-bottom:6px;"><span style="color:#4caf50;">●</span> <strong>User Data</strong>:<br> Your posts with <code style="background:#333; padding:1px 3px; border-radius:3px;">user:${targetName}</code> AND <code style="background:#333; padding:1px 3px; border-radius:3px;">${copyrightName}</code></div>
+                                <div><span style="color:#aaa;">●</span> <strong>Server Data</strong>:<br> Global posts with <code style="background:#333; padding:1px 3px; border-radius:3px;">${copyrightName}</code> only.</div>
+                            </div>
+                            <div>
+                               <div style="color:#aaa; font-weight:bold; margin-bottom:4px; border-bottom:1px solid #333;">Comparison (Tooltip)</div>
+                               <div style="margin-bottom:6px;"><span style="color:#4caf50;">(xN.N) Green</span>:<br> You combine these tags <strong>more often</strong> than the global average. Indicates a unique preference.</div>
+                               <div><span style="color:#ff5722;">(xN.N) Red</span>:<br> You combine these tags <strong>less often</strong> than the global average.</div>
+                            </div>
+                        </div>
+
+                        <div style="background:#1a1a1a; padding:10px; border-radius:4px; border:1px solid #333;">
+                            <div style="margin-bottom:8px;">
+                                <strong style="color:#4285f4;">Cosine Similarity</strong> (Color)<br>
+                                <span style="color:#ccc;">Measures <strong>"Connectedness"</strong>. High Blue/Green means the character is central/core to your ${copyrightName} content. Red means it appears only incidentally.</span>
+                            </div>
+                            <div style="margin-bottom:8px;">
+                                <strong style="color:#ddd;">Jaccard Similarity</strong> (X-Axis)<br>
+                                <span style="color:#ccc;">Measures <strong>"Exclusivity"</strong>. Determines how strictly <strong>${copyrightName}</strong> and <strong>this character</strong> are paired. High value means they rarely appear apart.</span>
+                            </div>
+                            <div style="margin-bottom:8px;">
+                                <strong style="color:#ddd;">Frequency</strong> (Y-Axis)<br>
+                                <span style="color:#ccc;">Measures <strong>"Popularity"</strong>. The percentage of your ${copyrightName} posts that include this character.</span>
+                            </div>
+                            <div>
+                                 <strong style="color:#ddd;">Overlap</strong> (Size)<br>
+                                 <span style="color:#ccc;">The total number of posts containing both <strong>${copyrightName}</strong> and <strong>this character</strong>. Larger bubbles mean more posts.</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+              const modalContent = `
+                    <div style="display:flex; justify-content:center; gap:15px; margin-bottom:15px; align-items:center;">
+                       <label style="display:flex; align-items:center; cursor:pointer; font-size:13px; color:#333; user-select:none;">
+                           <input type="checkbox" id="toggle-user-bubbles" checked style="margin-right:6px; accent-color:#4caf50;">
+                           <span style="font-weight:bold; color:#4caf50;">● User Data</span>
+                       </label>
+                       <label style="display:flex; align-items:center; cursor:pointer; font-size:13px; color:#333; user-select:none;">
+                           <input type="checkbox" id="toggle-server-bubbles" checked style="margin-right:6px; accent-color:#666;">
+                           <span style="font-weight:bold; color:#666;">● Server Data</span>
+                       </label>
+                    </div>
+                    <div id="analytics-bubble-chart-container" style="width:100%; height:400px; display:flex; justify-content:center; align-items:center;">Loading...</div>
+                `;
+              this.showSubModal(title, modalContent, helpContent);
+
+              setTimeout(async () => {
+                const container = document.getElementById('analytics-bubble-chart-container');
+                if (!container) return;
+
+                const uploaderId = this.context.targetUser.id ? parseInt(this.context.targetUser.id, 10) : 0;
+                const copyright = d.data.details.tagName || d.data.label;
+
+                try {
+                  const entry = await this.dataManager.db.bubble_data.get({ userId: uploaderId, copyright: copyright });
+                  const serverEntry = await this.dataManager.db.bubble_data.get({ userId: 0, copyright: copyright });
+
+                  let combinedData = [];
+                  const serverMap = new Map();
+
+                  // 1. Process Server Data First (to build map)
+                  if (serverEntry && serverEntry.data) {
+                    serverEntry.data.forEach(d => {
+                      const mapped = { ...d, isServer: true };
+                      combinedData.push(mapped);
+                      serverMap.set(d.name, mapped); // Map by d.name
+                    });
+                  }
+
+                  // 2. Process User Data & Link
+                  if (entry && entry.data) {
+                    entry.data.forEach(d => {
+                      const mapped = { ...d, isServer: false };
+                      // Link Server Data
+                      const serverCounterpart = serverMap.get(d.name); // Get by d.name
+                      if (serverCounterpart) {
+                        mapped.serverData = serverCounterpart;
+                        serverCounterpart.userData = mapped; // Link back
+                      }
+                      combinedData.push(mapped);
+                    });
+                  }
+
+                  const data = combinedData;
+
+                  if (!data || data.length === 0) {
+                    container.innerHTML = '<div style="color:#888;">No data available for this copyright.</div>';
+                    return;
+                  }
+
+                  // Sorting: Server First (Behind), User Last (Front)
+                  // Also sort by overlap size desc to prevent small hiding behind large (within same group)
+                  data.sort((a, b) => {
+                    if (a.isServer !== b.isServer) return a.isServer ? -1 : 1;
+                    return b.overlap - a.overlap;
+                  });
+
+                  container.innerHTML = '';
+
+                  // Toggle Logic (Closure)
+                  const updateVisibility = () => {
+                    const showUser = document.getElementById('toggle-user-bubbles').checked;
+                    const showServer = document.getElementById('toggle-server-bubbles').checked;
+
+                    svg.selectAll("circle")
+                      .transition().duration(300)
+                      .style("opacity", d => {
+                        if (d.isServer) return showServer ? 0.5 : 0;
+                        return showUser ? 0.75 : 0;
+                      })
+                      .style("pointer-events", d => {
+                        if (d.isServer) return showServer ? "all" : "none";
+                        return showUser ? "all" : "none";
+                      });
+                  };
+
+                  // Bind Toggle Events
+                  document.getElementById('toggle-user-bubbles').onclick = updateVisibility;
+                  document.getElementById('toggle-server-bubbles').onclick = updateVisibility;
+
+                  // Dimensions
+                  const margin = { top: 20, right: 30, bottom: 40, left: 50 };
+                  const width = container.clientWidth - margin.left - margin.right;
+                  const height = 400 - margin.top - margin.bottom;
+
+                  // Scales
+                  const x = d3.scaleLinear()
+                    .domain([0, d3.max(data, d => d.jaccard) * 1.1])
+                    .range([0, width]);
+
+                  const y = d3.scaleLinear()
+                    .domain([0, d3.max(data, d => d.frequency) * 1.1])
+                    .range([height, 0]);
+
+                  const z = d3.scaleSqrt()
+                    .domain([0, d3.max(data, d => d.overlap)])
+                    .range([2, 16]);
+
+                  // Colors (Cosine: Storytelling Scheme)
+                  // Dynamic Min-Max Scaling based on User Data Only
+                  const userData = data.filter(d => !d.isServer);
+                  const minCos = d3.min(userData, d => d.cosine) || 0;
+                  const maxCos = d3.max(userData, d => d.cosine) || 1;
+                  const midCos = (minCos + maxCos) / 2;
+
+                  const color = d3.scaleLinear()
+                    .domain([minCos, midCos, maxCos])
+                    .range(["#ff5722", "#4caf50", "#03a9f4"]) // Red -> Green -> Blue
+                    .interpolate(d3.interpolateHcl);
+
+                  // Start SVG
+                  const svg = d3.select(container)
+                    .append("svg")
+                    .attr("width", width + margin.left + margin.right)
+                    .attr("height", height + margin.top + margin.bottom)
+                    .append("g")
+                    .attr("transform", `translate(${margin.left},${margin.top})`);
+
+                  // Reference Line Group (Behind circles)
+                  const lineGroup = svg.append("g").attr("class", "connection-lines");
+
+                  // Axes
+                  svg.append("g")
+                    .attr("transform", `translate(0,${height})`)
+                    .call(d3.axisBottom(x).ticks(5))
+                    .append("text")
+                    .attr("x", width)
+                    .attr("y", -6)
+                    .attr("fill", "#666")
+                    .attr("text-anchor", "end")
+                    .text("Jaccard Similarity");
+
+                  svg.append("g")
+                    .call(d3.axisLeft(y).ticks(5).tickFormat(d => (d * 100).toFixed(1) + "%"))
+                    .append("text")
+                    .attr("transform", "rotate(-90)")
+                    .attr("y", 6)
+                    .attr("dy", "0.71em")
+                    .attr("fill", "#666")
+                    .text("Frequency");
+
+                  // Tooltip
+                  const tooltip = d3.select("body").selectAll(".danbooru-bubble-tooltip").data([0]).join("div")
+                    .attr("class", "danbooru-bubble-tooltip")
+                    .style("position", "absolute")
+                    .style("background", "#000") // Pure Black
+                    .style("color", "#fff")
+                    .style("padding", "10px")
+                    .style("border-radius", "4px")
+                    .style("pointer-events", "none")
+                    .style("opacity", 0)
+                    .style("font-size", "12px")
+                    .style("z-index", "2147483647")
+                    .style("box-shadow", "0 2px 10px rgba(0,0,0,0.5)");
+
+                  // Helper: safely escape ID
+                  const safeClass = (str) => {
+                    if (!str) return 'bubble-tag-unknown';
+                    return `bubble-tag-${str.replace(/[^a-zA-Z0-9-_]/g, '-')}`;
+                  };
+
+                  // Comparison Helper
+                  const getCompHtml = (curr, ref) => {
+                    if (!ref) return '';
+                    const ratio = ref > 0 ? curr / ref : 0;
+                    const diffHtml = ratio > 1
+                      ? `<span style="color:#4caf50; font-weight:bold; margin-left:4px;">(x${ratio.toFixed(2)})</span>`
+                      : `<span style="color:#ff5722; font-weight:bold; margin-left:4px;">(x${ratio.toFixed(2)})</span>`;
+                    return diffHtml;
+                  };
+
+                  // Dots
+                  svg.append('g')
+                    .selectAll("circle")
+                    .data(data)
+                    .join("circle")
+                    .attr("class", d => safeClass(d.name)) // Use d.name
+                    .attr("cx", d => x(d.jaccard))
+                    .attr("cy", d => y(d.frequency))
+                    .attr("r", d => d.isServer ? 3 : z(d.overlap))
+                    .style("fill", d => d.isServer ? '#cccccc' : color(d.cosine))
+                    .style("opacity", d => d.isServer ? "0.5" : "0.75")
+                    .attr("stroke", d => d.isServer ? "#aaa" : "white")
+                    .style("stroke-width", "1px")
+                    .on("mouseover", function (event, d) {
+                      const showUser = document.getElementById('toggle-user-bubbles').checked;
+                      const showServer = document.getElementById('toggle-server-bubbles').checked;
+
+                      // Highlight Self & Counterpart (Only if supposed to be visible)
+                      d3.selectAll(`.${safeClass(d.name)}`)
+                        .filter(d2 => {
+                          if (d2.isServer) return showServer;
+                          return showUser;
+                        })
+                        .style("opacity", 1)
+                        .style("stroke", "#333")
+                        .style("stroke-width", "2px");
+
+                      // Draw Dotted Line (Only if both ends are visible)
+                      const other = d.isServer ? d.userData : d.serverData;
+                      const isOtherVisible = other && (other.isServer ? showServer : showUser);
+
+                      if (other && isOtherVisible) {
+                        lineGroup.append("line")
+                          .attr("x1", x(d.jaccard))
+                          .attr("y1", y(d.frequency))
+                          .attr("x2", x(other.jaccard))
+                          .attr("y2", y(other.frequency))
+                          .attr("stroke", "#555")
+                          .attr("stroke-width", 2)
+                          .attr("stroke-dasharray", "4 4");
+                      }
+
+                      const typeLabel = d.isServer ? '<span style="color:#aaa;">[Server]</span> ' : '<span style="color:#4caf50;">[User]</span> ';
+
+                      // Detailed Comparison (Only for User bubbles for now, or both?)
+                      let compCos = '';
+                      let compFreq = '';
+
+                      // If we are looking at User data, compare TO Server
+                      if (!d.isServer && d.serverData) {
+                        compCos = getCompHtml(d.cosine, d.serverData.cosine);
+                        compFreq = getCompHtml(d.frequency, d.serverData.frequency);
+                      }
+
+                      const html = `
+                          <div style="font-weight:bold; font-size:1.1em; margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.2); padding-bottom:4px;">
+                            ${typeLabel} ${d.name}
+                          </div>
+                          <div style="display:grid; grid-template-columns: auto 1fr; gap: 4px 10px;">
+                              <div>Cosine:</div> <div><span style="color:${color(d.cosine)}">${d.cosine.toFixed(3)}</span> ${compCos}</div>
+                              <div>Jaccard:</div> <div><strong>${d.jaccard.toFixed(3)}</strong></div>
+                              <div>Freq:</div> <div><strong>${(d.frequency * 100).toFixed(2)}%</strong> ${compFreq}</div>
+                              <div>Overlap:</div> <div><strong>${d.overlap.toFixed(3)}</strong></div>
+                          </div>
+                        `;
+
+                      tooltip.html(html).style("opacity", 1);
+                    })
+                    .on("mousemove", function (event) {
+                      tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY + 15) + "px");
+                    })
+                    .on("mouseout", function (event, d) {
+                      const showUser = document.getElementById('toggle-user-bubbles').checked;
+                      const showServer = document.getElementById('toggle-server-bubbles').checked;
+
+                      // Reset Counterpart & Self
+                      d3.selectAll(`.${safeClass(d.name)}`)
+                        .style("opacity", d2 => {
+                          if (d2.isServer) return showServer ? 0.5 : 0;
+                          return showUser ? 0.75 : 0;
+                        })
+                        .style("stroke", d2 => d2.isServer ? "#aaa" : "white")
+                        .style("stroke-width", "1px");
+
+                      // Remove Line
+                      lineGroup.selectAll("line").remove();
+
+                      tooltip.style("opacity", 0);
+                    });
+
+                } catch (e) {
+                  container.innerHTML = '<div style="color:red;">Error loading chart.</div>';
+                  console.error(e);
+                }
+
+              }, 10);
+              // Wait. I am replacing lines 4399 to 4403. The existing logic follows immediately.
+              // I should rewrite the click handler structure to handle the NEW cases first, and fallback to copyright.
+            }
+            // 2. Others: Open Search in New Tab
+            else {
+              const targetName = this.context.targetUser.name || '';
+              if (!targetName) return;
+
+              let query = '';
+
+              if (currentPieTab === 'rating') {
+                // d.data.label is 'Sensitive' etc. We need the code 's', 'e'.
+                // Reverse map or look at details? d.data.details has 'rating' property: 's'.
+                if (d.data.details && d.data.details.rating) {
+                  query = `rating:${d.data.details.rating}`;
+                }
+              }
+              else if (currentPieTab === 'character' || currentPieTab === 'fav_copyright') {
+                // Tag Search
+                query = d.data.details.tagName || d.data.label;
+              }
+              else if (currentPieTab === 'breasts' || currentPieTab === 'hair_length' || currentPieTab === 'hair_color') {
+                // These have 'originalTag' usually? Or just use label if we formatted it?
+                // Breasts labels are "Large Breasts". Tag is "large_breasts".
+                // Ideally we stored originalTag.
+                // Check dataManager methods.
+                // getBreastsDistribution: we didn't store originalTag... wait.
+                // getBreastsDistribution uses tag value for label formatting. "large_breasts" -> "Large Breasts".
+                // We should fix getBreastsDistribution to return originalTag too? Or just helper reverse it?
+                // New methods HairLength/Color return originalTag.
+                // Let's fix Breasts to return originalTag too or reverse slugify.
+                if (d.data.details.originalTag) {
+                  query = d.data.details.originalTag;
+                } else {
+                  // Fallback for breasts if we didn't update it yet (we didn't update getBreasts), try name lowecase replace space with underscore
+                  query = d.data.label.toLowerCase().replace(/ /g, '_');
+                }
+              }
+
+              if (query) {
+                const searchUrl = `/posts?tags=user:${targetName}+${encodeURIComponent(query)}`;
+                window.open(searchUrl, '_blank');
+              }
+            }
           });
+
 
         container.appendChild(chartWrapper);
 
@@ -4398,9 +4872,11 @@
         legendDiv.innerHTML += `
              <div style="font-size:0.8em; color:#888; margin-bottom:8px; text-transform:uppercase; position:sticky; top:0; background:#fff; padding-bottom:4px; border-bottom:1px solid #eee;">${legendTitle}</div>
              ${processedData.map(d => {
-          const pct = currentPieTab === 'rating'
-            ? Math.round((d.value / totalValue) * 100) + '%'
-            : (d.value * 100).toFixed(1) + '%';
+          // Fix: Always divide by totalValue.
+          // If value is frequency (0.1), totalValue is ~1. Result -> 10%.
+          // If value is count (295), totalValue is total count (e.g. 1000). Result -> 29.5%.
+          const val = (d.value / totalValue) * 100;
+          const pct = val.toFixed(1) + '%';
 
           // Generate Link
           let targetUrl = '#';
@@ -4459,6 +4935,8 @@
                    <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
                        <button class="pie-tab" data-mode="copyright" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Copy</button>
                        <button class="pie-tab" data-mode="character" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Char</button>
+                       <button class="pie-tab" data-mode="hair_length" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Hair_L</button>
+                       <button class="pie-tab" data-mode="hair_color" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Hair_C</button>
                        <button class="pie-tab" data-mode="rating" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Rate</button>
                        <button class="pie-tab" data-mode="fav_copyright" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Fav_Copy</button>
                        <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Boobs</button>
@@ -4469,6 +4947,33 @@
                </div>
            </div>
       `;
+
+      // Trigger Data Fetch & Render
+      // This was missing previously, causing empty charts or 'Loading...' forever if not cached/called elsewhere.
+      Promise.all([
+        dataManager.getRatingDistribution(this.context.targetUser),
+        dataManager.getCharacterDistribution(this.context.targetUser),
+        dataManager.getCopyrightDistribution(this.context.targetUser),
+        dataManager.getFavCopyrightDistribution(this.context.targetUser),
+        dataManager.getBreastsDistribution(this.context.targetUser),
+        dataManager.getHairLengthDistribution(this.context.targetUser),
+        dataManager.getHairColorDistribution(this.context.targetUser)
+      ]).then(([rating, char, copy, favCopy, breasts, hairL, hairC]) => {
+        pieData.rating = rating;
+        pieData.character = char;
+        pieData.copyright = copy;
+        pieData.fav_copyright = favCopy;
+        pieData.breasts = breasts;
+        pieData.hair_length = hairL;
+        pieData.hair_color = hairC;
+
+        // Render initial view
+        renderPieContent();
+      }).catch(err => {
+        console.error('[Danbooru Grass] Failed to load Pie Stats:', err);
+        const container = pieContainer.querySelector('.pie-content');
+        if (container) container.innerHTML = '<div style="color:red; font-size:0.8em;">Error loading stats.</div>';
+      });
 
       // Lazy Loading for Pie Chart Tabs
       const loadTab = async (tabName) => {
@@ -4561,6 +5066,9 @@
 
       let currentTab = 'sfw'; // Default
 
+      /**
+       * Renders the content of the Top Post widget.
+       */
       const renderTopPostContent = () => {
         const data = topPostData[currentTab];
         const contentDiv = topPostContainer.querySelector('.top-post-content');
@@ -4602,6 +5110,9 @@
          `;
       };
 
+      /**
+       * Updates the Top Post tab styles (SFW/NSFW).
+       */
       const updateTabs = () => {
         const btnSfw = topPostContainer.querySelector('button[data-mode="sfw"]');
         const btnNsfw = topPostContainer.querySelector('button[data-mode="nsfw"]');
@@ -4659,6 +5170,9 @@
 
       let currentMilestoneStep = 'auto'; // shared state for closure
 
+      /**
+       * Renders the Milestones widget.
+       */
       const renderMilestones = async () => {
         // Clear previous content but keep structure if possible? 
         // Actually, just rebuild.
@@ -4765,6 +5279,9 @@
       };
 
       // Define Update Function
+      /**
+       * Applies NSFW setting updates to widgets without full re-render.
+       */
       applyNsfwUpdate = async () => {
         // 1. Top Post Button
         const nsfwBtn = document.getElementById('analytics-top-nsfw-btn');
@@ -5842,12 +6359,17 @@
     static syncProgress = { current: 0, total: 0 };
     static onProgressCallback = null;
 
+    /**
+     * @param {Database} db The Dexie database instance.
+     */
     constructor(db) {
       super(db);
     }
 
     /**
      * Gets simple stats about the synced posts for a user.
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<{count: number, lastSync: Date|null}>}
      */
     async getSyncStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -5864,7 +6386,8 @@
 
     /**
      * Calculates summary statistics (Avg Uploads, Max Uploads, etc.)
-     * @param {Object} userInfo
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: Date|null}>}
      */
     async getSummaryStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -5907,6 +6430,10 @@
 
     /**
      * Retrieves key milestone posts (e.g. 1st, 100th, 1000th ...).
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [isNsfwEnabled=false] Whether to show NSFW content.
+     * @param {string|number} [customStep='auto'] Step interval or 'auto'.
+     * @return {Promise<Array<{type: string, post: Object, index: number}>>}
      */
     async getMilestones(userInfo, isNsfwEnabled = false, customStep = 'auto') {
       const uploaderId = parseInt(userInfo.id);
@@ -6048,11 +6575,11 @@
 
 
     /**
-     * Aggregates post counts by month.
-     * Aggregates post counts by month.
+     * Aggregates post counts by month from local DB.
      * Returns array of { date: 'YYYY-MM', count: number, label: string }
-     * @param {Object} userInfo
+     * @param {Object} userInfo The user's info object.
      * @param {Date} [minDate] Optional start date (inclusive) for the timeline
+     * @return {Promise<Array<{date: string, count: number, label: string}>>}
      */
     async getMonthlyStats(userInfo, minDate = null) {
       const uploaderId = parseInt(userInfo.id);
@@ -6111,9 +6638,9 @@
     }
 
     /**
-     * Fetches rating distribution from /reports/posts.json
-     * @param {Object} userInfo
-     * @returns {Promise<Array<{rating: string, count: number, label: string}>>}
+     * Fetches rating distribution from /reports/posts.json.
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<Array<{rating: string, count: number, label: string}>>}
      */
     async getRatingDistribution(userInfo) {
       if (!userInfo.name) return [];
@@ -6183,9 +6710,10 @@
     }
 
     /**
-     * Fetches Character distribution from related_tag.json
-     * @param {Object} userInfo
-     * @returns {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
+     * Fetches Character distribution from related_tag.json.
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
     async getCharacterDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
@@ -6255,10 +6783,11 @@
     }
 
     /**
-     * Fetches Copyright distribution from related_tag.json
+     * Fetches Copyright distribution from related_tag.json.
      * Filters out sub-copyrights by checking tag_implications.
-     * @param {Object} userInfo
-     * @returns {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
     async getCopyrightDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
@@ -6341,7 +6870,11 @@
     }
 
     /**
-     * Helper for concurrent processing with limit
+     * Helper for concurrent processing with limit.
+     * @param {Array} items Items to process.
+     * @param {number} concurrency Max concurrent tasks.
+     * @param {Function} fn Async function to run on each item.
+     * @return {Promise<Array>} Results array.
      */
     async mapConcurrent(items, concurrency, fn) {
       const results = new Array(items.length);
@@ -6361,7 +6894,9 @@
     /**
      * Fetches Favorite Copyright distribution.
      * Uses ordfav:{user} to find favorites.
-     * @param {Object} userInfo
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array>}
      */
     async getFavCopyrightDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
@@ -6446,8 +6981,8 @@
 
     /**
      * Fetches Top SFW and NSFW posts in parallel using API.
-     * @param {Object} userInfo
-     * @returns {Promise<{sfw: Object|null, nsfw: Object|null}>}
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<{sfw: Object|null, nsfw: Object|null}>}
      */
     async getTopPostsByType(userInfo) {
       if (!userInfo.name) return { sfw: null, nsfw: null };
@@ -6479,8 +7014,9 @@
 
     /**
      * Gets the post with the highest score and fetches its details.
-     * @param {Object} userInfo
-     * @param {string} filterMode 'sfw' | 'nsfw' | 'all' (default: 'sfw')
+     * @param {Object} userInfo The user's info object.
+     * @param {string} [filterMode='sfw'] 'sfw' | 'nsfw' | 'all'.
+     * @return {Promise<Object|null>}
      */
     async getTopScorePost(userInfo, filterMode = 'sfw') {
       const uploaderId = parseInt(userInfo.id);
@@ -6523,8 +7059,8 @@
     /**
      * Fetches data for Scatter Plot.
      * Returns minimal object array to save memory/time.
-     * @param {Object} userInfo
-     * @returns {Promise<Array<{d:number, s:number, r:string}>>}
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<Array<{id: number, d: number, s: number, t: number, r: string}>>}
      */
     async getScatterData(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -6549,7 +7085,8 @@
 
     /**
      * Fetches promotion history from user feedbacks.
-     * @param {Object} userInfo
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<Array<{date: Date, role: string, rawBody: string}>>}
      */
     async getPromotionHistory(userInfo) {
       if (!userInfo.name) return [];
@@ -6578,8 +7115,9 @@
 
     /**
      * Fetches breast size distribution by checking specific tags.
-     * @param {Object} userInfo
-     * @returns {Promise<Array>}
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array>}
      */
     async getBreastsDistribution(userInfo, forceRefresh = false) {
       if (!userInfo.name) return [];
@@ -6592,7 +7130,7 @@
       }
 
       const normalizedName = userInfo.name.replace(/ /g, '_');
-      const tags = [
+      const breastTags = [
         'flat_chest',
         'small_breasts',
         'medium_breasts',
@@ -6602,7 +7140,7 @@
       ];
 
       // Use mapConcurrent from base class to fetch efficiently
-      const results = await this.mapConcurrent(tags, 6, async (tag) => {
+      const results = await this.mapConcurrent(breastTags, 6, async (tag) => {
         try {
           // Fetch count for "user:name tag"
           // Using counts/posts.json
@@ -6639,7 +7177,138 @@
     }
 
     /**
-     * Helper to get robust total count
+     * Fetches hair length distribution.
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array>}
+     */
+    async getHairLengthDistribution(userInfo, forceRefresh = false) {
+      if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0);
+      const cacheKey = 'hair_length_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const hairLengthTags = [
+        '~bald ~bald_female',
+        'very_short_hair',
+        'short_hair',
+        'medium_hair',
+        'long_hair',
+        'very_long_hair',
+        'absurdly_long_hair'
+      ];
+
+      const results = await this.mapConcurrent(hairLengthTags, 6, async (tag) => {
+        try {
+          // Special handling for OR query "~bald ~bald_female"
+          // We need to wrap it in parens for safety if combined with user:name? No, space is implicit AND.
+          // user:name ~bald ~bald_female -> user:name AND (bald OR bald_female)
+          // Actually ~ in danbooru usually implies OR context if not grouped, but "user:A ~B ~C" might mean user:A AND (B OR C).
+          // Let's use it as provided.
+
+          const uniqueTag = `user:${normalizedName} ${tag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await fetch(url).then(r => r.json());
+
+          let count = 0;
+          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+            count = resp.counts.posts;
+          }
+
+          // Format Label
+          let label = tag;
+          if (tag.includes('~bald')) label = 'Bald';
+          else label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+
+          return {
+            name: label,
+            count: count,
+            frequency: 0,
+            originalTag: tag,
+            isOther: false
+          };
+        } catch (e) {
+          return { name: tag, count: 0 };
+        }
+      });
+
+      const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      return filtered;
+    }
+
+    /**
+     * Fetches hair color distribution.
+     * @param {Object} userInfo The user's info object.
+     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+     * @return {Promise<Array>}
+     */
+    async getHairColorDistribution(userInfo, forceRefresh = false) {
+      if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || 0);
+      const cacheKey = 'hair_color_dist';
+
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const hairColorMap = [
+        { tag: 'black_hair', color: '#000000' },
+        { tag: 'brown_hair', color: '#A52A2A' },
+        { tag: 'blonde_hair', color: '#FFD700' },
+        { tag: 'red_hair', color: '#FF0000' },
+        { tag: 'orange_hair', color: '#FFA500' },
+        { tag: 'pink_hair', color: '#FFC0CB' },
+        { tag: 'purple_hair', color: '#800080' },
+        { tag: 'green_hair', color: '#008000' },
+        { tag: 'blue_hair', color: '#0000FF' },
+        { tag: 'aqua_hair', color: '#00FFFF' },
+        { tag: 'grey_hair', color: '#808080' },
+        { tag: 'white_hair', color: '#FFFFFF' }
+      ];
+
+      const results = await this.mapConcurrent(hairColorMap, 6, async (item) => {
+        try {
+          const uniqueTag = `user:${normalizedName} ${item.tag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await fetch(url).then(r => r.json());
+
+          let count = 0;
+          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+            count = resp.counts.posts;
+          }
+
+          const label = item.tag.split('_')[0].charAt(0).toUpperCase() + item.tag.split('_')[0].slice(1) + ' Hair';
+
+          return {
+            name: label,
+            count: count,
+            frequency: 0,
+            color: item.color, // Store predetermined color
+            originalTag: item.tag,
+            isOther: false
+          };
+        } catch (e) {
+          return { name: item.tag, count: 0 };
+        }
+      });
+
+      const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      return filtered;
+    }
+
+    /**
+     * helper to get robust total count.
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<number>}
      */
     async getTotalPostCount(userInfo) {
       if (!userInfo.name) return 0;
@@ -6680,9 +7349,10 @@
     }
 
     /**
-     * Syncs all posts for the user.
-     * @param {Object} userInfo
-     * @param {Function} onProgress (current, total) => void
+     * Syncs all posts for the user using parallel buffered fetching.
+     * @param {Object} userInfo The user's info object.
+     * @param {Function} onProgress Callback for progress updates (current, total).
+     * @return {Promise<void>}
      */
     async syncAllPosts(userInfo, onProgress) {
       if (!userInfo.id) {
@@ -6976,6 +7646,11 @@
       }
     }
 
+    /**
+     * Refreshes all cached statistics for the user.
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<void>}
+     */
     async refreshAllStats(userInfo) {
       // console.log(`[Analytics] Refreshing all stats for user ${userInfo.name}`);
       const forceRefresh = true;
@@ -6993,6 +7668,11 @@
       }
     }
 
+    /**
+     * Clears all analytics data for the specified user from local DB.
+     * @param {Object} userInfo The user's info object.
+     * @return {Promise<void>}
+     */
     async clearUserData(userInfo) {
       if (!userInfo.id) return;
       const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
@@ -7019,6 +7699,10 @@
 
   // --- Main Controller ---
 
+  /**
+   * Main entry point for the script.
+   * Initializes context, database, settings, and applications.
+   */
   async function main() {
     // 1. Context & Shared Infrastructure
     const context = new ProfileContext();
