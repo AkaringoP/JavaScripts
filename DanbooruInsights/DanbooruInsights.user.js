@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      5.1
+// @version      5.2
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -3390,6 +3390,7 @@
         current: 0,
         total: 0,
         phase: 'FETCHING', // 'FETCHING' or 'PREPARING'
+        message: ''
       };
 
       if (btn) {
@@ -3410,11 +3411,11 @@
         if (state.phase === 'PREPARING') {
           containerColor = 'inherit';
           headerHtml = `<div style="color:#00ba7c; font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
-          subHtml = `<div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">Preparing Report${dotStr}</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">${state.message || 'Preparing Report'}${dotStr}</div>`;
         } else {
           containerColor = '#ff4444';
           headerHtml = `<div style="font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
-          subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">Fetching data${dotStr}</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">${state.message || `Fetching data${dotStr}`}</div>`;
         }
 
         this.updateHeaderStatus(headerHtml + subHtml, containerColor);
@@ -3427,6 +3428,7 @@
       const onProgress = (current, total, msg) => {
         state.current = current;
         state.total = total;
+        if (msg) state.message = msg;
 
         const isComplete = (total > 0 && current >= total);
         if (msg === 'PREPARING' || isComplete) {
@@ -4436,29 +4438,36 @@
               .style('filter', 'drop-shadow(0px 0px 8px rgba(255,255,255,0.4))');
 
             let html = '';
+            const details = d.data.details;
+            const thumbUrl = details.thumb;
+            const thumbHtml = thumbUrl ? `
+              <div style="width: 80px; height: 80px; border-radius: 4px; overflow: hidden; background: #333; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+                <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+              </div>` : '';
+
             if (currentPieTab === 'rating') {
               html = `
-                        <div style="font-weight:bold; color:${d.data.color}; margin-bottom:2px;">${d.data.label}</div>
-                        <div>Count: <strong>${d.data.details.count.toLocaleString()}</strong></div>
-                        <div>Ratio: <strong>${Math.round((d.data.value / totalValue) * 100)}%</strong></div>
-                     `;
+                <div style="display: flex; gap: 12px; align-items: start;">
+                  ${thumbHtml}
+                  <div>
+                    <div style="font-weight: bold; color: ${d.data.color}; margin-bottom: 4px; font-size: 14px;">${d.data.label}</div>
+                    <div style="font-size: 11px; color: #ccc;">Count: <strong style="color:#fff;">${details.count.toLocaleString()}</strong></div>
+                    <div style="font-size: 11px; color: #ccc;">Ratio: <strong style="color:#fff;">${Math.round((d.data.value / totalValue) * 100)}%</strong></div>
+                  </div>
+                </div>
+              `;
             } else {
-              // Character / Copyright
-              // User requested: Name, Post Count, Frequency
-              // Note: Post Count is GLOBAL if grouping by 'related_tag' API results.
-              // But user seems to want to see the stats provided by that API.
-              // Fix: Divide by totalValue to handle both 'Frequency' (0-1) and 'Count' modes correctly.
               const percentage = ((d.data.value / totalValue) * 100).toFixed(1) + '%';
               html = `
-                  <div style="display:flex; gap:10px; align-items:center;">
-                    ${d.data.details.thumb ? `<div style="width:40px; height:40px; border-radius:4px; overflow:hidden; background:#333;"><img src="${d.data.details.thumb}" style="width:100%; height:100%; object-fit:cover;"></div>` : ''}
-                    <div>
-                        <div style="font-weight:bold; color:${d.data.color}; margin-bottom:2px; max-width:150px; word-wrap:break-word;">${d.data.label}</div>
-                        <div>Freq: <strong>${percentage}</strong></div>
-                        ${!d.data.details.isOther ? `<div>Posts: <strong>${d.data.details.count ? d.data.details.count.toLocaleString() : '?'}</strong></div>` : ''}
-                    </div>
+                <div style="display: flex; gap: 12px; align-items: start;">
+                  ${thumbHtml}
+                  <div style="max-width: 180px;">
+                    <div style="font-weight: bold; color: ${d.data.color}; margin-bottom: 4px; font-size: 14px; word-wrap: break-word;">${d.data.label}</div>
+                    <div style="font-size: 11px; color: #ccc;">Freq: <strong style="color:#fff;">${percentage}</strong></div>
+                    ${!details.isOther ? `<div style="font-size: 11px; color: #ccc;">Posts: <strong style="color:#fff;">${details.count ? details.count.toLocaleString() : '?'}</strong></div>` : ''}
                   </div>
-               `;
+                </div>
+              `;
             }
 
             tooltip.html(html).style("opacity", 1);
@@ -4709,8 +4718,17 @@
                     .attr("r", d => d.isServer ? 3 : z(d.overlap))
                     .style("fill", d => d.isServer ? '#cccccc' : color(d.cosine))
                     .style("opacity", d => d.isServer ? "0.5" : "0.75")
-                    .attr("stroke", d => d.isServer ? "#aaa" : "white")
                     .style("stroke-width", "1px")
+                    .style("cursor", "pointer")
+                    .on("click", (event, d) => {
+                      const normalizedName = this.context.targetUser.name.replace(/ /g, '_');
+                      let tags = d.name;
+                      if (!d.isServer) {
+                        tags = `user:${normalizedName} ${d.name}`;
+                      }
+                      const url = `https://danbooru.donmai.us/posts?tags=${encodeURIComponent(tags)}`;
+                      window.open(url, '_blank');
+                    })
                     .on("mouseover", function (event, d) {
                       const showUser = document.getElementById('toggle-user-bubbles').checked;
                       const showServer = document.getElementById('toggle-server-bubbles').checked;
@@ -6356,7 +6374,7 @@
    */
   class AnalyticsDataManager extends DataManager {
     static isGlobalSyncing = false;
-    static syncProgress = { current: 0, total: 0 };
+    static syncProgress = { current: 0, total: 0, message: '' };
     static onProgressCallback = null;
 
     /**
@@ -6364,6 +6382,41 @@
      */
     constructor(db) {
       super(db);
+    }
+
+    /**
+     * Specialized fetcher for thumbnails with 429 (Rate Limit) handling.
+     * @param {string} tags The tag string for searching.
+     * @param {number} [retries=3] Number of allowed retries.
+     * @param {number} [delay=1500] Delay in ms before retry.
+     * @return {Promise<string>} The preview URL or empty string.
+     */
+    async fetchThumbnailWithRetry(tags, retries = 3, delay = 2000) {
+      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,file_url,rating`;
+      for (let i = 0; i < retries; i++) {
+        try {
+          const resp = await fetch(url);
+          if (resp.status === 429) {
+            // console.warn(`[Analytics] Rate limit hit for thumbnail (${tags}). Retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay + Math.random() * 2000));
+            delay *= 2; // Exponential backoff
+            continue;
+          }
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          if (Array.isArray(data) && data.length > 0) {
+            return data[0].preview_file_url || data[0].file_url || '';
+          }
+          return '';
+        } catch (e) {
+          if (i === retries - 1) {
+            console.warn(`[Analytics] Failed thumb fetch after ${retries} tries: ${tags}`, e);
+            return '';
+          }
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+      return '';
     }
 
     /**
@@ -6715,8 +6768,9 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
-    async getCharacterDistribution(userInfo, forceRefresh = false) {
+    async getCharacterDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Character Distribution...`);
       const uploaderId = parseInt(userInfo.id || 0); // Need ID for cache key
       const cacheKey = 'character_dist';
 
@@ -6740,6 +6794,8 @@
           const tagName = item.tag.name;
           const displayName = tagName.replace(/_/g, ' ');
 
+          if (reportSubStatus) reportSubStatus(`Fetching Character: ${displayName}`);
+
           let userCount = 0;
           try {
             const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
@@ -6749,15 +6805,19 @@
             console.warn('Failed to fetch count for', tagName);
           }
 
+          // Fetch Top Post for Thumbnail
+          const queryTags = `user:${normalizedName} ${tagName} order:score rating:g`;
+          const thumb = await this.fetchThumbnailWithRetry(queryTags);
+
           return {
             name: displayName,
             tagName: tagName,
             count: userCount || item.tag.post_count,
             frequency: item.frequency,
-            thumb: '',
+            thumb: thumb,
             isOther: false
           };
-        });
+        }, 500);
 
         const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
         const otherFreq = 1.0 - sumFreq;
@@ -6789,8 +6849,9 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
      */
-    async getCopyrightDistribution(userInfo, forceRefresh = false) {
+    async getCopyrightDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Copyright Distribution...`);
       const uploaderId = parseInt(userInfo.id || 0);
       const cacheKey = 'copyright_dist';
 
@@ -6828,6 +6889,8 @@
           const tagName = item.tag.name;
           const displayName = tagName.replace(/_/g, ' ');
 
+          if (reportSubStatus) reportSubStatus(`Fetching Copyright: ${displayName}`);
+
           // 1. Fetch User specific count
           let userCount = 0;
           try {
@@ -6836,15 +6899,19 @@
             userCount = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           } catch (e) { }
 
+          // Fetch Top Post for Thumbnail
+          const queryTags = `user:${normalizedName} ${tagName} order:score rating:g`;
+          const thumb = await this.fetchThumbnailWithRetry(queryTags);
+
           return {
             name: displayName,
             tagName: tagName,
             count: userCount || item.tag.post_count,
             frequency: item.frequency,
-            thumb: '',
+            thumb: thumb,
             isOther: false
           };
-        });
+        }, 500);
 
         const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
         const otherFreq = 1.0 - sumFreq;
@@ -6874,9 +6941,10 @@
      * @param {Array} items Items to process.
      * @param {number} concurrency Max concurrent tasks.
      * @param {Function} fn Async function to run on each item.
+     * @param {number} [delayMs=250] Delay between iterations per worker.
      * @return {Promise<Array>} Results array.
      */
-    async mapConcurrent(items, concurrency, fn) {
+    async mapConcurrent(items, concurrency, fn, delayMs = 250) {
       const results = new Array(items.length);
       let index = 0;
       const next = async () => {
@@ -6884,7 +6952,7 @@
           const i = index++;
           results[i] = await fn(items[i]);
           // Rate limit protection
-          await new Promise(r => setTimeout(r, 250));
+          await new Promise(r => setTimeout(r, delayMs));
         }
       }
       await Promise.all(Array.from({ length: concurrency }, next));
@@ -7119,8 +7187,9 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array>}
      */
-    async getBreastsDistribution(userInfo, forceRefresh = false) {
+    async getBreastsDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Breasts Distribution...`);
       const uploaderId = parseInt(userInfo.id || 0);
       const cacheKey = 'breasts_dist';
 
@@ -7140,7 +7209,9 @@
       ];
 
       // Use mapConcurrent from base class to fetch efficiently
-      const results = await this.mapConcurrent(breastTags, 6, async (tag) => {
+      const results = await this.mapConcurrent(breastTags, 3, async (tag) => {
+        const label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+        if (reportSubStatus) reportSubStatus(`Fetching Breasts: ${label}`);
         try {
           // Fetch count for "user:name tag"
           // Using counts/posts.json
@@ -7157,17 +7228,22 @@
           // flat_chest -> Flat Chest
           const label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
 
+          // Fetch Top Post for Thumbnail
+          const queryTags = `user:${normalizedName} ${tag} order:score rating:g`;
+          const thumb = await this.fetchThumbnailWithRetry(queryTags);
+
           return {
             name: label,
             count: count,
-            frequency: 0, // Calculated later if needed, but pie chart needs raw count
+            frequency: 0,
+            thumb: thumb,
             isOther: false
           };
         } catch (e) {
           console.warn(`[Danbooru Grass] Failed to fetch count for ${tag}`, e);
           return { name: tag, count: 0 };
         }
-      });
+      }, 500);
 
       // Filter out zero counts
       const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
@@ -7182,8 +7258,9 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array>}
      */
-    async getHairLengthDistribution(userInfo, forceRefresh = false) {
+    async getHairLengthDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Length Distribution...`);
       const uploaderId = parseInt(userInfo.id || 0);
       const cacheKey = 'hair_length_dist';
 
@@ -7203,7 +7280,11 @@
         'absurdly_long_hair'
       ];
 
-      const results = await this.mapConcurrent(hairLengthTags, 6, async (tag) => {
+      const results = await this.mapConcurrent(hairLengthTags, 3, async (tag) => {
+        let label = tag;
+        if (tag.includes('~bald')) label = 'Bald';
+        else label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+        if (reportSubStatus) reportSubStatus(`Fetching Hair Length: ${label}`);
         try {
           // Special handling for OR query "~bald ~bald_female"
           // We need to wrap it in parens for safety if combined with user:name? No, space is implicit AND.
@@ -7225,17 +7306,22 @@
           if (tag.includes('~bald')) label = 'Bald';
           else label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
 
+          // Fetch Top Post for Thumbnail
+          const queryTags = `user:${normalizedName} ${tag} order:score rating:g`;
+          const thumb = await this.fetchThumbnailWithRetry(queryTags);
+
           return {
             name: label,
             count: count,
             frequency: 0,
             originalTag: tag,
+            thumb: thumb,
             isOther: false
           };
         } catch (e) {
           return { name: tag, count: 0 };
         }
-      });
+      }, 500);
 
       const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
@@ -7248,8 +7334,9 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array>}
      */
-    async getHairColorDistribution(userInfo, forceRefresh = false) {
+    async getHairColorDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Color Distribution...`);
       const uploaderId = parseInt(userInfo.id || 0);
       const cacheKey = 'hair_color_dist';
 
@@ -7274,7 +7361,9 @@
         { tag: 'white_hair', color: '#FFFFFF' }
       ];
 
-      const results = await this.mapConcurrent(hairColorMap, 6, async (item) => {
+      const results = await this.mapConcurrent(hairColorMap, 3, async (item) => {
+        const label = item.tag.split('_')[0].charAt(0).toUpperCase() + item.tag.split('_')[0].slice(1) + ' Hair';
+        if (reportSubStatus) reportSubStatus(`Fetching Hair Color: ${label}`);
         try {
           const uniqueTag = `user:${normalizedName} ${item.tag}`;
           const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
@@ -7287,18 +7376,23 @@
 
           const label = item.tag.split('_')[0].charAt(0).toUpperCase() + item.tag.split('_')[0].slice(1) + ' Hair';
 
+          // Fetch Top Post for Thumbnail
+          const queryTags = `user:${normalizedName} ${item.tag} order:score rating:g`;
+          const thumb = await this.fetchThumbnailWithRetry(queryTags);
+
           return {
             name: label,
             count: count,
             frequency: 0,
-            color: item.color, // Store predetermined color
+            color: item.color,
             originalTag: item.tag,
+            thumb: thumb,
             isOther: false
           };
         } catch (e) {
           return { name: item.tag, count: 0 };
         }
-      });
+      }, 500);
 
       const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
@@ -7368,11 +7462,12 @@
         return;
       }
       AnalyticsDataManager.isGlobalSyncing = true;
-      AnalyticsDataManager.syncProgress = { current: 0, total: 0 };
+      AnalyticsDataManager.syncProgress = { current: 0, total: 0, message: '' };
+      AnalyticsDataManager.onProgressCallback = onProgress;
 
       // Helper to broadcast progress
-      const reportProgress = (c, t, msg = null) => {
-        AnalyticsDataManager.syncProgress = { current: c, total: t };
+      const reportProgress = (c, t, msg = '') => {
+        AnalyticsDataManager.syncProgress = { current: c, total: t, message: msg };
         if (AnalyticsDataManager.onProgressCallback) {
           AnalyticsDataManager.onProgressCallback(c, t, msg);
         }
@@ -7486,12 +7581,19 @@
               const q = new URLSearchParams(params);
               const url = `/posts.json?${q.toString()}`;
 
+              const pending = buffer.size;
+              reportProgress(currentNo, total, `Fetching Page ${currentPage} (Pending: ${pending})...`);
+
               // Retry Logic
               let items = null;
               let attempts = 0;
               while (attempts < 3) {
                 try {
-                  items = await fetch(url).then(r => {
+                  const controller = new AbortController();
+                  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s Timeout
+
+                  items = await fetch(url, { signal: controller.signal }).then(r => {
+                    clearTimeout(timeoutId);
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     return r.json();
                   });
@@ -7580,6 +7682,7 @@
 
       } finally {
         AnalyticsDataManager.isGlobalSyncing = false;
+        AnalyticsDataManager.onProgressCallback = null;
       }
     }
 
@@ -7657,10 +7760,37 @@
       try {
         await Promise.all([
           this.getRatingDistribution(userInfo, forceRefresh),
-          this.getCharacterDistribution(userInfo, forceRefresh),
-          this.getCopyrightDistribution(userInfo, forceRefresh),
+          this.getCharacterDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getCopyrightDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
           this.getFavCopyrightDistribution(userInfo, forceRefresh),
-          this.getBreastsDistribution(userInfo, forceRefresh)
+          this.getBreastsDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getHairLengthDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getHairColorDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          })
         ]);
         // console.log(`[Analytics] All stats refreshed for user ${userInfo.name}`);
       } catch (e) {
