@@ -337,6 +337,20 @@
         approvals_detail: 'id, userId', // Detailed Post IDs for Approvals
         hourly_stats: 'id, userId, metric, year' // Hourly aggregation (24 rows/year)
       });
+
+      // [v5] Bubble Chart Data
+      // PK: [userId+copyright]
+      this.version(5).stores({
+        uploads: 'id, userId, date, count',
+        approvals: 'id, userId, date, count',
+        notes: 'id, userId, date, count',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
+        piestats: '[key+userId], userId, updated_at',
+        completed_years: 'id, userId, metric, year',
+        approvals_detail: 'id, userId',
+        hourly_stats: 'id, userId, metric, year',
+        bubble_data: '[userId+copyright], userId, copyright, updated_at'
+      });
     }
   }
 
@@ -1224,6 +1238,155 @@
       return json.counts && typeof json.counts.posts === 'number'
         ? json.counts.posts
         : 0;
+    }
+
+    /**
+     * Fetches and filters Bubble Chart data for top copyrights.
+     * @param {string} userId The Target User ID.
+     * @param {Array<string>} copyrights List of copyright tags.
+     * @param {Function} onProgress Callback (current, total, message).
+     */
+    async fetchBubbleData(userInfo, copyrights, onProgress) {
+      const SERVER_USER_ID = 0; // Fixed ID for Server Data
+      const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 Days
+      const now = Date.now();
+      const totalSteps = copyrights.length * 2; // User + Server per copyright
+      let currentStep = 0;
+
+      const targetUserId = userInfo.id ? parseInt(userInfo.id, 10) : 0;
+
+      //console.log(`[BubbleData] Fetching for User ${targetUserId} (${userInfo.name}) with copyrights:`, copyrights);
+
+      for (const copyright of copyrights) {
+        // ... (Server Data - Unchanged) ...
+        // --- 1. Server Data (Global) ---
+        currentStep++;
+        if (onProgress) onProgress(currentStep, totalSteps, `Fetching Server Data: ${copyright}`);
+
+        // Check Cache
+        let serverEntry = await this.db.bubble_data.get({ userId: SERVER_USER_ID, copyright: copyright });
+        let needServerFetch = true;
+
+        if (serverEntry && serverEntry.updated_at) {
+          const age = now - new Date(serverEntry.updated_at).getTime();
+          // Fix: Also check if data is actually present. If previous fetch failed (empty), retry.
+          if (age < CACHE_TTL && serverEntry.data && serverEntry.data.length > 0) {
+            needServerFetch = false;
+          }
+        }
+
+        if (needServerFetch) {
+          try {
+            // Fetch Related Tags (Server)
+            const serverData = await this._fetchAndFilterRelatedTags(copyright, null);
+            await this.db.bubble_data.put({
+              userId: SERVER_USER_ID,
+              copyright: copyright,
+              data: serverData,
+              updated_at: new Date().toISOString()
+            });
+          } catch (e) {
+            console.error(`[BubbleData] Server Fetch Error for ${copyright}:`, e);
+          }
+        }
+
+        // --- 2. User Data (Target User) ---
+        currentStep++;
+        if (onProgress) onProgress(currentStep, totalSteps, `Fetching User Data: ${copyright}`);
+
+        try {
+          // Pass userInfo object (contains name) to helper
+          const userData = await this._fetchAndFilterRelatedTags(copyright, userInfo);
+          await this.db.bubble_data.put({
+            userId: targetUserId,
+            copyright: copyright,
+            data: userData,
+            updated_at: new Date().toISOString()
+          });
+        } catch (e) {
+          console.error(`[BubbleData] User Fetch Error for ${copyright}:`, e);
+        }
+      }
+    }
+
+    /**
+     * Helper: Fetch related tags and filter based on implications.
+     * @private
+     */
+    async _fetchAndFilterRelatedTags(copyright, userInfo) {
+      let query = copyright;
+      if (userInfo && userInfo.name) {
+        query += ` user:${userInfo.name}`;
+      } else if (userInfo) {
+        // Fallback if just ID passed (though we should avoid this based on tests)
+        query += ` user_id:${userInfo}`;
+      }
+
+      // 1. Fetch Candidates (Top 40 to filter down to 20)
+      const limit = 40;
+      const url = `${this.baseUrl}/related_tag.json?commit=Search&search[category]=Character&search[order]=Frequency&limit=${limit}&search[query]=${encodeURIComponent(query)}`;
+
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const rawData = await resp.json();
+
+      let relatedList = [];
+      if (Array.isArray(rawData)) {
+        relatedList = rawData; // Fallback or direct array
+      } else if (rawData.related_tags && Array.isArray(rawData.related_tags)) {
+        relatedList = rawData.related_tags;
+      } else {
+        console.warn('[BubbleData] Unexpected API response structure:', rawData);
+        return [];
+      }
+
+      if (relatedList.length === 0) return [];
+
+      // 2. Filter Implications
+      // 2. Filter Implications
+      const candidates = relatedList.map(item => item.tag ? item.tag.name : item.name);
+      const consequentQuery = candidates.join(',');
+
+      const impUrl = `${this.baseUrl}/tag_implications.json?limit=200&search[status]=active&search[consequent_name_matches]=${encodeURIComponent(consequentQuery)}`;
+
+      const impResp = await fetch(impUrl);
+      const implications = await impResp.json();
+
+      // Identify tags that are antecedents (children) of other tags in the list.
+      const childTagsData = new Set();
+      if (Array.isArray(implications)) {
+        implications.forEach(imp => {
+          if (candidates.includes(imp.consequent_name) && candidates.includes(imp.antecedent_name)) {
+            childTagsData.add(imp.antecedent_name);
+          }
+        });
+      }
+
+      // 3. Construct Final List
+      const finalList = [];
+      let count = 0;
+
+      for (const item of relatedList) {
+        if (count >= 20) break;
+
+        const tagObj = item.tag ? item.tag : item;
+
+        if (childTagsData.has(tagObj.name)) {
+          continue;
+        }
+
+        finalList.push({
+          name: tagObj.name,
+          count: tagObj.post_count,
+          // Use real stats from API
+          frequency: item.frequency || 0,
+          cosine: item.cosine_similarity || 0,
+          jaccard: item.jaccard_similarity || 0,
+          overlap: item.overlap_coefficient || 0
+        });
+        count++;
+      }
+      return finalList;
     }
   }
 
@@ -3243,6 +3406,26 @@
 
         if (animInterval) clearInterval(animInterval);
 
+        // --- Bubble Chart Data Collection ---
+        // Fetch distributions to identify Top 10 Copyrights
+        // We do this after sync to ensure we have the latest top copyrights.
+        try {
+          const dist = await this.dataManager.getCopyrightDistribution(this.context.targetUser);
+          const topCopyrights = dist.slice(0, 10).map(d => d.tagName).filter(n => n && n !== 'Other');
+
+          if (topCopyrights.length > 0) {
+            await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
+              const percent = Math.floor((c / t) * 100);
+              const headerHtml = `<div style="font-weight:bold;">Fetching Analytics: ${c} / ${t} (${percent}%)</div>`;
+              const subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">${msg}</div>`;
+              this.updateHeaderStatus(headerHtml + subHtml, '#ff4444');
+            });
+          }
+        } catch (err) {
+          console.error('[Danbooru Grass] Bubble Data Fetch Failed:', err);
+          // Non-critical, continue
+        }
+
         // Final Status (Green)
         if (shouldRender) {
           const finalStats = await this.dataManager.getSyncStats(this.context.targetUser);
@@ -3850,6 +4033,27 @@
 
           await dataManager.syncAllPosts(this.context.targetUser, null); // Pass null, let internal broadcast handle it
 
+          // --- Bubble Chart Data Collection ---
+          try {
+            const dist = await dataManager.getCopyrightDistribution(this.context.targetUser);
+            const topCopyrights = dist.slice(0, 10).map(d => d.tagName).filter(n => n && n !== 'Other');
+
+            if (topCopyrights.length > 0) {
+              const bar = syncDiv.querySelector('#analytics-main-bar');
+              const percent = syncDiv.querySelector('#analytics-main-percent');
+              const countText = syncDiv.querySelector('#analytics-main-count');
+
+              await dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
+                const p = t > 0 ? Math.round((c / t) * 100) : 0;
+                bar.style.width = `${p}%`;
+                percent.textContent = `${p}%`;
+                countText.textContent = `Fetching Analytics: ${c} / ${t}`;
+              });
+            }
+          } catch (err) {
+            console.error('[Danbooru Grass] Bubble Data Fetch Failed:', err);
+          }
+
           // Done
           this.updateHeaderStatus();
           this.renderDashboard();
@@ -4147,7 +4351,8 @@
             tooltip.style("opacity", 0);
           })
           .on('click', (event, d) => {
-            // Click action: open sub-modal
+            // Click action: open sub-modal ONLY for 'copyright' tab
+            if (currentPieTab !== 'copyright') return;
             if (d.data.details.isOther) return;
 
             const title = `${d.data.label} Details`;
@@ -6745,8 +6950,25 @@
           if (shouldDelete) {
             // console.log(`[Danbooru Grass] Cleaning up stale data for User ID: ${uid}`);
             await this.db.posts.where('uploader_id').equals(uid).delete();
-            await this.db.piestats.where('userId').equals(uid).delete(); // Also clear stats for this user
+            await this.db.piestats.where('userId').equals(uid).delete();
+            await this.db.bubble_data.where('userId').equals(uid).delete(); // Also clear bubble data
             localStorage.removeItem(syncKey);
+          }
+        }
+
+        // 2. Cleanup Stale Server Bubble Data (userId: 0)
+        // Since userId:0 isn't in 'posts', we check bubble_data directly.
+        const serverData = await this.db.bubble_data.where('userId').equals(0).toArray();
+        for (const entry of serverData) {
+          if (entry.updated_at) {
+            const age = now - new Date(entry.updated_at).getTime();
+            if (age > THRESHOLD) {
+              // console.log(`[Danbooru Grass] Cleaning up stale Server Bubble Data: ${entry.copyright}`);
+              await this.db.bubble_data.delete([entry.userId, entry.copyright]);
+            }
+          } else {
+            // No timestamp? Delete.
+            await this.db.bubble_data.delete([entry.userId, entry.copyright]);
           }
         }
       } catch (e) {
@@ -6783,6 +7005,9 @@
 
       // 2. Delete Pie Stats (userId is INT in updatePieStats)
       await this.db.piestats.where('userId').equals(uploaderId).delete();
+
+      // 3. Delete Bubble Data (User Specific only, preserve Server cache)
+      await this.db.bubble_data.where('userId').equals(uploaderId).delete();
 
       // Clear metadata (Last Sync Time)
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
