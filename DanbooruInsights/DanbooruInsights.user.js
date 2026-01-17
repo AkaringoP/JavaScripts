@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      5.2
+// @version      5.2.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -1334,7 +1334,7 @@
     async _fetchAndFilterRelatedTags(copyright, userInfo) {
       let query = copyright;
       if (userInfo && userInfo.name) {
-        query += ` user:${userInfo.name}`;
+        query += ` user:${userInfo.name.replace(/ /g, '_')}`;
       } else if (userInfo) {
         // Fallback if just ID passed (though we should avoid this based on tests)
         query += ` user_id:${userInfo}`;
@@ -4486,7 +4486,7 @@
               if (d.data.details.isOther) return;
 
               const title = `${d.data.label} Details`;
-              const targetName = this.context.targetUser.name || 'User';
+              const targetName = (this.context.targetUser.name || 'User').replace(/ /g, '_');
               const copyrightName = d.data.details.tagName;
 
               const helpContent = `
@@ -4904,17 +4904,17 @@
           if (!d.details.isOther) {
             if (currentPieTab === 'rating') {
               query = `rating:${d.details.rating}`;
-              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name} ${query}`)}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name.replace(/ /g, '_')} ${query}`)}`;
             } else if (currentPieTab === 'breasts') {
               const tag = d.label.toLowerCase().replace(/ /g, '_');
               targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name.replace(/ /g, '_')} ${tag}`)}`;
             } else if (currentPieTab === 'fav_copyright') {
-              query = `ordfav:${user.name} ${d.details.tagName || d.label}`;
+              query = `ordfav:${user.name.replace(/ /g, '_')} ${d.details.tagName || d.label}`;
               targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
             } else {
               // character / copyright
               query = d.details.tagName || d.label;
-              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name} ${query}`)}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${user.name.replace(/ /g, '_')} ${query}`)}`;
             }
           }
 
