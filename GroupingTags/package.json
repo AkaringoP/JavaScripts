@@ -1,0 +1,25 @@
+{
+  "name": "groupingtags",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "gts lint",
+    "clean": "gts clean",
+    "compile": "tsc",
+    "fix": "gts fix",
+    "prepare": "npm.cmd run compile",
+    "pretest": "npm.cmd run compile",
+    "posttest": "npm.cmd run lint"
+  },
+  "devDependencies": {
+    "gts": "^7.0.0",
+    "typescript": "^5.6.3",
+    "vite": "^7.2.4",
+    "vite-plugin-monkey": "^7.1.8",
+    "@types/node": "^22.7.5"
+  }
+}

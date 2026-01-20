@@ -1,0 +1,25 @@
+{
+  "extends": "./node_modules/gts/tsconfig-google.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "build",
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "lib": [
+      "DOM",
+      "ESNext"
+    ],
+    "skipLibCheck": true,
+    "types": [
+      "vite/client",
+      "node",
+      "vite-plugin-monkey/client"
+    ]
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "vite.config.ts"
+  ]
+}
