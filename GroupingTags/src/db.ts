@@ -57,7 +57,16 @@ export const savePostTagData = async (data: PostTagData): Promise<void> => {
         const store = transaction.objectStore(STORE_NAME);
         const request = store.put(data);
 
-        request.onsuccess = () => resolve();
+        request.onsuccess = () => {
+            // Dynamic Import to avoid cycle if possible, but AutoSyncManager depends on DB? 
+            // AutoSyncManager depends on SyncManager -> DB. 
+            // DB -> AutoSyncManager.
+            // Circular dependency is risky. Let's use dynamic import.
+            import('./core/auto-sync').then(({ AutoSyncManager }) => {
+                AutoSyncManager.notifyChange(data.postId);
+            });
+            resolve();
+        };
         request.onerror = () => reject(request.error);
     });
 };
@@ -96,3 +105,34 @@ export const deletePostTagData = async (postId: number): Promise<void> => {
         request.onerror = () => reject(request.error);
     });
 };
+
+/**
+ * Retrieves all data belonging to a specific shard (0-9).
+ * Used for synchronization.
+ */
+export async function getLocalDataByShard(shardIndex: number): Promise<Record<string, PostTagData>> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, 'readonly');
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.getAll(); // Get ALL data (IDB cursors might be better for huge datasets)
+
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const allData = request.result as PostTagData[];
+            const shardData: Record<string, PostTagData> = {};
+
+            allData.forEach(item => {
+                // Check last digit of PostID
+                const pidStr = item.postId.toString();
+                const lastChar = pidStr.slice(-1);
+                const idx = parseInt(lastChar, 10);
+
+                if (idx === shardIndex) {
+                    shardData[pidStr] = item;
+                }
+            });
+            resolve(shardData);
+        };
+    });
+}

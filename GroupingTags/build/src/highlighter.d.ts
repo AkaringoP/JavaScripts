@@ -1,6 +1,18 @@
 /**
  * SyntaxHighlighter
- * Textarea 뒤에 색칠된 Backdrop을 겹쳐서 그룹 문법(Name[...])을 강조하는 클래스
+ *
+ * Provides syntax highlighting for the `Group[ ... ]` syntax by overlaying a
+ * customized "Backdrop" element behind the transparent Textarea.
+ *
+ * **Mechanism**:
+ * 1. Creates a container wrapping the textarea.
+ * 2. Inserts a backdrop div behind the textarea.
+ * 3. Syncs font, size, padding, and scroll position perfectly.
+ * 4. Parses the text and injects colored HTML spans into the backdrop.
+ *
+ * **Features**:
+ * - **Phantom Mode**: Fades out the text and shows the backdrop when idle to provide beautiful highlighting without affecting typing performance.
+ * - **Active Mode**: Shows the raw text while typing for maximum responsiveness.
  */
 export declare class SyntaxHighlighter {
     private textarea;

@@ -1,5 +1,17 @@
 import { getPostTagData, savePostTagData } from './db';
 import { getPostId, stringToColor, detectDarkTheme } from './utils';
+/**
+ * SidebarInjector
+ *
+ * Injects "Bottle Cap" style visual indicators into the sidebar tag list.
+ * Allows users to quickly view and manage groups without entering the "Edit" mode.
+ *
+ * **Features**:
+ * - **Caps**: Shows a colored circle for single groups, or a stacked indicator for multiple groups.
+ * - **Ghost Buttons**: Shows a transparent button on hover for ungrouped tags to allow quick creation.
+ * - **Pill Menu**: Clicking a cap opens a floating menu to toggle groups or create new ones.
+ * - **Animations**: Smooth expand/collapse effects for the menu.
+ */
 export class SidebarInjector {
     checkEnabled;
     constructor(checkEnabled) {
@@ -83,10 +95,96 @@ export class SidebarInjector {
         // Select all tag list items
         // Danbooru Sidebar Selector: #tag-list ul li
         const listItems = document.querySelectorAll('#tag-list ul li, #sidebar ul li');
-        // Fallback selectors just in case. 
-        // Usually: .character-tag-list li, .general-tag-list li...
-        // But they all are under #tag-list or similar.
-        // Better: querySelectorAll('li[data-tag-name]')
+        // Select all potential lists (Character, General, Copyright, etc.)
+        const tagLists = document.querySelectorAll('#tag-list ul, #sidebar ul');
+        // --- VIEW SWITCHER UI ---
+        // Insert at the very top of #tag-list to ensure visibility
+        const tagListContainer = document.querySelector('#tag-list');
+        if (tagListContainer && !document.querySelector('.grouping-tags-view-switch')) {
+            const switchContainer = document.createElement('div');
+            switchContainer.className = 'grouping-tags-view-switch';
+            Object.assign(switchContainer.style, {
+                marginBottom: '10px',
+                marginTop: '5px',
+                display: 'flex',
+                gap: '5px'
+            });
+            // Create Dropdown
+            const select = document.createElement('select');
+            Object.assign(select.style, {
+                width: 'auto', // Compact width
+                minWidth: '80px',
+                padding: '2px 4px',
+                borderRadius: '4px',
+                border: '1px solid #ccc',
+                backgroundColor: detectDarkTheme() ? '#333' : '#fff',
+                color: detectDarkTheme() ? '#fff' : '#000',
+                fontSize: '14px', // Smaller font
+                height: '24px' // Fixed compact height
+            });
+            const optDefault = document.createElement('option');
+            optDefault.value = 'default';
+            optDefault.textContent = 'View: Default';
+            const optGroups = document.createElement('option');
+            optGroups.value = 'groups';
+            optGroups.textContent = 'View: Groups';
+            select.appendChild(optDefault);
+            select.appendChild(optGroups);
+            select.addEventListener('change', () => {
+                const mode = select.value;
+                if (mode === 'groups') {
+                    this.renderGroupView(groups);
+                }
+                else {
+                    this.renderDefaultView();
+                }
+            });
+            switchContainer.appendChild(select);
+            // Settings Button (Cloud Sync)
+            const settingsBtn = document.createElement('div');
+            settingsBtn.innerHTML = '☁️';
+            Object.assign(settingsBtn.style, {
+                cursor: 'pointer',
+                fontSize: '16px',
+                padding: '2px 4px',
+                marginLeft: '4px',
+                userSelect: 'none'
+            });
+            settingsBtn.title = 'Data Sync & Import';
+            settingsBtn.onclick = async () => {
+                const { AuthManager } = await import('./core/auth');
+                const token = await AuthManager.getToken(true);
+                const openSettings = async () => {
+                    // Initialize Gist (Checks for Gist ID or creates one)
+                    const { initializeGist } = await import('./core/gist-init');
+                    await initializeGist();
+                    // Open Panel
+                    const { SettingsPanel } = await import('./ui/settings-panel');
+                    SettingsPanel.show();
+                };
+                if (!token) {
+                    // Show Rich Login UI
+                    const { LoginModal } = await import('./ui/components/login-modal');
+                    LoginModal.show(async () => {
+                        // On Success
+                        await openSettings();
+                    });
+                }
+                else {
+                    await openSettings();
+                }
+            };
+            switchContainer.appendChild(settingsBtn);
+            // Prepend to top
+            if (tagListContainer.firstChild) {
+                tagListContainer.insertBefore(switchContainer, tagListContainer.firstChild);
+            }
+            else {
+                tagListContainer.appendChild(switchContainer);
+            }
+        }
+        // -----------------------
+        // Default View Injection (Indicators)
         const tags = document.querySelectorAll('li[data-tag-name]');
         tags.forEach(li => {
             const tagName = li.getAttribute('data-tag-name');
@@ -104,17 +202,220 @@ export class SidebarInjector {
             // Ensure LI is positioned for absolute child
             const liEl = li;
             liEl.style.position = 'relative';
-            // Add padding to make room for indicator (12px + 6px gap)
-            // Check if we already added it to avoid double padding if re-run?
-            // Actually, we replace button, so re-run is fine.
-            // But padding usually shouldn't be accumulated. 
-            // Let's assume standard LI padding is 0 or small. 
-            // We set a min-padding-left. 
-            // Safer: Add a class to LI to mark it processed, or check padding.
             if (!liEl.style.paddingLeft || parseInt(liEl.style.paddingLeft) < 20) {
                 liEl.style.paddingLeft = '20px';
             }
             this.createButton(liEl, myGroups);
+        });
+        // Store active groups for Group View refreshing
+        // @ts-ignore
+        window._groupingTagsLastGroups = groups;
+        // If we are currently in Group View, re-render it to update changes
+        const currentSelect = document.querySelector('.grouping-tags-view-switch select');
+        if (currentSelect && currentSelect.value === 'groups') {
+            this.renderGroupView(groups);
+        }
+    }
+    originalParents = new Map();
+    /**
+     * Restores the default Danbooru sidebar view by moving list items back to their original locations.
+     * Also restores visibility of hidden lists and headers.
+     */
+    renderDefaultView() {
+        const customContainer = document.getElementById('grouping-tags-custom-list');
+        if (customContainer)
+            customContainer.style.display = 'none';
+        this.originalParents.forEach((info, li) => {
+            if (info.parent) {
+                info.parent.insertBefore(li, info.nextSibling);
+            }
+        });
+        this.originalParents.clear();
+        const listsToRestore = document.querySelectorAll('.character-tag-list, .general-tag-list');
+        listsToRestore.forEach(el => el.style.display = '');
+        const allHeaders = document.querySelectorAll('#tag-list h1, #tag-list h2, #tag-list h3');
+        allHeaders.forEach(el => el.style.display = '');
+    }
+    renderGroupView(groups) {
+        // SAFETY: Always restore default view first to ensure all LIs are back in their original places
+        // before we try to move them again.
+        this.renderDefaultView();
+        // Reset visibility first to ensure clean slate
+        const customContainer = document.getElementById('grouping-tags-custom-list');
+        if (customContainer) {
+            customContainer.innerHTML = '';
+            customContainer.style.display = 'block';
+        }
+        else {
+            const c = document.createElement('div');
+            c.id = 'grouping-tags-custom-list';
+            // Insert Position: Replace "Characters" or "General" section
+            // Find the first target section to insert *before*
+            const targets = document.querySelectorAll('.character-tag-list, .general-tag-list');
+            let insertRef = null;
+            if (targets.length > 0) {
+                // Try to find the header preceding the first list
+                const firstList = targets[0];
+                const header = firstList.previousElementSibling;
+                if (header && (header.tagName === 'H1' || header.tagName === 'H2' || header.tagName === 'H3')) {
+                    insertRef = header;
+                }
+                else {
+                    insertRef = firstList;
+                }
+            }
+            const tagList = document.querySelector('#tag-list');
+            if (insertRef && insertRef.parentNode) {
+                // Safe Insertion: Insert into the ACTUAL parent of the reference node
+                insertRef.parentNode.insertBefore(c, insertRef);
+            }
+            else if (tagList) {
+                // Fallback: Append to #tag-list
+                tagList.appendChild(c);
+            }
+        }
+        const container = document.getElementById('grouping-tags-custom-list');
+        const isDark = detectDarkTheme();
+        const allTags = new Set(); // Tracks distinct tags processed (for Ungrouped check)
+        const processedTagsInRender = new Set(); // Tracks tags processed in THIS render loop to detect duplicates
+        // Helper to safe-move OR clone LI
+        const moveOrCloneLi = (tag, targetUl, groupNames) => {
+            // Find the ORIGINAL element (the one with the data attribute)
+            // Note: If we already moved it, querySelector might find the moved one. That's fine.
+            // If we cloned it, querySelector might find the original or the clone.
+            // We want the 'real' one to check reference. 
+            // Better strategy: rely on 'processedTagsInRender'.
+            // Should we look for the element in the DOM?
+            // If it was moved to a custom UL, it is still in the DOM.
+            const originalLi = document.querySelector(`li[data-tag-name="${CSS.escape(tag)}"]`);
+            if (originalLi) {
+                // Ensure it is a valid tag type before doing anything
+                if (!originalLi.classList.contains('tag-type-0') && !originalLi.classList.contains('tag-type-4')) {
+                    return false;
+                }
+                if (!processedTagsInRender.has(tag)) {
+                    // FIRST TIME: Move the original
+                    if (!this.originalParents.has(originalLi)) {
+                        this.originalParents.set(originalLi, {
+                            parent: originalLi.parentElement,
+                            nextSibling: originalLi.nextSibling
+                        });
+                    }
+                    targetUl.appendChild(originalLi);
+                    processedTagsInRender.add(tag);
+                    return true;
+                }
+                else {
+                    // SECOND TIME (Duplicate): Clone it
+                    // We clone the 'originalLi' (which might be in another Group UL now)
+                    // cloneNode(true) deep copies. 
+                    // Note: Event listeners on the element itself are NOT copied (except inline).
+                    // Our 'createButton' listeners will be lost on the clone.
+                    // We must re-create the button on the clone.
+                    const clone = originalLi.cloneNode(true);
+                    // Remove the old indicator from the clone if it exists (it was copied)
+                    const oldBtn = clone.querySelector('.grouping-tags-indicator');
+                    if (oldBtn)
+                        oldBtn.remove();
+                    // Re-inject the button so it works
+                    // We need to know ALL groups this tag belongs to, to color/label correctly?
+                    // Actually, 'createButton' uses the 'groups' map. 
+                    // But wait, 'createButton' uses a static 'myGroups' passed to it?
+                    // In 'injectIndicators', we calculated 'myGroups'.
+                    // Here we can re-calculate or pass it.
+                    // Let's pass the subset or full set? 
+                    // Usually we want to show the SAME indicator (showing all groups).
+                    // Recalculate groups for this tag
+                    const myGroups = [];
+                    for (const [g, tList] of Object.entries(groups)) {
+                        if (tList.includes(tag))
+                            myGroups.push(g);
+                    }
+                    this.createButton(clone, myGroups); // Add distinct listener to clone
+                    targetUl.appendChild(clone);
+                    return true;
+                }
+            }
+            return false;
+        };
+        // 1. Render Grouped Tags
+        const sortedGroups = Object.keys(groups).sort();
+        sortedGroups.forEach(gName => {
+            const tags = groups[gName];
+            // Create Section Header
+            const header = document.createElement('h3');
+            header.textContent = gName;
+            header.style.color = stringToColor(gName, isDark);
+            header.style.marginBottom = '2px';
+            header.style.marginTop = '10px';
+            header.style.borderBottom = `1px solid ${stringToColor(gName, isDark)}`;
+            const ul = document.createElement('ul');
+            ul.className = 'general-tag-list'; // Styling
+            let count = 0;
+            tags.forEach(tag => {
+                allTags.add(tag);
+                // Pass all groups just in case we need to re-calc for clone
+                if (moveOrCloneLi(tag, ul, Object.keys(groups)))
+                    count++;
+            });
+            // Only append if group has visible tags (Character/General)
+            if (count > 0) {
+                container.appendChild(header);
+                container.appendChild(ul);
+            }
+        });
+        // 2. Render Ungrouped Tags
+        const ungroupedHeader = document.createElement('h3');
+        ungroupedHeader.textContent = 'Ungrouped';
+        ungroupedHeader.style.color = isDark ? '#aaa' : '#555';
+        ungroupedHeader.style.marginBottom = '2px';
+        ungroupedHeader.style.marginTop = '10px';
+        ungroupedHeader.style.borderBottom = '1px solid #777';
+        const ulUngrouped = document.createElement('ul');
+        ulUngrouped.className = 'general-tag-list';
+        let ungroupedCount = 0;
+        const allLis = document.querySelectorAll('li[data-tag-name]');
+        allLis.forEach(li => {
+            const tagName = li.getAttribute('data-tag-name');
+            if (tagName && !allTags.has(tagName)) {
+                // Try moving (will only move if 0 or 4)
+                // For ungrouped, it should never be a clone (since !allTags.has check), but function is shared.
+                // We pass empty groups list or correct one? Doesn't matter for original move.
+                if (moveOrCloneLi(tagName, ulUngrouped, []))
+                    ungroupedCount++;
+            }
+        });
+        if (ungroupedCount > 0) {
+            container.appendChild(ungroupedHeader);
+            container.appendChild(ulUngrouped);
+        }
+        // 3. Hide Original General/Character Lists & Headers
+        // We only hide specific lists that we emptied or intend to replace
+        // STRICT SELECTOR: Only target direct children of #tag-list to avoid hiding our own custom lists
+        const specificLists = document.querySelectorAll('#tag-list > .character-tag-list, #tag-list > .general-tag-list');
+        specificLists.forEach(ul => {
+            // Hide the UL
+            ul.style.display = 'none';
+            // Hide the preceding Header (usually h2 or h3)
+            const prev = ul.previousElementSibling;
+            if (prev && (prev.tagName === 'H1' || prev.tagName === 'H2' || prev.tagName === 'H3')) {
+                // Ensure it's not our own header/switch
+                if (!prev.classList.contains('grouping-tags-view-switch')) {
+                    prev.style.display = 'none';
+                }
+            }
+        });
+        // Extra Safety: Explicitly hide headers by text content if they were missed
+        // Remove '>' to find nested headers. Exclude our own custom list headers.
+        const allHeaders = document.querySelectorAll('#tag-list h1, #tag-list h2, #tag-list h3');
+        allHeaders.forEach(h => {
+            // Skip headers inside our own container
+            if (container && container.contains(h))
+                return;
+            const text = h.textContent?.trim().toLowerCase();
+            if (text === 'characters' || text === 'general') {
+                h.style.display = 'none';
+            }
         });
     }
     createButton(li, groupNames) {
@@ -233,6 +534,7 @@ export class SidebarInjector {
                 this.injectIndicators(this.allGroups);
                 // Dispatch Event to notify Main Script
                 window.dispatchEvent(new CustomEvent('grouping-tags-db-update'));
+                // Auto-Sync is now handled globally in db.ts via AutoSyncManager.notifyChange
             }
             // Exit Animation
             menu.style.opacity = '0';
@@ -298,6 +600,43 @@ export class SidebarInjector {
         menu.appendChild(collapseBtn);
         // 2. Group List
         const allGroupNames = Object.keys(this.allGroups).sort();
+        const shouldScroll = allGroupNames.length > 5;
+        // Container for groups (Scrollable if needed)
+        const listContainer = document.createElement('div');
+        Object.assign(listContainer.style, {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            width: '100%'
+        });
+        if (shouldScroll) {
+            Object.assign(listContainer.style, {
+                // Height calculation: (16px circle + 4px margin) * 5 + roughly 4px padding wiggle room = ~104px
+                maxHeight: '104px',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                // Custom Scrollbar Styling (Webkit)
+                scrollbarWidth: 'none', // Firefox
+                msOverflowStyle: 'none' // IE/Edge
+            });
+            // Hide ScrollBar for Webkit (Chrome/Safari) - Inject style if possible, or assume user style handles it.
+            // Since we use inline styles, we can't easily do pseudo-elements ::-webkit-scrollbar.
+            // However, typical userscripts prefer clean UIs. 'scrollbarWidth: none' works for FF.
+            // For Chrome, we can rely on standard scroll behavior or inject a quick class.
+            listContainer.classList.add('grouping-tags-scroll-container');
+            // Inject scrollbar hiding style once if not already there
+            if (!document.querySelector('#grouping-tags-scroll-style')) {
+                const s = document.createElement('style');
+                s.id = 'grouping-tags-scroll-style';
+                s.textContent = `
+                    .grouping-tags-scroll-container::-webkit-scrollbar {
+                        width: 0px;
+                        background: transparent;
+                    }
+                `;
+                document.head.appendChild(s);
+            }
+        }
         allGroupNames.forEach(gName => {
             const wrapper = document.createElement('div');
             wrapper.style.position = 'relative'; // For absolute tooltip positioning
@@ -316,7 +655,8 @@ export class SidebarInjector {
                     border: `2px solid ${color}`, // Explicit color
                     boxSizing: 'border-box',
                     transition: 'transform 0.1s, background-color 0.2s',
-                    transform: isActive ? 'scale(1.1)' : 'scale(1)'
+                    transform: isActive ? 'scale(1.1)' : 'scale(1)',
+                    flexShrink: '0' // Prevent shrinking in flex container
                 });
             };
             updateCircleStyle();
@@ -359,8 +699,9 @@ export class SidebarInjector {
             };
             wrapper.appendChild(circle);
             wrapper.appendChild(label);
-            menu.appendChild(wrapper);
+            listContainer.appendChild(wrapper);
         });
+        menu.appendChild(listContainer);
         // 3. Add Group Button (+)
         const addWrapper = document.createElement('div');
         addWrapper.style.position = 'relative';
@@ -497,6 +838,30 @@ export class SidebarInjector {
         menu.style.top = `${rect.top + scrollY - 2}px`; // Align slightly Top
         // Width adjustment?
         menu.style.width = '20px'; // Slightly wider than button (12px + padding)
+    }
+    // --- Auto-Sync Logic ---
+    syncTimeout = null;
+    async triggerAutoSync(postId) {
+        // Debounce: Wait 3 seconds to avoid spamming Gist
+        if (this.syncTimeout)
+            clearTimeout(this.syncTimeout);
+        console.log(`⏳ Auto-Sync Scheduled for Post ${postId}...`);
+        this.syncTimeout = setTimeout(async () => {
+            console.log("🔄 Auto-Sync Starting...");
+            // Dynamic Import to avoid circular deps or heavy load
+            const { SyncManager } = await import('./core/sync-manager');
+            const { getLocalDataByShard } = await import('./db');
+            try {
+                const shardIdx = SyncManager.getShardIndex(postId);
+                // We need ALL data for that shard to sync properly (full replace)
+                const localData = await getLocalDataByShard(shardIdx);
+                await SyncManager.syncShard(shardIdx, localData);
+                console.log("✅ Auto-Sync Finished");
+            }
+            catch (e) {
+                console.error("❌ Auto-Sync Failed:", e);
+            }
+        }, 3000);
     }
 }
 //# sourceMappingURL=sidebar.js.map

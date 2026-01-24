@@ -256,7 +256,7 @@ export class SyntaxHighlighter {
   }
 
   private activatePhantomMode() {
-    console.log('GroupingTags: Activating Phantom Mode (Idle)');
+    // console.log('GroupingTags: Activating Phantom Mode (Idle)');
     this.update();
     this.textarea.classList.add('gh-ghost');
     this.backdrop.classList.add('gh-visible');

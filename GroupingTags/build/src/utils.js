@@ -1,7 +1,11 @@
 /**
- * Generates a consistent HSL color from a string.
- * @param str The input string (e.g. group name)
- * @param isDark Whether to generate colors optimized for dark theme
+ * Generates a consistent HSL color from a given string (e.g. group name).
+ * Uses a simple hash function to determine the Hue, while keeping Saturation and Lightness
+ * optimized for readability depending on the theme (Dark/Light).
+ *
+ * @param str The input string to hash (e.g., "GroupName").
+ * @param isDark If true, generates lighter pastels suitable for dark backgrounds. If false, generates darker colors for light backgrounds.
+ * @returns A CSS color string in `hsl(h, s%, l%)` format.
  */
 export function stringToColor(str, isDark) {
     let hash = 0;
@@ -14,7 +18,10 @@ export function stringToColor(str, isDark) {
     return `hsl(${hue}, ${saturation}%, ${lightness}%)`;
 }
 /**
- * Detects if the current page is using a dark theme based on body background.
+ * Detects if the current page is using a dark theme by checking the body's background color brightness.
+ * Calculates luminance using the standard formula: `0.299*R + 0.587*G + 0.114*B`.
+ *
+ * @returns `true` if the background is dark (brightness < 128), `false` otherwise.
  */
 export function detectDarkTheme() {
     const bg = window.getComputedStyle(document.body).backgroundColor;
@@ -28,7 +35,10 @@ export function detectDarkTheme() {
     return false;
 }
 /**
- * Helper to get Post ID from URL or Form Action
+ * Retrieves the current Post ID from the URL or the Form Action attribute.
+ * Supports standard Danbooru URL usage (e.g., `/posts/12345`) and upload forms.
+ *
+ * @returns The Post ID as a number, or `null` if not found.
  */
 export function getPostId() {
     // Option 1: URL (e.g., /posts/12345)
@@ -36,7 +46,7 @@ export function getPostId() {
     if (match) {
         return parseInt(match[1], 10);
     }
-    // Option 2: Form action
+    // Option 2: Form action (Common on Edit pages)
     const form = document.querySelector('form#form');
     if (form) {
         const action = form.getAttribute('action');

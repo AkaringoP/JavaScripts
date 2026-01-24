@@ -17,3 +17,20 @@ export interface PostTagData {
         [groupName: string]: string[];
     };
 }
+
+// Gist Manifest Structure
+export interface GistManifest {
+    schemaVersion: number;   // e.g. 1
+    lastSynced: number;      // Unix Timestamp
+    device: string;          // e.g. "PC-Chrome"
+    totalGroups: number;     // Statistic
+}
+
+// Shard File Structure (Inside Gist)
+export interface ShardData {
+    [postId: string]: {
+        updatedAt: number;
+        isImported?: boolean;
+        groups: Record<string, string[]>;
+    };
+}

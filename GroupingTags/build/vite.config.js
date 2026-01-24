@@ -6,16 +6,21 @@ export default defineConfig({
         monkey({
             entry: 'src/main.ts',
             userscript: {
-                name: 'GroupingTags',
+                name: 'Danbooru Grouping Tags',
                 namespace: 'http://tampermonkey.net/',
                 version: '0.1',
                 description: 'try to take over the world!',
                 author: 'You',
                 match: [
                     'https://danbooru.donmai.us/posts/*',
-                    'https://danbooru.donmai.us/uploads/*',
                 ],
-                grant: ['GM_setValue', 'GM_getValue'],
+                grant: [
+                    'GM_setValue',
+                    'GM_getValue',
+                    'GM_deleteValue',
+                    'GM_xmlhttpRequest',
+                ],
+                connect: ['api.github.com'],
                 icon: 'https://danbooru.donmai.us/favicon.ico',
             },
             build: {
