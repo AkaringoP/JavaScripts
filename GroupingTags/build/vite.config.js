@@ -16,7 +16,7 @@ export default defineConfig({
                     'https://danbooru.donmai.us/uploads/*',
                 ],
                 grant: ['GM_setValue', 'GM_getValue'],
-                icon: 'https://vitejs.dev/logo.svg',
+                icon: 'https://danbooru.donmai.us/favicon.ico',
             },
             build: {
                 externalGlobals: {

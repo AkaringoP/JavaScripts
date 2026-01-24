@@ -1,8 +1,11 @@
 const DB_NAME = 'GroupingTagsDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'post_tags';
+let dbPromise = null;
 export const openDB = () => {
-    return new Promise((resolve, reject) => {
+    if (dbPromise)
+        return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
         request.onupgradeneeded = (event) => {
             const db = event.target.result;
@@ -11,12 +14,19 @@ export const openDB = () => {
             }
         };
         request.onsuccess = (event) => {
-            resolve(event.target.result);
+            const db = event.target.result;
+            // Handle connection closing (optional but good practice)
+            db.onclose = () => {
+                dbPromise = null;
+            };
+            resolve(db);
         };
         request.onerror = (event) => {
+            dbPromise = null; // Clear promise on error so we can retry
             reject(event.target.error);
         };
     });
+    return dbPromise;
 };
 export const savePostTagData = async (data) => {
     const db = await openDB();

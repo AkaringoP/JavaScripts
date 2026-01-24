@@ -1,7 +1,7 @@
 export interface PostTagData {
     postId: number;
-    updated_at: number;
-    is_imported?: boolean;
+    updatedAt: number;
+    isImported?: boolean;
     groups: {
         [groupName: string]: string[];
     };

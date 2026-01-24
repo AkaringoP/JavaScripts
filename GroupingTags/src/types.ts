@@ -1,7 +1,18 @@
+/**
+ * Represents the structure of tag grouping data stored in IndexedDB.
+ */
 export interface PostTagData {
-    postId: number;           // Primary Key
-    updated_at: number;       // Unix Timestamp
-    is_imported?: boolean;    // true: external data, false/undefined: local data
+    /** Primary Key: The ID of the post. */
+    postId: number;
+    /** Unix timestamp of the last update. */
+    updatedAt: number;
+    /** Flag to indicate if data was imported from an external source (default: false). */
+    isImported?: boolean;
+    /** 
+     * Map of Group Name to list of Tags.
+     * key: Group Name (e.g., "Clothes")
+     * value: Array of tags (e.g., ["shirt", "pants"])
+     */
     groups: {
         [groupName: string]: string[];
     };

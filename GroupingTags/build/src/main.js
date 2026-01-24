@@ -83,26 +83,36 @@ function parseToggleStyle() {
   `;
     document.head.appendChild(style);
 }
+import { SyntaxHighlighter } from './highlighter';
 import { SmartInputHandler } from './input_handler';
 import { parseGroupedTags, reconstructTags, flattenTags, removeMissingTagsFromGroups } from './parser';
 import { savePostTagData, getPostTagData, deletePostTagData } from './db';
-// Helper to get Post ID
-function getPostId() {
-    // Option 1: URL (e.g., /posts/12345)
-    const match = window.location.pathname.match(/\/posts\/(\d+)/);
-    if (match) {
-        return parseInt(match[1], 10);
-    }
-    // Option 2: Form action
-    const form = document.querySelector('form#form');
-    if (form) {
-        const action = form.getAttribute('action');
-        const actionMatch = action?.match(/\/posts\/(\d+)/);
-        if (actionMatch) {
-            return parseInt(actionMatch[1], 10);
-        }
-    }
-    return null;
+import { getPostId } from './utils';
+import { SidebarInjector } from './sidebar';
+// Helper to get Post ID removed (moved to utils)
+// Toast Helper
+function showToast(message, duration = 3000) {
+    const toast = document.createElement('div');
+    toast.textContent = message;
+    Object.assign(toast.style, {
+        position: 'fixed',
+        bottom: '20px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        backgroundColor: 'rgba(255, 0, 0, 0.8)',
+        color: 'white',
+        padding: '10px 20px',
+        borderRadius: '5px',
+        zIndex: '10000',
+        fontSize: '14px',
+        boxShadow: '0 2px 5px rgba(0,0,0,0.2)',
+        transition: 'opacity 0.3s'
+    });
+    document.body.appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
 }
 // RESTORE LOGIC
 async function loadAndRestoreTags() {
@@ -123,6 +133,8 @@ async function loadAndRestoreTags() {
             const newText = reconstructTags(currentText, data.groups);
             if (currentText !== newText) {
                 input.value = newText;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
                 console.log('GroupingTags: Restored groups in textarea.');
             }
         }
@@ -130,6 +142,35 @@ async function loadAndRestoreTags() {
     catch (e) {
         console.error('GroupingTags: Failed to load/restore tags', e);
     }
+}
+// Function to handle dynamic form appearance (e.g. clicking "Edit" on post page)
+function setupDynamicFormObserver() {
+    const observer = new MutationObserver((mutations) => {
+        let shouldRestore = false;
+        for (const mutation of mutations) {
+            if (mutation.addedNodes.length > 0) {
+                for (const node of Array.from(mutation.addedNodes)) {
+                    if (node instanceof HTMLElement) {
+                        // Check if the added node IS the input or CONTAINS the input
+                        if (node.matches && (node.matches('#post_tag_string, #upload_tag_string') || node.querySelector('#post_tag_string, #upload_tag_string'))) {
+                            shouldRestore = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (shouldRestore)
+                break;
+        }
+        if (shouldRestore) {
+            // Input found! Run restoration.
+            // Add a small delay to ensure value is populated by Danbooru's scripts
+            setTimeout(() => {
+                loadAndRestoreTags();
+            }, 100);
+        }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
 }
 function createToggleSwitch() {
     const container = document.createElement('span');
@@ -167,6 +208,8 @@ function createToggleSwitch() {
                 // Only flatten if syntax is detected to avoid unnecessary updates
                 if (/([^\s\[]+)\[\s*(.+?)\s*\]/.test(currentText)) {
                     input.value = flattenTags(currentText);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
                     console.log('GroupingTags: Flattened tags in textarea.');
                 }
             }
@@ -195,123 +238,199 @@ function insertToggleButton() {
 }
 // Duplicate imports and getPostId removed from here.
 function setupFormInterception() {
+    let isSubmitting = false;
     // Use document-level listener to catch all submits, just in case the form selector was early/wrong.
     document.addEventListener('submit', async (e) => {
+        // Prevent recursive submission loops
+        if (isSubmitting)
+            return;
         const target = e.target;
         if (!target)
             return;
         // Check if it's the right form (id="form" or contains our inputs)
-        // We check if it contains the tag input we care about.
         const input = target.querySelector('#post_tag_string, #upload_tag_string');
         if (!input)
             return;
+        // Cast to Form once for use throughout
+        const form = target;
         const text = input.value;
         console.log('GroupingTags: Submit detected. Content:', text);
         // Stop immediate submit to process data logic (both ON and OFF)
         e.preventDefault();
         e.stopImmediatePropagation();
-        const postId = getPostId();
-        const enabled = isScriptEnabled();
-        // === TOGGLE ON: Grouping Active ===
-        if (enabled) {
-            console.log('GroupingTags: Toggle ON. Processing groups...');
-            // Even if regex doesn't match/exist, we parse. 
-            // If user deleted groups, parsed.groups will be empty.
-            const parsed = parseGroupedTags(text);
-            if (postId) {
-                try {
-                    if (Object.keys(parsed.groups).length > 0) {
-                        await savePostTagData({
-                            postId: postId,
-                            updated_at: Date.now(),
-                            is_imported: false,
-                            groups: parsed.groups
-                        });
-                        console.log('GroupingTags: Saved to DB (Overwrite)', parsed);
-                    }
-                    else {
-                        // Only delete if a record actually exists
-                        const existing = await getPostTagData(postId);
-                        if (existing) {
-                            await deletePostTagData(postId);
-                            console.log('GroupingTags: Groups removed. Deleted DB record.');
-                        }
-                        else {
-                            console.log('GroupingTags: No groups and no DB record. Skipping.');
-                        }
-                    }
-                }
-                catch (err) {
-                    console.error('GroupingTags: DB Operation Failed', err);
-                }
-            }
-            else {
-                console.warn('GroupingTags: Could not determine Post ID. Skipping DB save.');
-            }
-            // Flatten tags for submission
-            const allTags = [
-                ...Object.values(parsed.groups).flat(),
-                ...parsed.originalTags
-            ];
-            input.value = allTags.join(' ');
-            console.log('GroupingTags: Input updated for submit:', input.value);
+        isSubmitting = true;
+        // Visual Feedback: Disable Submit Button
+        if (e.submitter && e.submitter instanceof HTMLInputElement) {
+            e.submitter.disabled = true;
         }
-        // === TOGGLE OFF: Grouping Inactive (Sync Removals) ===
         else {
-            console.log('GroupingTags: Toggle OFF. Syncing removals...');
-            if (postId) {
-                try {
-                    const dbData = await getPostTagData(postId);
-                    if (dbData && dbData.groups) {
-                        const currentTags = text.split(/\s+/).filter(t => t.length > 0);
-                        const { updatedGroups, changed } = removeMissingTagsFromGroups(dbData.groups, currentTags);
-                        if (changed) {
-                            if (Object.keys(updatedGroups).length > 0) {
-                                await savePostTagData({
-                                    postId: postId,
-                                    updated_at: Date.now(),
-                                    is_imported: false,
-                                    groups: updatedGroups
+            // Fallback if submitter is not captured or not an input
+            const submitBtn = form.querySelector('input[type="submit"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+            }
+        }
+        try {
+            const postId = getPostId();
+            const enabled = isScriptEnabled();
+            // === TOGGLE ON: Grouping Active ===
+            if (enabled) {
+                console.log('GroupingTags: Toggle ON. Processing groups...');
+                const parsed = parseGroupedTags(text);
+                // --- VALIDATION START ---
+                if (postId && Object.keys(parsed.groups).length > 0) {
+                    try {
+                        // Fetch Post Data to check tag types
+                        const resp = await fetch(`/posts/${postId}.json`);
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            // Danbooru API often returns the object directly or wrapped in 'post'
+                            const postData = data.post || data;
+                            const restrictedTags = new Set([
+                                ...(postData.tag_string_artist?.split(' ') || []),
+                                ...(postData.tag_string_copyright?.split(' ') || []),
+                                ...(postData.tag_string_meta?.split(' ') || [])
+                            ]);
+                            const invalidTags = [];
+                            Object.values(parsed.groups).forEach(tags => {
+                                tags.forEach(tag => {
+                                    if (restrictedTags.has(tag)) {
+                                        invalidTags.push(tag);
+                                    }
                                 });
-                                console.log('GroupingTags: Synced removals to DB.', updatedGroups);
+                            });
+                            if (invalidTags.length > 0) {
+                                const msg = `Error: Cannot group Artist/Copyright/Meta tags: ${invalidTags.slice(0, 3).join(', ')}${invalidTags.length > 3 ? '...' : ''}`;
+                                showToast(msg, 5000);
+                                console.error("GroupingTags: Validation Failed", invalidTags);
+                                // Re-enable button and Stop
+                                isSubmitting = false;
+                                if (e.submitter && e.submitter instanceof HTMLInputElement) {
+                                    e.submitter.disabled = false;
+                                }
+                                else {
+                                    const submitBtn = form.querySelector('input[type="submit"]');
+                                    if (submitBtn)
+                                        submitBtn.disabled = false;
+                                }
+                                return; // BLOCK SUBMIT
                             }
-                            else {
-                                // All groups became empty -> Delete record
-                                await deletePostTagData(postId);
-                                console.log('GroupingTags: All groups removed. Deleted DB record.');
-                            }
-                        }
-                        else {
-                            console.log('GroupingTags: No changes in groups detected.');
                         }
                     }
+                    catch (validationErr) {
+                        console.warn('GroupingTags: Validation fetch failed, skipping check.', validationErr);
+                    }
                 }
-                catch (err) {
-                    console.error('GroupingTags: DB Sync Failed', err);
+                // --- VALIDATION END ---
+                if (postId) {
+                    try {
+                        if (Object.keys(parsed.groups).length > 0) {
+                            await savePostTagData({
+                                postId: postId,
+                                updatedAt: Date.now(),
+                                isImported: false,
+                                groups: parsed.groups
+                            });
+                            console.log('GroupingTags: Saved to DB (Overwrite)', parsed);
+                        }
+                        else {
+                            const existing = await getPostTagData(postId);
+                            if (existing) {
+                                await deletePostTagData(postId);
+                                console.log('GroupingTags: Groups removed. Deleted DB record.');
+                            }
+                        }
+                    }
+                    catch (err) {
+                        console.error('GroupingTags: DB Operation Failed', err);
+                    }
+                }
+                // Flatten tags for submission
+                const allTags = [
+                    ...Object.values(parsed.groups).flat(),
+                    ...parsed.originalTags
+                ];
+                input.value = allTags.join(' ');
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            // === TOGGLE OFF: Grouping Inactive (Sync Removals) ===
+            else {
+                console.log('GroupingTags: Toggle OFF. Syncing removals...');
+                if (postId) {
+                    try {
+                        const dbData = await getPostTagData(postId);
+                        if (dbData && dbData.groups) {
+                            const currentTags = text.split(/\s+/).filter(t => t.length > 0);
+                            const { updatedGroups, changed } = removeMissingTagsFromGroups(dbData.groups, currentTags);
+                            if (changed) {
+                                if (Object.keys(updatedGroups).length > 0) {
+                                    await savePostTagData({
+                                        postId: postId,
+                                        updatedAt: Date.now(),
+                                        isImported: false,
+                                        groups: updatedGroups
+                                    });
+                                }
+                                else {
+                                    await deletePostTagData(postId);
+                                }
+                            }
+                        }
+                    }
+                    catch (err) {
+                        console.error('GroupingTags: DB Sync Failed', err);
+                    }
                 }
             }
-            // Input remains as is (flattened)
+            // Re-submit
+            // Create hidden input for submitter if it exists, to preserve button action
+            if (e.submitter && e.submitter.name) {
+                const hiddenInput = document.createElement('input');
+                hiddenInput.type = 'hidden';
+                hiddenInput.name = e.submitter.name;
+                hiddenInput.value = e.submitter.value;
+                form.appendChild(hiddenInput);
+            }
+            form.submit();
         }
-        // Re-submit
-        const form = target;
-        if (e.submitter && e.submitter.name) {
-            const hiddenInput = document.createElement('input');
-            hiddenInput.type = 'hidden';
-            hiddenInput.name = e.submitter.name;
-            hiddenInput.value = e.submitter.value;
-            form.appendChild(hiddenInput);
+        catch (error) {
+            console.error("GroupingTags: Error during submit handling", error);
+            // Ensure we don't block submit on error
+            isSubmitting = false;
         }
-        form.submit();
+        finally {
+            // We don't reset isSubmitting to false if we successfully called form.submit()
+            // because the page should reload/navigate.
+            // However, if form.submit() doesn't reload (e.g. AJAX form), we might need to reset.
+            // But standard form submission will reload.
+            // If it was an SPA or handled via AJAX, we might need a timeout to reset.
+            setTimeout(() => { isSubmitting = false; }, 1000);
+        }
     }, { capture: true });
     console.log('GroupingTags: Document-level submit listener attached.');
+    // Listen for Sidebar Updates
+    window.addEventListener('grouping-tags-db-update', () => {
+        console.log('GroupingTags: DB Update detected. Refreshing tags...');
+        loadAndRestoreTags();
+    });
 }
 function main() {
     insertToggleButton();
     setupFormInterception();
     loadAndRestoreTags();
+    setupDynamicFormObserver(); // Monitor for dynamic "Edit" window
+    // Initialize Syntax Highlighter if enabled
+    if (isScriptEnabled()) {
+        new SyntaxHighlighter('#post_tag_string, #upload_tag_string');
+    }
     // Initialize Smart Input Handler
     // Targets both upload and post pages
     new SmartInputHandler('#post_tag_string, #upload_tag_string', isScriptEnabled);
+    // Initialize Sidebar Indicators (Post Page only)
+    if (window.location.pathname.startsWith('/posts/')) {
+        new SidebarInjector(isScriptEnabled);
+    }
 }
 main();
 //# sourceMappingURL=main.js.map
