@@ -13,6 +13,7 @@
     "fix": "gts fix",
     "prepare": "npm.cmd run compile",
     "pretest": "npm.cmd run compile",
+    "test": "node build/test/parser_test.js",
     "posttest": "npm.cmd run lint"
   },
   "devDependencies": {

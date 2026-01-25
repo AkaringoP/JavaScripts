@@ -8,9 +8,9 @@ export default defineConfig({
             userscript: {
                 name: 'Danbooru Grouping Tags',
                 namespace: 'http://tampermonkey.net/',
-                version: '0.1',
-                description: 'try to take over the world!',
-                author: 'You',
+                version: '0.8',
+                description: 'Grouping Tags for Danbooru',
+                author: 'AkaringoP',
                 match: [
                     'https://danbooru.donmai.us/posts/*',
                 ],

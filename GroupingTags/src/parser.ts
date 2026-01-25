@@ -1,154 +1,171 @@
 export interface ParsedTags {
   groups: { [key: string]: string[] };
-  originalTags: string[]; // Tags that were not in any group
+  originalTags: string[]; // "Loose tags" not belonging to any group
 }
 
 /**
- * Parses a string containing grouped tag syntax (e.g., `Group[ tag1 tag2 ]`).
- * Extracts groups and their tags, and identifies any "loose" tags that are not part of a group.
+ * 1. Parsing Function (Loop-based - Solves nested brackets)
+ * Scans the string and counts bracket pairs (Depth) instead of using regex.
+ * Example: Correctly recognizes "group[ tag[1] tag2 ]".
  * 
- * @param text The raw input string from the textarea.
- * @returns A `ParsedTags` object containing a map of groups and a list of loose tags.
+ * Update: Uses range masking to safely extract loose tags without breaking nested brackets.
  */
 export const parseGroupedTags = (text: string): ParsedTags => {
   const groups: { [key: string]: string[] } = {};
+  const groupRanges: { start: number, end: number }[] = [];
+  
+  let i = 0;
+  while (i < text.length) {
+    const openBracketIndex = text.indexOf('[', i);
+    if (openBracketIndex === -1) break; // No more groups
 
-  // Regex to find groupName[ tags ]
-  // We use non-greedy matching.
-  const groupRegex = /([^\s\[]+)\[\s*(.+?)\s*\]/g;
-
-  // Use replace with a callback to remove groups from text AND extract data in one pass.
-  const remainingText = text.replace(groupRegex, (match, groupName, tagsContent) => {
-    const safeGroupName = groupName.trim();
-    // Split and filter empty, then deduplicate within the group immediately using Set.
-    // REMOVED .sort() to preserve original tag order (e.g. Danbooru's type-based order).
-    const tags = Array.from(new Set(tagsContent.trim().split(/\s+/).filter((t: string) => t.length > 0))) as string[];
-
-    if (groups[safeGroupName]) {
-      // Merge, Deduplicate if group already exists
-      const mergedTags = new Set([...groups[safeGroupName], ...tags]);
-      groups[safeGroupName] = Array.from(mergedTags) as string[];
-    } else {
-      groups[safeGroupName] = tags;
+    // Check for escape character '\['
+    if (openBracketIndex > 0 && text[openBracketIndex - 1] === '\\') {
+      i = openBracketIndex + 1;
+      continue; // Skip escaped bracket
     }
 
-    return ' '; // Replace keys with space
-  });
+    // Extract group name before '['
+    const beforeBracket = text.slice(0, openBracketIndex);
+    // Strict naming: Alphanumeric, underscore, hyphen
+    const groupNameMatch = beforeBracket.match(/([a-zA-Z0-9_\-]+)\s*$/);
+    
+    if (!groupNameMatch) {
+      i = openBracketIndex + 1;
+      continue; // Ignore malformed or special-char names
+    }
 
-  // Collect all tags that are now in groups to filter them out of loose tags (deduplication Case 2)
-  const allGroupTags = new Set<string>();
-  Object.values(groups).forEach(tags => tags.forEach(t => allGroupTags.add(t)));
+    const groupName = groupNameMatch[1];
+    const groupStartIndex = groupNameMatch.index!; 
 
-  // Clean up remaining text to get loose tags, removing those that are already in groups
-  const originalTags = remainingText.split(/\s+/).filter(t => t.length > 0 && !allGroupTags.has(t));
+    // Find closing bracket ']' (Handle nesting)
+    let depth = 1;
+    let closeBracketIndex = -1;
+    
+    for (let j = openBracketIndex + 1; j < text.length; j++) {
+      // Handle escaped brackets inside too?
+      // If we support nested brackets, we should respect escaping there too to avoid parse errors.
+      if (text[j] === '[' && text[j-1] !== '\\') depth++;
+      else if (text[j] === ']' && text[j-1] !== '\\') depth--;
+
+      if (depth === 0) {
+        closeBracketIndex = j;
+        break;
+      }
+    }
+
+    if (closeBracketIndex !== -1) {
+      const content = text.slice(openBracketIndex + 1, closeBracketIndex);
+      // Clean up escaped brackets in content if any are meant to be literal?
+      // Actually, flattening handles content. We just split by space.
+      // But if user typed "tag\[1\]", we want "tag[1]" in the data?
+      // For now, let's keep content raw-ish but split.
+      // If we want "tag\[1\]" to become "tag[1]", we need unescaping.
+      
+      const rawTags = content.split(/\s+/).filter(t => t.length > 0);
+      const tags = rawTags.map(t => t.replace(/\\\[/g, '[').replace(/\\\]/g, ']'));
+
+      // Save group (Merge if existing)
+      if (groups[groupName]) {
+        groups[groupName] = Array.from(new Set([...groups[groupName], ...tags]));
+      } else {
+        groups[groupName] = tags;
+      }
+
+      // Record the range of this group (including name) to remove it later
+      groupRanges.push({ start: groupStartIndex, end: closeBracketIndex + 1 });
+      
+      i = closeBracketIndex + 1;
+    } else {
+      i = openBracketIndex + 1;
+    }
+  }
+
+  // 6. Extract Loose Tags
+  // Build "looseText" by replacing group ranges with spaces
+  let looseText = '';
+  let cursor = 0;
+  
+  groupRanges.sort((a, b) => a.start - b.start);
+
+  for (const range of groupRanges) {
+    looseText += text.slice(cursor, range.start) + ' '; 
+    cursor = range.end;
+  }
+  looseText += text.slice(cursor);
+
+  // Split and Unescape loose tags
+  // "def\[n]" -> "def[n]"
+  const originalTags = looseText.split(/\s+/).filter(t => t.length > 0)
+    .map(t => t.replace(/\\\[/g, '[').replace(/\\\]/g, ']'));
 
   return { groups, originalTags };
 };
 
-
 /**
- * Reconstructs the tag string by applying group syntax to tags that belong to known groups.
- * 
- * **Partial Match Strategy**: If *any* tag from a saved group is present in the input,
- * the group syntax `Group[ ... ]` is reconstructed providing those tags.
- * Missing tags are simply omitted from the group.
- * 
- * **Idempotency**: First strips any existing group syntax from the input to prevent duplication,
- * then rebuilds it from scratch based on the comprehensive list of tags found.
- * 
- * @param currentText The current text in the textarea (may contain raw tags or existing groups).
- * @param groupData The saved group definitions from IndexedDB.
- * @returns The formatted string with groups displayed on separate lines.
- */
-export const reconstructTags = (currentText: string, groupData: { [groupName: string]: string[] }): string => {
-  // 0. CLEANUP: Strip existing group syntax from text to avoid duplication/infinite loops.
-  // We use the same regex as parseGroupedTags but just remove them.
-  const groupRegex = /([^\s\[]+)\[\s*(.+?)\s*\]/g;
-  let cleanText = currentText.replace(groupRegex, ' ');
-
-  // 1. Identify which tags are used in groups
-  // We need to check against ALL tags present in the input (including those we just stripped from groups)
-  // flattenTags gives us exactly that: a flat list of all tags currently in the input.
-  const allCurrentTags = flattenTags(currentText).split(/\s+/).filter(t => t.length > 0);
-  const currentTagSet = new Set(allCurrentTags);
-
-  const formedGroups: string[] = [];
-  const usedTags = new Set<string>();
-
-  // Iterate over saved groups
-  for (const [groupName, groupTags] of Object.entries(groupData)) {
-    // Check if AT LEAST ONE tag from this group exists in currentTags (Partial Match)
-    const presentTags = groupTags.filter(tag => currentTagSet.has(tag));
-
-    if (presentTags.length > 0) {
-      // Create group string with TRAILING SPACE
-      formedGroups.push(`${groupName}[ ${presentTags.join(' ')}  ] `);
-
-      // Mark tags as used so they are removed from loose tags later
-      presentTags.forEach(tag => usedTags.add(tag));
-    }
-  }
-
-  // 2. Reconstruct loose string preserving whitespace from the SCRUBBED text
-  // This ensures we don't duplicate "ghosts" of old groups.
-  const tokens = cleanText.split(/(\s+)/);
-
-  // Replace used tags with empty string, keep everything else
-  const looseString = tokens.map(token => {
-    // Token could be whitespace or empty string (from split leading/trailing)
-    if (!token.trim()) {
-      // Feature: Normalize excessive horizontal whitespace to single space
-      // If token consists only of spaces/tabs (no newlines) and is longer than 1 space
-      if (token.length > 1 && /^[ \t]+$/.test(token)) {
-        return ' ';
-      }
-      return token;
-    }
-
-    // If it's a tag and it's used in a group, remove it (replace with empty)
-    if (usedTags.has(token)) return '';
-
-    return token;
-  }).join('');
-
-  // Post-process: Normalize all horizontal whitespace to single space
-  const normalizedLooseString = looseString.replace(/[ \t]+/g, ' ');
-
-  const cleanLooseString = normalizedLooseString.trimEnd();
-
-  const groupString = formedGroups.join('\n\n');
-
-  if (cleanLooseString && groupString) {
-    // Ensure at least one newline separation
-    return cleanLooseString + '\n\n' + groupString;
-  } else {
-    return cleanLooseString + groupString;
-  }
-};
-
-/**
- * Flattens the tag string by removing all group syntax and returning a clean, space-separated list of tags.
- * Used before submitting the form to Danbooru to ensure the server receives standard tag data.
- * 
- * @param text The input string potentially containing `Group[ ... ]` syntax.
- * @returns A plain string of space-separated tags.
+ * 2. Flatten Tags
+ * Removes group syntax and converts to a plain list of tags (for server submission)
  */
 export const flattenTags = (text: string): string => {
-  const parsed = parseGroupedTags(text);
-  return [
-    ...Object.values(parsed.groups).flat(),
-    ...parsed.originalTags
-  ].join(' ');
+  const { groups, originalTags } = parseGroupedTags(text);
+  const groupTags = Object.values(groups).flat();
+  
+  // Deduplicate and join
+  return Array.from(new Set([...groupTags, ...originalTags])).join(' ');
 };
 
 /**
- * Synchronizes the saved groups with the current tag list.
- * If tags are removed from the input, they are also removed from their respective groups in the DB.
- * If a group becomes empty, it is marked for deletion.
- * 
- * @param groups The current state of groups from the DB.
- * @param currentTags The list of tags currently present in the text input.
- * @returns An object containing the `updatedGroups` and a `changed` flag.
+ * 3. Reconstruct
+ * Re-applies group syntax while preserving the visual order of tags on screen.
+ */
+export const reconstructTags = (currentText: string, groupData: { [groupName: string]: string[] }): string => {
+  // 1. Get all tags currently on screen in order. 
+  const flatText = flattenTags(currentText); 
+  const allCurrentTags = flatText.split(/\s+/).filter(t => t.length > 0);
+  
+  const usedTags = new Set<string>();
+  const formedGroups: string[] = [];
+
+  // 2. Iterate saved groups
+  for (const [groupName, groupTags] of Object.entries(groupData)) {
+    const groupTagSet = new Set(groupTags);
+    
+    const presentTags = allCurrentTags.filter(tag => groupTagSet.has(tag));
+
+    if (presentTags.length > 0) {
+      // Escape tags inside group? 
+      // Generally tags inside [ ] don't need escaping of [ ] unless ambiguous (nested).
+      // But for simplicity/safety, let's just output them as is. 
+      // If we unescaped "tag[1]" -> "tag[1]", putting it back inside Group[ ... ] works fine because of bracket counting.
+      // So no need to re-escape INSIDE groups.
+      formedGroups.push(`${groupName}[ ${presentTags.join(' ')} ]`);
+      
+      presentTags.forEach(t => usedTags.add(t));
+    }
+  }
+
+  // 3. Extract remaining tags (Loose Tags)
+  const looseTags = allCurrentTags.filter(t => !usedTags.has(t));
+
+  // 4. Escape loose tags that look like groups or contain brackets
+  // If a loose tag is "def[n]", we must output "def\[n]" so it isn't parsed as a group next time.
+  // Actually, strictly we only need to escape '[' if it looks like a group start.
+  // But safest is to escape '[' if it's not inside a group.
+  const escapedLooseTags = looseTags.map(t => t.replace(/\[/g, '\\[').replace(/\]/g, '\\]'));
+
+  // 4. Combine final string
+  const looseString = escapedLooseTags.join(' ');
+  const groupString = formedGroups.join('\n\n'); 
+
+  if (looseString && groupString) {
+    return `${looseString}\n\n${groupString}`;
+  } else {
+    return looseString + groupString;
+  }
+};
+
+/**
+ * Synchronization: Remove tags missing from input from the DB groups
  */
 export const removeMissingTagsFromGroups = (
   groups: { [key: string]: string[] },
@@ -165,12 +182,10 @@ export const removeMissingTagsFromGroups = (
       changed = true;
     }
 
-    // Only keep group if it still has tags
     if (newTags.length > 0) {
       updatedGroups[groupName] = newTags;
     } else {
-      // Group became empty -> Removed
-      changed = true;
+      changed = true; // Group removed
     }
   }
 

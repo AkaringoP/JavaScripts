@@ -114,6 +114,11 @@ export class SmartInputHandler {
       const cursor = this.input!.selectionStart;
       const text = this.input!.value;
 
+      // Check for escape character
+      if (cursor > 0 && text[cursor - 1] === '\\') {
+        return; // Allow literal '[' input
+      }
+
       // Check if we are inside a group
       // Count open/close brackets up to cursor
       let balance = 0;
