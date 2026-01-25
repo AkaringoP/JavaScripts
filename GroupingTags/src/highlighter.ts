@@ -1,17 +1,17 @@
-import { stringToColor, detectDarkTheme } from './utils';
+import {stringToColor, detectDarkTheme} from './utils';
 
 /**
  * SyntaxHighlighter
- * 
+ *
  * Provides syntax highlighting for the `Group[ ... ]` syntax by overlaying a
  * customized "Backdrop" element behind the transparent Textarea.
- * 
+ *
  * **Mechanism**:
  * 1. Creates a container wrapping the textarea.
  * 2. Inserts a backdrop div behind the textarea.
  * 3. Syncs font, size, padding, and scroll position perfectly.
  * 4. Parses the text and injects colored HTML spans into the backdrop.
- * 
+ *
  * **Features**:
  * - **Phantom Mode**: Fades out the text and shows the backdrop when idle to provide beautiful highlighting without affecting typing performance.
  * - **Active Mode**: Shows the raw text while typing for maximum responsiveness.
@@ -61,7 +61,7 @@ export class SyntaxHighlighter {
     });
 
     // Keyup: Detect missed updates, but ignore modifiers
-    this.textarea.addEventListener('keyup', (e) => {
+    this.textarea.addEventListener('keyup', e => {
       this.onInputDebounced();
       this.resetIdleTimer(e);
     });
@@ -80,26 +80,22 @@ export class SyntaxHighlighter {
 
     // Focus: Wake up immediately
     this.textarea.addEventListener('focus', () => {
-      console.log('GroupingTags: Focus -> Wake Up');
       this.resetIdleTimer();
     });
 
     // Click/Mousedown: Wake up immediately (even if already focused)
     this.textarea.addEventListener('mousedown', () => {
-      console.log('GroupingTags: Mousedown -> Wake Up');
       this.resetIdleTimer();
     });
 
     // Blur: Phantom Mode immediately (if valid)
     this.textarea.addEventListener('blur', () => {
-      console.log('GroupingTags: Blur -> Phantom Mode');
       this.activatePhantomMode();
     });
 
     // Initial Render
     this.update();
     this.resetIdleTimer(); // Start in Active mode
-    console.log('GroupingTags: Highlighter Initialized (Phantom Mode)');
   }
 
   private injectStyles() {
@@ -165,13 +161,25 @@ export class SyntaxHighlighter {
   private syncStyles() {
     const computed = window.getComputedStyle(this.textarea);
     const props = [
-      'font-family', 'font-size', 'font-weight', 'font-style',
-      'font-stretch', 'font-kerning', 'font-variant-ligatures',
-      'line-height', 'letter-spacing', 'text-transform', 'text-indent',
-      'text-rendering', 'tab-size',
+      'font-family',
+      'font-size',
+      'font-weight',
+      'font-style',
+      'font-stretch',
+      'font-kerning',
+      'font-variant-ligatures',
+      'line-height',
+      'letter-spacing',
+      'text-transform',
+      'text-indent',
+      'text-rendering',
+      'tab-size',
       'word-spacing',
-      'padding-top', 'padding-bottom', 'padding-left',
-      'border-width', 'box-sizing'
+      'padding-top',
+      'padding-bottom',
+      'padding-left',
+      'border-width',
+      'box-sizing',
     ];
 
     props.forEach(prop => {
@@ -197,7 +205,11 @@ export class SyntaxHighlighter {
     const borderRight = parseFloat(computed.borderRightWidth) || 0;
     const padRight = parseFloat(computed.paddingRight) || 0;
 
-    const scrollbarWidth = this.textarea.offsetWidth - this.textarea.clientWidth - borderLeft - borderRight;
+    const scrollbarWidth =
+      this.textarea.offsetWidth -
+      this.textarea.clientWidth -
+      borderLeft -
+      borderRight;
 
     if (scrollbarWidth > 0) {
       this.backdrop.style.paddingRight = `${padRight + scrollbarWidth}px`;
@@ -256,7 +268,6 @@ export class SyntaxHighlighter {
   }
 
   private activatePhantomMode() {
-    // console.log('GroupingTags: Activating Phantom Mode (Idle)');
     this.update();
     this.textarea.classList.add('gh-ghost');
     this.backdrop.classList.add('gh-visible');
@@ -282,10 +293,8 @@ export class SyntaxHighlighter {
     const len = text.length;
 
     // Escape helper
-    const escapeHtml = (str: string) => str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    const escapeHtml = (str: string) =>
+      str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
     while (i < len) {
       // Find start of a potential group: "Name["
@@ -298,7 +307,11 @@ export class SyntaxHighlighter {
 
       // Check if there is a name before '['
       let nameStart = openIdx - 1;
-      while (nameStart >= i && /\S/.test(text[nameStart]) && text[nameStart] !== '[') {
+      while (
+        nameStart >= i &&
+        /\S/.test(text[nameStart]) &&
+        text[nameStart] !== '['
+      ) {
         nameStart--;
       }
       nameStart++;

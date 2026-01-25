@@ -11,6 +11,11 @@
       "ESNext"
     ],
     "skipLibCheck": true,
+    "noImplicitAny": false,
+    "noImplicitReturns": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "strict": false,
     "types": [
       "vite/client",
       "node",
@@ -20,6 +25,7 @@
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
-    "vite.config.ts"
+    "vite.config.ts",
+    "vitest.config.ts"
   ]
 }
