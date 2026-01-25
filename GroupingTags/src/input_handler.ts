@@ -1,9 +1,8 @@
-
 /**
  * SmartInputHandler
- * 
+ *
  * Manages advanced typing interactions within the "Edit Tags" textarea.
- * 
+ *
  * **Key Features**:
  * - **Auto-Closing Brackets**: Automatically inserts `]` when `[` is typed suitable for group names.
  * - **Smart Padding**: Enforces `[ | ]` spacing for compatibility with Danbooru's autocomplete.
@@ -24,7 +23,9 @@ export class SmartInputHandler {
     if (this.input) {
       this.init();
     } else {
-      console.warn(`SmartInputHandler: Element not found for selector "${selector}"`);
+      console.warn(
+        `SmartInputHandler: Element not found for selector "${selector}"`,
+      );
     }
   }
 
@@ -32,11 +33,19 @@ export class SmartInputHandler {
     if (!this.input || this.isBound) return;
 
     // DEBUG: Global Capture for KeyDown to ensure we catch it
-    document.addEventListener('keydown', (e) => this.onKeyDown(e), true);
-    this.input.addEventListener('keyup', () => { this.isDeleting = false; }, true);
+    document.addEventListener('keydown', e => this.onKeyDown(e), true);
+    this.input.addEventListener(
+      'keyup',
+      () => {
+        this.isDeleting = false;
+      },
+      true,
+    );
 
     // IME Composition Events - Critical for Korean support
-    this.input.addEventListener('compositionstart', () => { this.isComposing = true; });
+    this.input.addEventListener('compositionstart', () => {
+      this.isComposing = true;
+    });
     this.input.addEventListener('compositionend', () => {
       this.isComposing = false;
       // Trigger a check after composition ends to ensure formatting
@@ -44,12 +53,15 @@ export class SmartInputHandler {
     });
 
     // Use 'input' event for text modifications to avoid selectionchange loops
-    this.input.addEventListener('input', (e) => this.handleInput(e as InputEvent));
+    this.input.addEventListener('input', e =>
+      this.handleInput(e as InputEvent),
+    );
 
-    document.addEventListener('selectionchange', () => this.onSelectionChange());
+    document.addEventListener('selectionchange', () =>
+      this.onSelectionChange(),
+    );
 
     this.isBound = true;
-    console.log('SmartInputHandler: Initialized (Global Capture & Debug).');
   }
 
   private onKeyDown(e: KeyboardEvent) {
@@ -75,7 +87,8 @@ export class SmartInputHandler {
       // e.g. "tag| ]" -> charBefore 'g' -> BLOCK
       // " | ]" -> charBefore ' ' -> ALLOW
       // "[| ]" -> charBefore '[' -> ALLOW
-      const isTextBefore = charBefore && /\S/.test(charBefore) && charBefore !== '[';
+      const isTextBefore =
+        charBefore && /\S/.test(charBefore) && charBefore !== '[';
 
       if (!isTextBefore) {
         // Look ahead from cursor
@@ -109,8 +122,7 @@ export class SmartInputHandler {
           }, 0);
         }
       }
-    }
-    else if (e.key === '[') {
+    } else if (e.key === '[') {
       const cursor = this.input!.selectionStart;
       const text = this.input!.value;
 
@@ -127,7 +139,7 @@ export class SmartInputHandler {
         else if (text[i] === ']') balance--;
       }
 
-      // If balance > 0, we are inside a group. 
+      // If balance > 0, we are inside a group.
       // Disable Smart Features (Merge/Create) and allow native typing.
       // This treats inner brackets as plain text tags.
       if (balance > 0) return;
@@ -139,7 +151,11 @@ export class SmartInputHandler {
         // Check if user is typing a group name that already exists
         // 1. Get the word being typed
         let nameStart = cursor - 1;
-        while (nameStart >= 0 && /\S/.test(text[nameStart]) && text[nameStart] !== '[') {
+        while (
+          nameStart >= 0 &&
+          /\S/.test(text[nameStart]) &&
+          text[nameStart] !== '['
+        ) {
           nameStart--;
         }
         nameStart++; // Start of the word
@@ -149,7 +165,10 @@ export class SmartInputHandler {
         // 2. Scan for existing group "candidateName["
         // We use a regex to find OTHER instances
         // Look for: non-whitespace, candidateName, [, whitespace?
-        const escapedName = candidateName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedName = candidateName.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          '\\$&',
+        );
         const regex = new RegExp(`(^|\\s)${escapedName}\\s*\\[`, 'g');
 
         let match;
@@ -190,7 +209,7 @@ export class SmartInputHandler {
             document.execCommand('delete'); // Use execCommand for Undo history
 
             // 5. Jump to existing group
-            // We want to be inside, at the end. 
+            // We want to be inside, at the end.
             // If it's "name[  ]", we want "name[  | ]"
             // existingCloseIdx points to ']'
             // But wait, deleting shifted indices.
@@ -246,8 +265,7 @@ export class SmartInputHandler {
         // Add trailing space as requested: '[  ] '
         this.insertText('[  ] ', 2);
       }
-    }
-    else if (e.key === ']') {
+    } else if (e.key === ']') {
       const cursor = this.input!.selectionStart;
       const text = this.input!.value;
       // Overtype logic
@@ -296,7 +314,7 @@ export class SmartInputHandler {
         val = text.slice(0, cursor) + ' ' + text.slice(cursor);
         // Keep cursor after the inserted space (relative to text content)
         // text|] -> text |] . Cursor should stay after text.
-        // So we don't change cursor relative offset? 
+        // So we don't change cursor relative offset?
         // Actually, if we insert space at cursor, cursor naturally moves +1 if we rewrite value?
         // No, value rewrite resets cursor to end usually, so we must set it.
         // Inserting at cursor: newCursor = cursor + 1.
@@ -325,14 +343,12 @@ export class SmartInputHandler {
     const charBefore = text[cursor - 1];
     const charAfter = text[cursor];
 
-    // console.log(`[DEBUG] SelChange: Cursor=${cursor}, CharBefore='${charBefore}', CharAfter='${charAfter}'`);
-
     let newCursor = cursor;
     let needsMove = false;
 
     // Case A: Cursor touching '[' -> Push Right
     if (charBefore === '[') {
-      // We assume space exists (handled by onInput). 
+      // We assume space exists (handled by onInput).
       // If space exists, move to it.
       if (charAfter === ' ') {
         newCursor = cursor + 1;
@@ -358,13 +374,13 @@ export class SmartInputHandler {
 
         // Use execCommand to preserve Undo
         // Note: onSelectionChange shouldn't typically loop if we check conditions carefully.
-        // But inserting text changes selection, triggering this again. 
+        // But inserting text changes selection, triggering this again.
         // We must be careful.
         // However, inserted text will shift ']' right.
         // New cursor will be AFTER inserted text.
         // "tag|]" -> insert "  " -> "tag  |]"
         // New charAfter is ']', charBefore is ' '.
-        // Next trigger: spaceCount=2. No action. 
+        // Next trigger: spaceCount=2. No action.
         // We want cursor at middle? "tag | ]"
 
         const success = document.execCommand('insertText', false, spaces);
@@ -400,7 +416,7 @@ export class SmartInputHandler {
     if (!this.input) return;
 
     // Use execCommand to preserve Undo history
-    // Note: 'insertText' is technically deprecated but is the only reliable way 
+    // Note: 'insertText' is technically deprecated but is the only reliable way
     // to handle Undo stack integration in vanilla JS across browsers.
     const success = document.execCommand('insertText', false, textToInsert);
 
@@ -409,14 +425,16 @@ export class SmartInputHandler {
       const start = this.input.selectionStart;
       const end = this.input.selectionEnd;
       const text = this.input.value;
-      this.input.value = text.substring(0, start) + textToInsert + text.substring(end);
-      this.input.dispatchEvent(new Event('input', { bubbles: true }));
+      this.input.value =
+        text.substring(0, start) + textToInsert + text.substring(end);
+      this.input.dispatchEvent(new Event('input', {bubbles: true}));
     }
 
     // Adjust cursor position to the desired offset within the inserted text
     // execCommand places cursor at the end of insertion by default.
     // We need to move it back if cursorOffset is not the full length.
-    const newPos = this.input.selectionStart - (textToInsert.length - cursorOffset);
+    const newPos =
+      this.input.selectionStart - (textToInsert.length - cursorOffset);
     this.input.setSelectionRange(newPos, newPos);
   }
 }
