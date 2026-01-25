@@ -1,6 +1,6 @@
 # Danbooru Grouping Tags
 
-A professional-grade UserScript that transforms the Danbooru tag input experience. It introduces a powerful grouping system, intelligent sorting, and a state-of-the-art visual interface to help users manage complex tag lists with ease.
+A UserScript that transforms the Danbooru tag input experience. It introduces a powerful grouping system, intelligent sorting, and a visual interface to help users manage complex tag lists with ease.
 
 ## ✨ Key Features
 
