@@ -9,11 +9,15 @@ Experience a seamless way to organize tags directly in the edit window using the
 - **Intelligent Syntax**: Groups are automatically parsed, highlighted, and kept visually distinct with the **Phantom UI**.
 - **Edit Assist**: Features bracket auto-completion, `Tab` key escapes, and smart merging to prevent duplicate groups.
 - **Auto-Sorting**: Character tags are prioritized at the front of each group via Danbooru API integration.
+- <img width="651" height="308" alt="image" src="https://github.com/user-attachments/assets/3237a7fa-0726-4896-aa18-96d88a25a76c" />
+
 
 ### 2️⃣ Integrated Sidebar Management
 Manage your groupings visually without leaving the sidebar.
 - **Quick Assignment**: Use the dedicated **circle buttons** next to tags in the sidebar to instantly add/remove tags from specific groups.
 - **Visual Feedback**: Sidebar indicators show which tags belong to which group at a glance, keeping your workflow organized.
+- <img width="400" height="445" alt="image" src="https://github.com/user-attachments/assets/1b2378a6-700e-4d89-a0e9-ac4264521a54" />
+
 
 ### 3️⃣ Universal Gist Synchronization
 Your data, everywhere. Sync your entire configuration and grouping data using a private GitHub Gist.
