@@ -77,3 +77,54 @@ export function getPostId(): number | null {
 
   return null;
 }
+
+/**
+ * Displays a simple toast notification at the bottom of the screen.
+ *
+ * @param message The message to display.
+ * @param type The type of toast ('info' | 'error'). Defaults to 'info'.
+ * @param duration Duration in milliseconds. Defaults to 3000ms.
+ */
+export function showToast(
+  message: string,
+  type: 'info' | 'error' = 'info',
+  duration = 3000,
+) {
+  const toast = document.createElement('div');
+  toast.textContent = message;
+
+  // Basic Styles
+  Object.assign(toast.style, {
+    position: 'fixed',
+    bottom: '20px',
+    left: '50%',
+    transform: 'translateX(-50%) translateY(20px)',
+    backgroundColor: type === 'error' ? '#d32f2f' : '#323232',
+    color: '#fff',
+    padding: '10px 20px',
+    borderRadius: '4px',
+    fontSize: '14px',
+    boxShadow: '0 2px 5px rgba(0,0,0,0.3)',
+    opacity: '0',
+    transition: 'transform 0.3s, opacity 0.3s',
+    zIndex: '10000',
+    pointerEvents: 'none',
+  });
+
+  document.body.appendChild(toast);
+
+  // Animate In
+  requestAnimationFrame(() => {
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+  });
+
+  // Remove after duration
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(-50%) translateY(20px)';
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, duration);
+}

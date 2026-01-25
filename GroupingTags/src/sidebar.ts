@@ -1,5 +1,5 @@
-import {getPostTagData, savePostTagData} from './db';
-import {getPostId, stringToColor, detectDarkTheme} from './utils';
+import { getPostTagData, savePostTagData } from './db';
+import { getPostId, stringToColor, detectDarkTheme, showToast } from './utils';
 
 /**
  * SidebarInjector
@@ -69,7 +69,7 @@ export class SidebarInjector {
     document.head.appendChild(style);
   }
 
-  private allGroups: {[key: string]: string[]} = {};
+  private allGroups: { [key: string]: string[] } = {};
 
   private async init() {
     if (!this.checkEnabled()) return;
@@ -87,9 +87,9 @@ export class SidebarInjector {
     }
   }
 
-  private injectIndicators(groups: {[key: string]: string[]}) {
+  private injectIndicators(groups: { [key: string]: string[] }) {
     // Reverse map: tag -> group[]
-    const tagToGroups: {[tag: string]: string[]} = {};
+    const tagToGroups: { [tag: string]: string[] } = {};
     for (const [groupName, tags] of Object.entries(groups)) {
       tags.forEach(tag => {
         if (!tagToGroups[tag]) tagToGroups[tag] = [];
@@ -173,22 +173,22 @@ export class SidebarInjector {
       settingsBtn.title = 'Data Sync & Import';
 
       settingsBtn.onclick = async () => {
-        const {AuthManager} = await import('./core/auth');
+        const { AuthManager } = await import('./core/auth');
         const token = await AuthManager.getToken(true);
 
         const openSettings = async () => {
           // Initialize Gist (Checks for Gist ID or creates one)
-          const {initializeGist} = await import('./core/gist-init');
+          const { initializeGist } = await import('./core/gist-init');
           await initializeGist();
 
           // Open Panel
-          const {SettingsPanel} = await import('./ui/settings-panel');
+          const { SettingsPanel } = await import('./ui/settings-panel');
           SettingsPanel.show();
         };
 
         if (!token) {
           // Show Rich Login UI
-          const {LoginModal} = await import('./ui/components/login-modal');
+          const { LoginModal } = await import('./ui/components/login-modal');
           LoginModal.show(async () => {
             // On Success
             await openSettings();
@@ -257,7 +257,7 @@ export class SidebarInjector {
 
   private originalParents: Map<
     HTMLElement,
-    {parent: HTMLElement; nextSibling: Node | null}
+    { parent: HTMLElement; nextSibling: Node | null }
   > = new Map();
 
   /**
@@ -288,7 +288,7 @@ export class SidebarInjector {
     allHeaders.forEach(el => ((el as HTMLElement).style.display = ''));
   }
 
-  private renderGroupView(groups: {[key: string]: string[]}) {
+  private renderGroupView(groups: { [key: string]: string[] }) {
     // SAFETY: Always restore default view first to ensure all LIs are back in their original places
     // before we try to move them again.
     this.renderDefaultView();
@@ -642,7 +642,7 @@ export class SidebarInjector {
           // Import Sorter dynamically or statically?
           // Since sidebar.ts is main logic, static import is fine unless circular dep.
           // Dynamic import is safer for code splitting if desired, but we need it now.
-          const {sortGroupTags} = await import('./core/tag-sorter');
+          const { sortGroupTags } = await import('./core/tag-sorter');
           await sortGroupTags(this.allGroups, postId);
 
           await savePostTagData({
@@ -963,6 +963,21 @@ export class SidebarInjector {
           ev.stopPropagation();
           const newName = input.value.trim();
           if (newName) {
+            // STRICT VALIDATION: Same as parser regex
+            // Only allow letters, numbers, underscores, and hyphens.
+            if (!/^[a-zA-Z0-9_\-]+$/.test(newName)) {
+              showToast(
+                "Invalid Name: Spaces are not allowed. Use '_' instead.",
+                'error',
+              );
+              // Shake effect?
+              input.style.borderColor = '#d32f2f';
+              setTimeout(() => {
+                input.style.borderColor = isDark ? '#888' : '#ccc';
+              }, 500);
+              return;
+            }
+
             // Create & Select
             if (!this.allGroups[newName]) {
               this.allGroups[newName] = [];
@@ -1029,8 +1044,8 @@ export class SidebarInjector {
 
     this.syncTimeout = setTimeout(async () => {
       // Dynamic Import to avoid circular deps or heavy load
-      const {SyncManager} = await import('./core/sync-manager');
-      const {getLocalDataByShard} = await import('./db');
+      const { SyncManager } = await import('./core/sync-manager');
+      const { getLocalDataByShard } = await import('./db');
 
       try {
         const shardIdx = SyncManager.getShardIndex(postId);
