@@ -4,28 +4,55 @@ A professional-grade UserScript that transforms the Danbooru tag input experienc
 
 ## ✨ Key Features
 
-### 📦 Tag Grouping
-Organize your tags into logical sections using the `GroupName[ tag1 tag2 ]` syntax. Groups are automatically parsed and displayed as distinct visual blocks.
+### 1️⃣ Smart Tag Editing & Groups Syntax
+Experience a seamless way to organize tags directly in the edit window using the `GroupName[ tag1 tag2 ]` syntax.
+- **Intelligent Syntax**: Groups are automatically parsed, highlighted, and kept visually distinct with the **Phantom UI**.
+- **Edit Assist**: Features bracket auto-completion, `Tab` key escapes, and smart merging to prevent duplicate groups.
+- **Auto-Sorting**: Character tags are prioritized at the front of each group via Danbooru API integration.
 
-### ⚡ Intelligent Sorting
-- **Character Priority**: Automatically fetches character data from the Danbooru API to ensure character tags appear first within groups.
-- **Alphabetical Ordering**: Keeps remaining tags within groups neatly organized.
-- **Caching**: Local database caching for API responses to ensure lighting-fast performance.
+### 2️⃣ Integrated Sidebar Management
+Manage your groupings visually without leaving the sidebar.
+- **Quick Assignment**: Use the dedicated **circle buttons** next to tags in the sidebar to instantly add/remove tags from specific groups.
+- **Visual Feedback**: Sidebar indicators show which tags belong to which group at a glance, keeping your workflow organized.
 
-### 🎨 Advanced Highlighter (Phantom UI)
-- **Visual Clarity**: Groups are styled with subtle background colors for better separation.
-- **Bracket Highlighting**: Highlights matching brackets to prevent syntax errors.
-- **Phantom Mode**: Highlighting stays active even when the input field is not focused, providing a clean "preview" of the final tags.
+### 3️⃣ Universal Gist Synchronization
+Your data, everywhere. Sync your entire configuration and grouping data using a private GitHub Gist.
+- **Cross-Device Sync**: Seamlessly move between different browsers or devices while keeping your groups intact.
+- **User Collaboration**: Share your Gist ID to sync grouping logic across different users or team members.
+- **Reliable Storage**: High-capacity syncing via "Sharding" ensures even massive tag lists are backed up safely.
 
-### ⌨️ Smart Input Handler
-- **Bracket Auto-completion**: Typing `[` automatically creates a pair `[  ]` and places your cursor inside.
-- **Tab Escape**: Press `Tab` to quickly jump out of a group bracket.
-- **Smart Merging**: Prevents duplicate groups by merging tags into existing groups automatically.
+## � Usage
 
-### 🔄 Gist Sync
-Never lose your groupings. Sync your configurations across devices using a private GitHub Gist. Support for multiple "shards" ensures that even large tag lists are synced reliably.
+### 1️⃣ Advanced Tag Editor
+The script enhances the standard tag input field with a powerful grouping syntax:
+- **Group Creation**: Type `GroupName[` and the script completes it to `GroupName[ | ]`, placing your cursor inside.
+- **Adding Tags**: Type your tags inside the brackets.
+- **Quick Exit**: Press `Tab` to jump out of the group brackets instantly.
+- **Smart Appending**: If you type `GroupName[` again for an existing group, the cursor simply jumps to the end of that group so you can append more tags.
+- **Seamless Submission**: When you click Submit, the script saves your grouping structure to the local database, but sends only the plain tags to the server (preserving Danbooru's native tag format).
 
-## 🚀 Installation
+### 2️⃣ Sidebar Management
+On post pages, a new visual interface appears in the sidebar tag list:
+- **Group Indicators**: Tags belonging to a group are marked with colored circle indicators.
+- **Quick Actions**: Click the indicator area to:
+    - Assign the tag to an existing group.
+    - Create a completely new group for the tag.
+    - Remove the tag from its current group.
+
+### 3️⃣ Cloud Sync (Gist)
+Sync your group definitions across devices and share them with other users using GitHub Gist.
+> **Note**: This feature requires a GitHub Personal Access Token (PAT).
+
+#### 🔑 How to get a Personal Access Token (PAT)
+1.  Log in to GitHub and go to **Settings > Developer settings > Personal access tokens > Tokens (classic)**.
+2.  Click **Generate new token (classic)**.
+3.  **Note**: Give it a recognizable name (e.g., `Danbooru Grouping Tags`).
+4.  **Expiration**: Choose "No expiration" (recommended) or your preferred duration.
+5.  **Scopes**: Check only **`gist`** (Create gists). ✅
+6.  Click **Generate token** and **copy the code** starting with `ghp_...`.
+7.  In the script's settings (Cloud icon), paste this token when prompted.
+
+## �🚀 Installation
 
 1.  Install a UserScript manager like [Tampermonkey](https://www.tampermonkey.net/).
 2.  Click the **[Install]** link below:
