@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      5.2.1
+// @version      5.3
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -613,13 +613,16 @@
     }
 
     /**
-     * Fetches metric data for a given year, using cache when possible.
-     * @param {string} metric 'uploads', 'approvals', or 'notes'.
-     * @param {Object} userInfo User info object.
-     * @param {number} year The year to fetch.
-     * @return {Promise<Object>} Map of date string to count.
+     * Fetches metric data for a specific year, leveraging caching and efficient fetching strategies.
+     * Supports 'uploads', 'approvals', and 'notes' metrics.
+     *
+     * @param {string} metric - The metric type ('uploads' | 'approvals' | 'notes').
+     * @param {Object} userInfo - The target user's profile information.
+     * @param {number} year - The specific year to fetch data for (e.g., 2026).
+     * @param {Function|null} [onProgress=null] - Optional callback for reporting fetch progress (count).
+     * @return {Promise<{daily: Object, hourly: Array<number>}>} Returns an object containing daily counts map and hourly distribution array.
      */
-    async getMetricData(metric, userInfo, year) {
+    async getMetricData(metric, userInfo, year, onProgress = null) {
       try {
         // Determine fetch configuration
         let endpoint;
@@ -651,14 +654,14 @@
             };
             break;
           case 'approvals':
-            endpoint = '/post_events.json';
+            endpoint = '/post_approvals.json';
             storeName = 'approvals';
-            dateKey = 'event_at';
-            idKey = 'creator_id';
+            dateKey = 'created_at';
+            idKey = 'user_id';
             params = {
               ...baseParams,
-              'search[category]': 'Approval',
-              only: 'creator_id,post_id,event_at',
+              'search[user_id]': userInfo.id,
+              only: 'id,post_id,created_at',
             };
             break;
           case 'notes':
@@ -822,85 +825,28 @@
 
           // hourlyCounts is already defined above
 
-          if (metric === 'approvals') {
-            // [Strategy A] Client-Side Delta Fetching (Approvals)
-            // Fix: Use strict creator_id search instead of post_tags_match.
-            // post_tags_match finds posts, but post_events return ALL events for those posts (including others').
-            // Using creator_id ensures we only get events BY this user.
-            if (userInfo.id) {
-              params['search[creator_id]'] = userInfo.id;
-            } else {
-              params['search[creator_name]'] = userInfo.name;
-            }
+          // [Strategy B] Server-Side Range Filtering (Uploads, Notes, Approvals)
+          // Use range query to strictly limit what the API returns.
+          const rangeStart = fetchFromDate || startDate;
+          const fetchRange = `${rangeStart}...${endDate}`;
 
-            // Optimization: Bidirectional Fetching
-            // If fetching past years with empty cache, check if starting from promotion date is faster.
-            const todayYear = new Date().getFullYear();
-
-            // Only optimize if we are looking at a past year AND we don't have recent cache
-            // (If we have cache, delta fetch from present is usually fine, but let's see)
-            if (year < todayYear && !fetchFromDate) {
-              const promotionDate = await this.fetchPromotionDate(userInfo.name);
-              if (promotionDate) {
-                const promoYear = parseInt(promotionDate.slice(0, 4));
-                const targetYear = year;
-
-                // Distance from Promotion Date vs Distance from Today
-                const distFromStart = targetYear - promoYear;
-                const distFromEnd = todayYear - targetYear;
-
-                if (distFromStart >= 0 && distFromStart < distFromEnd) {
-                  // console.log(`[Danbooru Grass] Smart Fetch: Starting from ${promotionDate} (ASC) is faster.`);
-                  fetchDirection = 'asc';
-                  params['search[order]'] = 'event_at_asc';
-                  // Stop when we pass the target year
-                  stopDate = `${year}-12-31`;
-                }
-              }
-            }
-
-            // Fallback (DESC)
-            if (fetchDirection === 'desc') {
-              // Current logic: Stop at cached date (fetchFromDate)
-              // NEW Requirement: Also stop if we go out of the CURRENT VIEW YEAR (older than year-01-01).
-              // stopDate should be the LATER (larger string) of fetchFromDate vs year-01-01.
-              // Logic: We fetch backwards (2026 -> 2025). We stop if itemDate < stopDate.
-              // So stopDate must be the boundary.
-
-              const yearStart = `${year}-01-01`;
-              if (fetchFromDate) {
-                // If we have cache, we stop at cache OR year start, whichever is NEWER (higher value).
-                // e.g. Cache=2024, YearStart=2017. Max='2024'. Stop at 2024. Correct.
-                // e.g. Cache=2010, YearStart=2017. Max='2017'. Stop at 2017. Correct.
-                stopDate = fetchFromDate > yearStart ? fetchFromDate : yearStart;
-              } else {
-                // No cache. Stop at year start.
-                stopDate = yearStart;
-              }
-            }
-
-          } else {
-            // [Strategy B] Server-Side Range Filtering (Uploads, Notes)
-            // Use range query to strictly limit what the API returns.
-            const rangeStart = fetchFromDate || startDate;
-            const fetchRange = `${rangeStart}...${endDate}`;
-
-            if (metric === 'uploads') {
-              params.tags = `user:${normalizedName} date:${fetchRange}`;
-            } else if (metric === 'notes') {
-              params['search[created_at]'] = fetchRange;
-            }
-
-            // Server limits the range, so we don't need client-side stopDate (redundant but harmless)
-            stopDate = null;
+          if (metric === 'uploads') {
+            params.tags = `user:${normalizedName} date:${fetchRange}`;
+          } else if (metric === 'notes') {
+            params['search[created_at]'] = fetchRange;
+          } else if (metric === 'approvals') {
+            params['search[created_at]'] = fetchRange;
           }
+
+          // Server limits the range, so we don't need client-side stopDate (redundant but harmless)
+          stopDate = null;
 
           // 2. Fetch missing range
           if (!isYearCompleteCache) {
             // console.log(`[Danbooru Grass] Fetching delta for ${metric} (${fetchDirection}). Stop: ${stopDate || 'None'}`);
 
             // Pass explicit stopDate
-            const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection);
+            const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection, onProgress);
             // console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
 
             // 3. Aggregate
@@ -966,15 +912,37 @@
               await this.db.approvals_detail.bulkPut(detailData);
             }
 
-            // We save the full accumulated array (existing + new)
-            const hourlyBulk = hourlyCounts.map((count, h) => ({
-              id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, '0')}`,
-              userId: userIdVal,
-              metric: metric,
-              year: year,
-              hour: h,
-              count: count
-            }));
+            // We iterate dailyCounts to update hourly stats? No, hourlyCounts is already aggregated from items.
+            // But this overwrites hourly stats for the whole year with just the delta?
+            // NO! If we fetch delta, 'hourlyCounts' only contains delta.
+            // We must MERGE with existing hourly stats if we want to save correct values.
+            // OR: simpler - we just save the DELTA increment?
+            // IndexedDB doesn't support atomic increment easily.
+            // We should load existing hourly stats for this year, merge, and save.
+
+            const existingHourly = await this.db.hourly_stats.where('id')
+              .between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false)
+              .toArray();
+
+            const hourlyMap = new Map();
+            existingHourly.forEach(h => hourlyMap.set(h.hour, h.count));
+            hourlyCounts.forEach((count, h) => {
+              const prev = hourlyMap.get(h) || 0;
+              hourlyMap.set(h, prev + count);
+            });
+
+            const hourlyBulk = [];
+            hourlyMap.forEach((count, h) => {
+              hourlyBulk.push({
+                id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, '0')}`,
+                userId: userIdVal,
+                metric: metric,
+                year: year,
+                hour: h,
+                count: count
+              });
+            });
+
             await this.db.hourly_stats.bulkPut(hourlyBulk);
 
             // Mark as complete if it's a past year
@@ -1067,10 +1035,13 @@
      * @param {string} [direction='desc'] Fetch direction ('desc' or 'asc').
      * @return {Promise<Array<Object>>} List of all fetched items up to the stop condition.
      */
-    async fetchAllPages(endpoint, params, stopDate = null, dateKey = 'created_at', direction = 'desc') {
+    async fetchAllPages(endpoint, params, stopDate = null, dateKey = 'created_at', direction = 'desc', onProgress = null) {
       let allItems = [];
       let page = 1;
-      const BATCH_SIZE = 5;
+
+      // [Modified] Dynamic Batch Size for Approvals
+      const isApprovals = endpoint.includes('/post_events.json');
+      const BATCH_SIZE = isApprovals ? 1 : 5;
       const DELAY_BETWEEN_BATCHES = 150;
 
       // Outer Loop Label for breaking from nested loops
@@ -1087,11 +1058,45 @@
           });
           const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
 
-          promises.push(
-            fetch(url).then(async (resp) => {
+          // [New] Fetch Task with Limit, Random Delay & Retry for Approvals
+          const fetchTask = async () => {
+            // 1. Random Start Delay (Approvals Only)
+            if (isApprovals) {
+              const delay = Math.floor(Math.random() * 300) + 200; // 200~500ms
+              await new Promise(r => setTimeout(r, delay));
+            }
+
+            // 2. Retry Logic
+            let attempt = 0;
+            const backoff = [1000, 2000, 4000];
+
+            while (true) {
+              const resp = await fetch(url);
+
+              if (resp.status === 429 || resp.status >= 500) {
+                if (attempt < backoff.length) {
+                  const waitMs = backoff[attempt];
+                  console.warn(`[Danbooru Grass] ${resp.status} on Page ${currentPage}. Retrying in ${waitMs}ms...`);
+                  await new Promise(r => setTimeout(r, waitMs));
+                  attempt++;
+                  continue;
+                } else {
+                  throw new Error(`HTTP ${resp.status} (Max Retries Exceeded)`);
+                }
+              }
+
               if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              return { page: currentPage, data: await resp.json() };
-            }).catch((e) => {
+
+              // Success
+              return {
+                page: currentPage,
+                data: await resp.json()
+              };
+            }
+          };
+
+          promises.push(
+            fetchTask().catch((e) => {
               console.error(`[Danbooru Grass] Critical Error on Page ${currentPage}:`, e);
               throw e; // Fail fast to prevent data corruption
             })
@@ -1140,6 +1145,10 @@
             if (finished) break; // Break page loop
           } else {
             allItems = allItems.concat(json);
+          }
+
+          if (onProgress) {
+            onProgress(allItems.length);
           }
 
           if (json.length < params.limit) {
@@ -1769,10 +1778,14 @@
     /**
      * Toggles the loading state UI.
      * @param {boolean} isLoading True to show loading state.
+     * @param {string} [message] Optional message to display.
      */
-    setLoading(isLoading) {
+    setLoading(isLoading, message = 'Initializing...') {
       const el = document.getElementById('grass-loading');
-      if (el) el.style.display = isLoading ? 'block' : 'none';
+      if (el) {
+        el.style.display = isLoading ? 'block' : 'none';
+        el.textContent = message;
+      }
       const cal = document.getElementById('cal-heatmap');
       if (cal) cal.style.opacity = isLoading ? '0.5' : '1';
     }
@@ -1871,7 +1884,7 @@
           case 'uploads':
             return `/posts?tags=user:${sanitizedName}+date:${date}`;
           case 'approvals':
-            return null; // Disable click for approvals (hover only)
+            return '#'; // Enable click for approvals (Handled by JS)
           case 'notes':
             return `/posts?tags=noteupdater:${sanitizedName}+date:${date}`;
           default:
@@ -3002,14 +3015,15 @@
   // --- 5. Applications ---
 
   /**
-   * GrassApp: Encapsulates the contribution graph functionality (Legacy/Existing).
+   * GrassApp: Encapsulates the contribution graph visualization logic.
+   * Manages data fetching, processing, and rendering of the GitHub-style grass graph.
    */
   class GrassApp {
     /**
-     * Initializes the GrassApp (Legacy Contribution Graph).
-     * @param {Database} db The Dexie database instance.
-     * @param {SettingsManager} settings The settings manager.
-     * @param {ProfileContext} context The current profile context.
+     * Initializes the GrassApp default instance.
+     * @param {Database} db - The shared Dexie database instance.
+     * @param {SettingsManager} settings - The settings manager instance.
+     * @param {ProfileContext} context - The current profile context containing target user info.
      */
     constructor(db, settings, context) {
       this.db = db;
@@ -3018,8 +3032,9 @@
     }
 
     /**
-     * key entry point to run the legacy graph rendering.
-     * @return {Promise<void>}
+     * Main entry point to execute the contribution graph logic.
+     * Handles UI injection, data loading, and interactive rendering.
+     * @return {Promise<void>} Resolves when the initial render is complete.
      */
     async run() {
       // console.log('🌱 Starting GrassApp...');
@@ -3049,19 +3064,7 @@
       const updateView = async () => {
         let availableYears = [...years]; // Default full list
 
-        // Filter years for Approvals based on promotion date
-        if (currentMetric === 'approvals') {
-          const promoDate = await dataManager.fetchPromotionDate(context.targetUser.name);
-          if (promoDate) {
-            const promoYear = parseInt(promoDate.slice(0, 4), 10);
-            availableYears = availableYears.filter(y => y >= promoYear);
-            // Safety: If currentYear is older than promoYear, switch to promoYear
-            if (currentYear < promoYear) {
-              currentYear = promoYear;
-              console.log(`[Danbooru Grass] Adjusted year to ${promoYear} (Promotion Year)`);
-            }
-          }
-        }
+
 
         const onYearChange = (y) => {
           currentYear = y;
@@ -3104,10 +3107,15 @@
             },
           );
 
+          const onProgress = (count) => {
+            renderer.setLoading(true, `Fetching... ${count} items`);
+          };
+
           const data = await dataManager.getMetricData(
             currentMetric,
             context.targetUser,
-            currentYear
+            currentYear,
+            onProgress
           );
 
           await renderer.renderGraph(
