@@ -3064,6 +3064,20 @@
       const updateView = async () => {
         let availableYears = [...years]; // Default full list
 
+        // Filter years for Approvals based on promotion date (UI Only)
+        if (currentMetric === 'approvals') {
+          const promoDate = await dataManager.fetchPromotionDate(context.targetUser.name);
+          if (promoDate) {
+            const promoYear = parseInt(promoDate.slice(0, 4), 10);
+            availableYears = availableYears.filter(y => y >= promoYear);
+            // Safety: If currentYear is older than promoYear, switch to promoYear
+            if (currentYear < promoYear) {
+              currentYear = promoYear;
+              console.log(`[Danbooru Grass] Adjusted year to ${promoYear} (Promotion Year)`);
+            }
+          }
+        }
+
 
 
         const onYearChange = (y) => {
@@ -7157,6 +7171,33 @@
       });
 
       return result;
+    }
+
+    /**
+     * Fetches the date when the user was promoted to a level that can approve posts (Approver+).
+     * @param {string} userName
+     * @return {Promise<string|null>} ISO date string (YYYY-MM-DD) or null.
+     */
+    async fetchPromotionDate(userName) {
+      const history = await this.getPromotionHistory({ name: userName });
+      // Look for promotion to Approver, Admin, Moderator, etc.
+      // Roles: Member -> Gold -> Platinum -> Builder -> Contributor -> Approver -> Moderator -> Admin
+      // We look for the FIRST event where they reached 'Approver' level or higher.
+      // Since it's hard to parse exact level order from text, we just look for 'Approver', 'Moderator', 'Admin'.
+      // Actually, 'Builder' might also be relevant if we track that. But user asked for Approvals.
+      // Let's assume 'Approver' or higher.
+
+      // Simplified: Just find the earliest "Promoted to X" where X is Approver+.
+      // But for safety, let's just use the logic: "When did they start approving?"
+      // Better: Use the /user_feedbacks result to find "promoted to Approver".
+
+      const targetRoles = ['Approver', 'Moderator', 'Admin'];
+      const promoEvent = history.find(h => targetRoles.some(r => h.role.includes(r)));
+
+      if (promoEvent) {
+        return promoEvent.date.toISOString().slice(0, 10);
+      }
+      return null;
     }
 
     /**
