@@ -358,6 +358,22 @@
         hourly_stats: 'id, userId, metric, year',
         bubble_data: '[userId+copyright], userId, copyright, updated_at'
       });
+
+      // [v6] Tag Analytics Cache
+      // Cache for TagAnalyticsApp reports
+      // PK: tagName
+      this.version(6).stores({
+        uploads: 'id, userId, date, count',
+        approvals: 'id, userId, date, count',
+        notes: 'id, userId, date, count',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
+        piestats: '[key+userId], userId, updated_at',
+        completed_years: 'id, userId, metric, year',
+        approvals_detail: 'id, userId',
+        hourly_stats: 'id, userId, metric, year',
+        bubble_data: '[userId+copyright], userId, copyright, updated_at',
+        tag_analytics: 'tagName, updatedAt'
+      });
     }
   }
 
@@ -3884,7 +3900,7 @@
         </div>
         <div id="analytics-header-controls" style="display:none; align-items:center;">
            <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
-              <input type="checkbox" id="analytics-nsfw-toggle" ${isNsfwEnabled ? 'checked' : ''} style="margin-right:6px;">
+              <input type="checkbox" id="user-analytics-nsfw-toggle" ${isNsfwEnabled ? 'checked' : ''} style="margin-right:6px;">
               Enable NSFW
            </label>
            <button id="analytics-refresh-btn" title="Update Data (Partial Sync)" style="
@@ -3912,7 +3928,7 @@
 
       // NSFW Logic
       setTimeout(() => {
-        const nsfwToggle = header.querySelector('#analytics-nsfw-toggle');
+        const nsfwToggle = header.querySelector('#user-analytics-nsfw-toggle');
         if (nsfwToggle) {
           nsfwToggle.onchange = (e) => {
             isNsfwEnabled = e.target.checked;
@@ -8044,11 +8060,134 @@
       this.currentMilestones = null;
     }
 
+    async loadFromCache() {
+      if (!this.db || !this.db.tag_analytics) return null;
+      try {
+        const cached = await this.db.tag_analytics.get(this.tagName);
+        if (cached) {
+          // Check expiry (e.g. 24 hours)
+          const age = Date.now() - cached.updatedAt;
+          if (age < 24 * 60 * 60 * 1000) {
+            console.log(`[TagAnalyticsApp] Loaded from cache (${(age / 60000).toFixed(1)}m ago)`);
+            return { ...cached.data, updatedAt: cached.updatedAt };
+          } else {
+            console.log(`[TagAnalyticsApp] Cache expired (${(age / 3600000).toFixed(1)}h ago)`);
+          }
+        }
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cache load failed", e);
+      }
+      return null;
+    }
+
+    async saveToCache(data) {
+      if (!this.db || !this.db.tag_analytics) return;
+      try {
+        await this.db.tag_analytics.put({
+          tagName: this.tagName,
+          updatedAt: Date.now(),
+          data: data
+        });
+        console.log("[TagAnalyticsApp] Saved to cache");
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cache save failed", e);
+      }
+    }
+
+    /**
+     * Get retention days from storage. Default 7.
+     */
+    getRetentionDays() {
+      try {
+        const val = localStorage.getItem('danbooru_tag_analytics_retention');
+        if (val) return parseInt(val, 10);
+      } catch (e) { }
+      return 7;
+    }
+
+    /**
+     * Set retention days to storage.
+     */
+    setRetentionDays(days) {
+      if (typeof days === 'number' && days > 0) {
+        localStorage.setItem('danbooru_tag_analytics_retention', days);
+        console.log(`[TagAnalyticsApp] Retention set to ${days} days`);
+      }
+    }
+
+    /**
+     * Delete records older than retentionDays (default from settings)
+     */
+    async cleanupOldCache() {
+      if (!this.db || !this.db.tag_analytics) return;
+
+      const retentionDays = this.getRetentionDays();
+      const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+
+      try {
+        const deleteCount = await this.db.tag_analytics.where('updatedAt').below(cutoff).delete();
+        if (deleteCount > 0) {
+          console.log(`[TagAnalyticsApp] Cleaned up ${deleteCount} old records (older than ${retentionDays} days / before ${new Date(cutoff).toISOString()})`);
+        }
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cleanup failed", e);
+      }
+    }
+
     async run() {
       const tagName = this.tagName;
       if (!tagName) {
         console.log('[TagAnalyticsApp] No tag name found in URL.');
         return;
+      }
+
+      // 0. Auto-Cleanup Old Records (>7 days)
+      this.cleanupOldCache();
+
+      // [CACHE] Check Cache First
+      const cachedData = await this.loadFromCache();
+      let runDelta = false;
+      let baseData = null;
+
+      if (cachedData) {
+        console.log(`[TagAnalyticsApp] Using cached data for "${tagName}". Updating volatile data (Latest/Trending).`);
+
+        // Fetch Volatile Data (Always update these)
+        try {
+          const [latestPost, trendingPost, newPostCount] = await Promise.all([
+            this.fetchLatestPost(tagName),
+            this.fetchTrendingPost(tagName),
+            this.fetchNewPostCount(tagName)
+          ]);
+
+          cachedData.latestPost = latestPost;
+          cachedData.trendingPost = trendingPost;
+          cachedData.newPostCount = newPostCount;
+
+          // Update Cache with fresh volatile data
+          this.saveToCache(cachedData);
+        } catch (e) {
+          console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
+        }
+
+        cachedData._isCached = true;
+        this.injectAnalyticsButton(cachedData);
+        return;
+      }
+
+      // Check for stale cache for Delta
+      if (this.db && this.db.tag_analytics) {
+        try {
+          const record = await this.db.tag_analytics.get(tagName);
+          if (record) {
+            const age = Date.now() - record.updatedAt;
+            if (age >= 24 * 60 * 60 * 1000) {
+              console.log(`[TagAnalyticsApp] Found stale cache (${(age / 3600000).toFixed(1)}h old). Attempting Delta Update.`);
+              baseData = record.data;
+              runDelta = true;
+            }
+          }
+        } catch (e) { console.warn("DB Read Error", e); }
       }
 
       console.log(`[TagAnalyticsApp] Processing tag: "${tagName}"`);
@@ -8058,7 +8197,7 @@
       this.rateLimiter.requestCounter = 0; // Reset counter
       const startReq = this.rateLimiter.getRequestCount();
 
-      const initialStats = await this.fetchInitialStats(tagName);
+      const initialStats = await this.fetchInitialStats(tagName, baseData);
 
       const t1 = performance.now();
       const req1 = this.rateLimiter.getRequestCount() - startReq;
@@ -8078,6 +8217,8 @@
         meta,
         initialPosts
       } = initialStats;
+
+      meta.updatedAt = Date.now();
 
       // Check Category & Inject Button
       // 0=General, 1=Artist, 3=Copyright, 4=Character, 5=Meta
@@ -8157,6 +8298,7 @@
         };
 
         this.injectAnalyticsButton(meta);
+        this.saveToCache(meta); // Save Small Tag Data
         return;
       }
 
@@ -8178,24 +8320,63 @@
       const dateStr1Y = oneYearAgoDate.toISOString().split('T')[0];
       const dateStrTomorrow = tomorrow.toISOString().split('T')[0];
 
-      // First 100 Local Calculation (for rankings)
-      const first100Stats = this.calculateLocalStats(initialPosts || []);
+      // Prepare Logic for Delta vs Full
+      let historyPromise, milestonesPromise, first100StatsPromise;
+
+      if (runDelta && baseData) {
+        // [DELTA] History: Last date in cache
+        const lastHistory = baseData.historyData[baseData.historyData.length - 1];
+        const lastDate = lastHistory ? new Date(lastHistory.date) : startDate;
+        // Start from 7 days before last date (overlap slightly to cover late updates)
+        const deltaStart = new Date(lastDate);
+        deltaStart.setDate(deltaStart.getDate() - 7);
+
+        historyPromise = this.fetchHistoryDelta(tagName, deltaStart, startDate)
+          .then(delta => this.mergeHistory(baseData.historyData, delta));
+
+        // [DELTA] Milestones
+        milestonesPromise = this.fetchMilestonesDelta(tagName, totalCount, baseData.precalculatedMilestones)
+          .then(delta => this.mergeMilestones(baseData.precalculatedMilestones, delta));
+
+        // [DELTA] First 100 Ranking (Static - Reuse from cache)
+        if (baseData.rankings && baseData.rankings.uploader && baseData.rankings.uploader.first100) {
+          initialStats.first100Stats = {
+            uploaderRanking: baseData.rankings.uploader.first100,
+            approverRanking: baseData.rankings.approver.first100
+          };
+          first100StatsPromise = Promise.resolve(initialStats.first100Stats);
+        } else {
+          // Fallback if missing in cache (shouldn't happen if struct is consistent)
+          first100StatsPromise = Promise.resolve(this.calculateLocalStats(initialPosts || []));
+        }
+
+      } else {
+        // [FULL]
+        historyPromise = this.fetchMonthlyCounts(tagName, startDate);
+        milestonesPromise = this.fetchMilestonePosts(tagName, totalCount, milestoneTargets);
+        first100StatsPromise = Promise.resolve(this.calculateLocalStats(initialPosts || []));
+      }
 
       const promiseList = [
-        this.fetchMonthlyCounts(tagName, startDate),
-        this.fetchMilestonePosts(tagName, totalCount, milestoneTargets),
+        historyPromise,
+        milestonesPromise,
         this.fetchStatusCounts(tagName),
         this.fetchRatingCounts(tagName),
         this.fetchLatestPost(tagName),
         this.fetchNewPostCount(tagName),
         this.fetchTrendingPost(tagName),
-        // Report Fetches (Rankings)
+        // Report Fetches (Rankings) - These change frequently so we re-fetch them
         this.fetchReportRanking(tagName, 'uploader', '2005-01-01', dateStrTomorrow),
         this.fetchReportRanking(tagName, 'approver', '2005-01-01', dateStrTomorrow),
         this.fetchReportRanking(tagName, 'uploader', dateStr1Y, dateStrTomorrow),
         this.fetchReportRanking(tagName, 'approver', dateStr1Y, dateStrTomorrow),
-        // Resolve Names for Local Stats (First 100)
-        this.resolveFirst100Names(first100Stats)
+        // Resolve Names for Local Stats (First 100) - Only if we didn't cache them?
+        // Actually resolveFirst100Names modifies the object in place.
+        first100StatsPromise.then(stats => {
+          if (runDelta && baseData && baseData.rankings && baseData.rankings.uploader.first100) return stats; // Already resolved in cache
+          // Re-resolve if we just calculated it locally
+          return this.resolveFirst100Names(stats);
+        })
       ];
 
       // Progress Tracker
@@ -8212,7 +8393,7 @@
       }));
 
       const [historyData, milestones, statusCounts, ratingCounts, latestPost, newPostCount, trendingPost,
-        uploaderAll, approverAll, uploaderYear, approverYear] = await Promise.all(trackedPromises);
+        uploaderAll, approverAll, uploaderYear, approverYear, first100Stats] = await Promise.all(trackedPromises);
 
       const t3 = performance.now();
       const req2 = this.rateLimiter.getRequestCount() - startReq2;
@@ -8293,55 +8474,91 @@
 
       // Update Button state (Activation)
       this.injectAnalyticsButton(meta);
+      this.saveToCache(meta); // Save Full Tag Data
     }
 
-    async fetchInitialStats(tagName) {
+    async fetchInitialStats(tagName, cachedData = null) {
       console.log(`[TagAnalyticsApp] Step 1: Fetching Initial Stats for "${tagName}"`);
       // Get Tag Metadata first to know count and category
       const tagData = await this.fetchTagData(tagName); // Existing helper
       if (!tagData) return null;
 
-      // Get First 100 Posts (Ascending ID = Oldest First)
-      const limit = 100;
-      const params = new URLSearchParams({
-        tags: `${tagName} order:id`, // order:id is ascending (oldest first) in Danbooru, same as order:id_asc
-        limit: limit,
-        only: 'id,created_at,uploader_id,approver_id,file_url'
-      });
-      const url = `/posts.json?${params.toString()}`;
-
-      try {
-        const posts = await this.rateLimiter.fetch(url).then(r => r.json());
-
-        if (!posts || posts.length === 0) {
-          return { totalCount: tagData.post_count, meta: tagData };
-        }
-
-        const firstPost = posts[0];
-        const hundredthPost = posts.length >= 100 ? posts[99] : null;
-
-        const startDate = new Date(firstPost.created_at);
-        let timeToHundred = null;
-
-        if (hundredthPost) {
-          const hundredthDate = new Date(hundredthPost.created_at);
-          timeToHundred = hundredthDate - startDate; // ms
-        }
-
+      // [DELTA] Use Cached First 100 Data if available
+      if (cachedData && cachedData.firstPost) {
+        console.log(`[TagAnalyticsApp] Using cached Initial Stats.`);
         return {
-          firstPost,
-          hundredthPost,
+          firstPost: cachedData.firstPost,
+          hundredthPost: cachedData.hundredthPost,
           totalCount: tagData.post_count,
-          startDate,
-          timeToHundred,
+          startDate: new Date(cachedData.firstPost.created_at),
+          timeToHundred: cachedData.timeToHundred,
           meta: tagData,
-          initialPosts: posts // Can be used for ranking if needed
+          initialPosts: null // We don't have them in full if cached, but we don't need them for delta
         };
-
-      } catch (e) {
-        console.error("[TagAnalyticsApp] Step 1 Failed:", e);
-        return null;
       }
+
+      // Get First 100 Posts (Pagination with Timeout Retry)
+      const limit = 100;
+      let startId = 0;
+      const increment = 1000000;
+      const maxId = 30000000; // 30M safety limit
+
+      let posts = [];
+
+      while (startId < maxId) {
+        const params = new URLSearchParams({
+          tags: tagName, // Removed order:id
+          limit: limit,
+          page: `a${startId}`,
+          only: 'id,created_at,uploader_id,approver_id,file_url'
+        });
+        const url = `/posts.json?${params.toString()}`;
+
+        try {
+          console.log(`[TagAnalyticsApp] Fetching First 100: page=a${startId}`);
+          posts = await this.rateLimiter.fetch(url).then(r => r.json());
+
+          if (posts && posts.length > 0) {
+            break; // Found our data
+          }
+          if (posts && posts.length === 0) {
+            // No posts found after this ID. 
+            // If we had timeouts previously, we missed data. 
+            // If this is the first try (a0), tag is empty.
+            break;
+          }
+        } catch (e) {
+          console.warn(`[TagAnalyticsApp] Timeout/Error at a${startId}, retrying with a${startId + increment}`, e);
+          startId += increment;
+          // Continue to next chunk
+        }
+      }
+
+      if (!posts || posts.length === 0) {
+        return { totalCount: tagData.post_count, meta: tagData, updatedAt: Date.now() };
+      }
+
+      const firstPost = posts[0];
+      const hundredthPost = posts.length >= 100 ? posts[99] : null;
+
+      const startDate = new Date(firstPost.created_at);
+      let timeToHundred = null;
+
+      if (hundredthPost) {
+        const hundredthDate = new Date(hundredthPost.created_at);
+        timeToHundred = hundredthDate - startDate; // ms
+      }
+
+      return {
+        firstPost,
+        hundredthPost,
+        totalCount: tagData.post_count,
+        startDate,
+        timeToHundred,
+        meta: tagData,
+        initialPosts: posts // Can be used for ranking if needed
+      };
+
     }
 
     async fetchStatusCounts(tagName) {
@@ -8488,6 +8705,59 @@
       }
     }
 
+    async fetchHistoryDelta(tagName, lastDate, startDate) {
+      if (!lastDate) return this.fetchMonthlyCounts(tagName, startDate);
+
+      console.log(`[TagAnalyticsApp] Fetching History Delta since ${lastDate.toISOString()}`);
+
+      // Re-fetch the last month to ensure it's up to date (it might have been partial)
+      // And fetch everything after.
+      // Actually, we can just use fetchMonthlyCounts logic but start from lastDate!
+      return this.fetchMonthlyCounts(tagName, lastDate);
+    }
+
+    mergeHistory(oldHistory, newHistory) {
+      if (!oldHistory || oldHistory.length === 0) return newHistory;
+      if (!newHistory || newHistory.length === 0) return oldHistory;
+
+      // Map old history by date string (YYYY-MM-DD or time) for easy lookup?
+      // Actually, standard is array of objects { date: Date, count: number, cumulative: number }
+      // newHistory starts from lastDate.
+
+      // Remove overlapping months from oldHistory (specifically the last one if we re-fetched it)
+      const newStart = newHistory[0].date;
+      const filteredOld = oldHistory.filter(h => h.date < newStart);
+
+      // Concatenate
+      let merged = filteredOld.concat(newHistory);
+
+      // Recalculate Cumulative
+      let cumulative = 0;
+      merged = merged.map(h => {
+        cumulative += h.count;
+        return { ...h, cumulative };
+      });
+
+      return merged;
+    }
+
+    async fetchMilestonesDelta(tagName, currentTotal, cachedMilestones) {
+      const allTargets = this.getMilestoneTargets(currentTotal);
+      const existingTargets = new Set(cachedMilestones.map(m => m.milestone));
+      const missingTargets = allTargets.filter(t => !existingTargets.has(t));
+
+      if (missingTargets.length === 0) return [];
+
+      console.log(`[TagAnalyticsApp] Fetching ${missingTargets.length} missing milestones:`, missingTargets);
+      return this.fetchMilestonePosts(tagName, currentTotal, missingTargets);
+    }
+
+    mergeMilestones(oldMilestones, newMilestones) {
+      if (!newMilestones || newMilestones.length === 0) return oldMilestones;
+      // Sort by milestone number
+      return [...oldMilestones, ...newMilestones].sort((a, b) => a.milestone - b.milestone);
+    }
+
     async fetchLatestPost(tagName) {
       // Query for the single latest post
       const url = `/posts.json?tags=${encodeURIComponent(tagName)}&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext`;
@@ -8515,7 +8785,7 @@
     async fetchTrendingPost(tagName) {
       // Query for the most popular SFW post in the last 3 days
       // age:..3d, order:score, rating:g
-      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+rating:g&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext,score`;
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+is:sfw&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext,score`;
       try {
         const posts = await this.rateLimiter.fetch(url).then(r => r.json());
         return (posts && posts.length > 0) ? posts[0] : null;
@@ -8801,7 +9071,7 @@
             tags: `${tagName} order:id`,
             limit: LIMIT,
             page: pageInBlock,
-            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url'
+            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url,rating'
           });
           if (currentBlockStartId > 0) {
             params.set('tags', `${tagName} order:id id:>${currentBlockStartId}`);
@@ -8945,6 +9215,94 @@
     }
 
 
+    injectSettingsButton(container) {
+      if (document.getElementById("tag-analytics-settings-btn")) return;
+
+      const btn = document.createElement("span");
+      btn.id = "tag-analytics-settings-btn";
+      btn.innerHTML = '⚙️';
+      btn.style.cursor = 'pointer';
+      btn.style.marginLeft = '6px';
+      btn.style.fontSize = '12px';
+      btn.style.verticalAlign = 'middle';
+      btn.title = 'Configure Data Retention';
+
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.showSettingsPopover(btn);
+      };
+
+      container.appendChild(btn);
+    }
+
+    showSettingsPopover(target) {
+      // Remove existing
+      const existing = document.getElementById('tag-analytics-settings-popover');
+      if (existing) existing.remove();
+
+      const currentDays = this.getRetentionDays();
+
+      const popover = document.createElement('div');
+      popover.id = 'tag-analytics-settings-popover';
+      popover.style.position = 'absolute';
+      popover.style.zIndex = '11001';
+      popover.style.background = '#fff';
+      popover.style.border = '1px solid #ccc';
+      popover.style.borderRadius = '6px';
+      popover.style.padding = '12px';
+      popover.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
+      popover.style.fontSize = '11px';
+      popover.style.color = '#333';
+      popover.style.width = '240px';
+
+      // Position logic
+      const rect = target.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+      popover.style.top = `${rect.top + scrollTop}px`;
+      popover.style.left = `${rect.right + scrollLeft + 10}px`;
+
+      popover.innerHTML = `
+        <div style="margin-bottom:8px; line-height:1.4;">
+          <strong>Data Retention Period</strong><br>
+          Records older than this will be deleted automatically.
+        </div>
+        <div style="display:flex; align-items:center; justify-content:space-between;">
+           <input type="number" id="retention-days-input" value="${currentDays}" min="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
+           <button id="retention-save-btn" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
+        </div>
+      `;
+
+      document.body.appendChild(popover);
+
+      // Close on click outside
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && e.target !== target) {
+          popover.remove();
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+
+      // Save Handler
+      const saveBtn = popover.querySelector('#retention-save-btn');
+      saveBtn.onclick = () => {
+        const input = popover.querySelector('#retention-days-input');
+        const days = parseInt(input.value, 10);
+        if (!isNaN(days) && days > 0) {
+          this.setRetentionDays(days);
+          popover.remove();
+          document.removeEventListener('click', closeHandler);
+          alert(`Retention period set to ${days} days.\nCleaning up old data now...`);
+          this.cleanupOldCache(); // Run cleanup immediately
+        } else {
+          alert('Please enter a valid number.');
+        }
+      };
+    }
+
     injectAnalyticsButton(tagData, progress = 0) {
       const title = document.querySelector("#c-wiki-pages #a-show h1, #c-artists #a-show h1, #tag-show #posts h1, #tag-list h1");
       if (!title) {
@@ -9067,10 +9425,10 @@
     updateNsfwVisibility() {
       const isNsfwEnabled = localStorage.getItem('tag_analytics_nsfw_enabled') === 'true';
       const items = document.querySelectorAll('.nsfw-monitor');
-      
+
       items.forEach(item => {
         const rating = item.getAttribute('data-rating');
-        
+
         if (isNsfwEnabled) {
           // NSFW Enabled: Show everything
           // item.style.display = 'flex'; // No need to toggle display if we only touch image
@@ -9098,7 +9456,7 @@
           }
         }
       });
-      
+
       // Update Checkbox State if it exists
       const cb = document.getElementById('tag-analytics-nsfw-toggle');
       if (cb) cb.checked = isNsfwEnabled;
@@ -9129,8 +9487,14 @@
             <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
             <div>
                 <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
-                <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
-                <span style="margin-left: 10px; font-size: 0.9em; color: #777;">ID: ${tagData.id}</span>
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
+                    <span style="font-size: 0.9em; color: #777;">ID: ${tagData.id}</span>
+                    <span style="font-size: 0.9em; color: #777; border-left: 1px solid #ddd; padding-left: 10px;" id="tag-updated-at">
+                        Updated: ${tagData.updatedAt ? new Date(tagData.updatedAt).toISOString().split('T')[0] : 'N/A'}
+                    </span>
+                    <span id="tag-settings-anchor"></span>
+                </div>
             </div>
             <div>
                 <label style="display: flex; align-items: center; font-size: 0.9em; color: #555; cursor: pointer; user-select: none;">
@@ -9163,7 +9527,7 @@
                     <div style="display: flex; gap: 15px;">
                          <!-- Latest Post -->
                          ${tagData.latestPost ? `
-                     <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                     <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                            <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                               <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
@@ -9176,7 +9540,7 @@
 
                          <!-- Trending Post -->
                          ${tagData.trendingPost ? `
-                     <div class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                     <div class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                                 <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/images/download-preview.png';">
@@ -9255,6 +9619,9 @@
                 <div id="history-chart-cumulative" style="width: 100%; height: 300px;"></div>
             </div>
         `;
+
+      // Inject Settings Button into Header
+      this.injectSettingsButton(document.getElementById('tag-settings-anchor'));
 
       // NSFW Logic
       const nsfwCheck = document.getElementById('tag-analytics-nsfw-toggle');
@@ -9370,7 +9737,12 @@
           count: isNaN(validCount) ? 0 : validCount,
           key: key
         };
-      }).filter(d => d.count > 0);
+      }).filter(d => d.count > 0)
+        .sort((a, b) => {
+          if (a.key === 'others') return 1;
+          if (b.key === 'others') return -1;
+          return b.count - a.count;
+        }); // Sort by count desc, but others last
 
       if (data.length === 0) {
         if (loading) {
@@ -9852,11 +10224,18 @@
           .attr("fill", "transparent")
           .style("cursor", "pointer")
           .style("pointer-events", "all")
+          .style("pointer-events", "all")
           .on("mouseover", function () {
             d3.select(this).attr("fill", "rgba(0, 123, 255, 0.05)");
+            // Highlight Bar
+            const bar = svg.select(`.monthly-bar-${d.date.getTime()}`);
+            if (bar) bar.attr("fill", "#2e7d32"); // Darker/Vivid Green (Matches screenshot)
           })
           .on("mouseout", function () {
             d3.select(this).attr("fill", "transparent");
+            // Reset Bar
+            const bar = svg.select(`.monthly-bar-${d.date.getTime()}`);
+            if (bar) bar.attr("fill", "#69b3a2"); // Original Green
           })
           .on("click", (event) => {
             window.open(searchUrl, '_blank');
@@ -9870,7 +10249,7 @@
         .data(data)
         .enter()
         .append("rect")
-        .attr("class", "monthly-bar")
+        .attr("class", d => `monthly-bar monthly-bar-${d.date.getTime()}`)
         .attr("x", d => x(d.date))
         .attr("y", d => y(d.count))
         .attr("width", x.bandwidth())
@@ -10189,6 +10568,8 @@
             </div>`;
       }
 
+      const maxCount = Math.max(...data.map(u => u.count || u.post_count || 0));
+
       const list = data.slice(0, 10).map((u, i) => {
         let nameHtml = 'Unknown';
         if (u.id) {
@@ -10197,9 +10578,11 @@
           nameHtml = `<a href="/users?search[name]=${u.name}" target="_blank" style="color: #007bff; text-decoration: none;">${u.name}</a>`;
         }
 
-        const count = u.count || u.post_count;
+        const count = u.count || u.post_count || 0;
+        const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+
         return `
-            <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 0; border-bottom: 1px solid #f5f5f5;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 5px; border-bottom: 1px solid #f5f5f5; background: linear-gradient(90deg, rgba(0,0,0,0.06) ${percentage}%, transparent ${percentage}%);">
                 <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${u.name}">${i + 1}. ${nameHtml}</span>
                 <span style="color: #666; font-weight: bold;">${count}</span>
             </div>`;
