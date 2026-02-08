@@ -8801,7 +8801,7 @@
             tags: `${tagName} order:id`,
             limit: LIMIT,
             page: pageInBlock,
-            only: 'id,created_at,uploader_id,preview_file_url,file_url'
+            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url'
           });
           if (currentBlockStartId > 0) {
             params.set('tags', `${tagName} order:id id:>${currentBlockStartId}`);
@@ -8842,8 +8842,8 @@
         // Backfill names
         items.forEach(item => {
           const p = item.post || item;
-          if (p.uploader_id && userMap.has(p.uploader_id)) {
-            p.uploader_name = userMap.get(p.uploader_id);
+          if (p.uploader_id && userMap.has(String(p.uploader_id))) {
+            p.uploader_name = userMap.get(String(p.uploader_id));
           }
         });
       }
@@ -9064,6 +9064,46 @@
       }
     }
 
+    updateNsfwVisibility() {
+      const isNsfwEnabled = localStorage.getItem('tag_analytics_nsfw_enabled') === 'true';
+      const items = document.querySelectorAll('.nsfw-monitor');
+      
+      items.forEach(item => {
+        const rating = item.getAttribute('data-rating');
+        
+        if (isNsfwEnabled) {
+          // NSFW Enabled: Show everything
+          // item.style.display = 'flex'; // No need to toggle display if we only touch image
+          const img = item.querySelector('img');
+          if (img) {
+            img.style.filter = 'none';
+            img.style.opacity = '1';
+          }
+        } else {
+          // NSFW Disabled: Hide 'q' and 'e' thumbnails
+          if (rating === 'q' || rating === 'e') {
+            // item.style.display = 'none'; // Don't hide the card
+            const img = item.querySelector('img');
+            if (img) {
+              img.style.filter = 'blur(10px) grayscale(100%)';
+              img.style.opacity = '0.3';
+            }
+          } else {
+            // Safe content: Ensure visible
+            const img = item.querySelector('img');
+            if (img) {
+              img.style.filter = 'none';
+              img.style.opacity = '1';
+            }
+          }
+        }
+      });
+      
+      // Update Checkbox State if it exists
+      const cb = document.getElementById('tag-analytics-nsfw-toggle');
+      if (cb) cb.checked = isNsfwEnabled;
+    }
+
     renderDashboard(tagData) {
       if (!document.getElementById("tag-analytics-modal")) {
         this.createModal();
@@ -9086,14 +9126,22 @@
       const titleColor = colorMap[tagData.category] || '#333';
 
       content.innerHTML = `
-            <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px;">
+            <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
                 <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
                 <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
                 <span style="margin-left: 10px; font-size: 0.9em; color: #777;">ID: ${tagData.id}</span>
             </div>
-            
-            
-            <!-- Main Grid: Summary & Distribution -->
+            <div>
+                <label style="display: flex; align-items: center; font-size: 0.9em; color: #555; cursor: pointer; user-select: none;">
+                    <input type="checkbox" id="tag-analytics-nsfw-toggle" style="margin-right: 6px;">
+                    Enable NSFW
+                </label>
+            </div>
+        </div>
+        
+        
+        <!-- Main Grid: Summary & Distribution -->
 
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
@@ -9115,31 +9163,31 @@
                     <div style="display: flex; gap: 15px;">
                          <!-- Latest Post -->
                          ${tagData.latestPost ? `
-                         <div style="display: flex; flex-direction: column; align-items: center; width: 80px;">
-                            <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-                               <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                                  <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
-                               </a>
-                            </div>
-                            <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
-                            <div style="font-size: 0.7em; color: #999;">${tagData.latestPost.created_at.split('T')[0]}</div>
-                         </div>
-                         ` : ''}
+                     <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                        <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                           <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                              <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
+                           </a>
+                        </div>
+                        <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
+                        <div style="font-size: 0.7em; color: #999;">${tagData.latestPost.created_at.split('T')[0]}</div>
+                     </div>
+                     ` : ''}
 
                          <!-- Trending Post -->
                          ${tagData.trendingPost ? `
-                         <div style="display: flex; flex-direction: column; align-items: center; width: 80px;">
-                            <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
-                               <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                                    <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/images/download-preview.png';">
-                               </a>
-                            </div>
-                            <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
-                            <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPost.score}</div>
-                         </div>
-                        ` : ''}
-                    </div>
+                     <div class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px;">
+                        <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
+                           <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                                <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/images/download-preview.png';">
+                           </a>
+                        </div>
+                        <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
+                        <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPost.score}</div>
+                     </div>
+                    ` : ''}
                 </div>
+            </div>
 
                 <!-- Spacer if needed, or remove bottom part -->
              </div>
@@ -9207,6 +9255,18 @@
                 <div id="history-chart-cumulative" style="width: 100%; height: 300px;"></div>
             </div>
         `;
+
+      // NSFW Logic
+      const nsfwCheck = document.getElementById('tag-analytics-nsfw-toggle');
+      if (nsfwCheck) {
+        nsfwCheck.checked = localStorage.getItem('tag_analytics_nsfw_enabled') === 'true';
+        nsfwCheck.onchange = (e) => {
+          localStorage.setItem('tag_analytics_nsfw_enabled', e.target.checked);
+          this.updateNsfwVisibility();
+        };
+        // Apply initial state
+        this.updateNsfwVisibility();
+      }
 
       // Use Pre-fetched Data
       const data = tagData.historyData || [];
@@ -9592,7 +9652,8 @@
         const uploaderName = p.uploader_name || `User ${p.uploader_id}`;
 
         const card = document.createElement('div');
-        card.className = 'milestone-card';
+        card.className = 'milestone-card nsfw-monitor';
+        card.setAttribute('data-rating', p.rating);
         card.style.background = '#fff';
         card.style.border = '1px solid #ddd';
         card.style.borderRadius = '8px';
@@ -9626,6 +9687,9 @@
 
         grid.appendChild(card);
       });
+
+      // Apply NSFW Settings
+      this.updateNsfwVisibility();
     }
 
 
