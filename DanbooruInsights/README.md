@@ -1,35 +1,39 @@
 # Danbooru Insights
 
-This userscript injects a GitHub-style contribution graph and a comprehensive analytics dashboard into Danbooru profile pages. Formerly known as **Danbooru Grass**, the project has been renamed to **Danbooru Insights** to reflect the addition of advanced analytics features (`AnalyticsApp`). It visualizes your activity (Uploads, Post Approvals, Note Updates) and provides deep insights into your posting habits, offering a clearer view of your contributions to the community.
+**Danbooru Insights** (formerly **Danbooru Grass**) is a comprehensive analytics suite for Danbooru users and tags. It injects GitHub-style contribution graphs and advanced dashboards directly into profile and wiki pages.
+
+The script consists of three main components:
+* **GrassApp**: Visualizes user contributions (Uploads, Approvals, Notes) on a GitHub-like calendar heatmap with support for hourly activity analysis and various themes.
+* **UserAnalyticsApp**: Provides deep insights into a user's posting habits, including milestones, tag usage, post scores, and rating distributions.
+* **TagAnalyticsApp**: A specialized dashboard for Artist, Copyright, and Character tags. It analyzes extensive data including historical trends, popular posts, active uploaders/approvers, and milestones for any specific tag.
 
 ## Examples
 #### GrassApp
 <img width="1365" height="404" alt="GrassApp" src="https://github.com/user-attachments/assets/a4c0bf04-0adf-4ebc-92c6-7123a693e237" />
 
-#### AnalyticsApp
-<img width="706" height="500" alt="AnalyticsApp 1" src="https://github.com/user-attachments/assets/30116ec5-497a-471e-bff5-9fb9a48baa41" />
-<img width="706" height="525" alt="AnalyticsApp 2" src="https://github.com/user-attachments/assets/9ce42888-1f12-4b15-90bf-be2809d1b5b5" />
+#### UserAnalyticsApp
+<img width="706" height="500" alt="UserAnalyticsApp 1" src="https://github.com/user-attachments/assets/30116ec5-497a-471e-bff5-9fb9a48baa41" />
+<img width="706" height="525" alt="UserAnalyticsApp 2" src="https://github.com/user-attachments/assets/9ce42888-1f12-4b15-90bf-be2809d1b5b5" />
 
-## Features
+## Features (v6.0)
 
-* **Hourly Activity Analysis**: New heatmap grid to visualize contribution patterns by time of day (AM/PM).
-* **Advanced Approvals Tracking**: Dedicated detail view for approvals, tracking exact post IDs and daily counts.
-* **Contribution Visualization**: Draws a calendar heatmap similar to GitHub's contribution graph.
-* **Advanced Analytics Dashboard**: A dedicated modal providing detailed stats like total uploads, top posts, and tag distributions.
-* **Detailed Post Analysis**: Includes a **Scatter Plot** to visualize post scores over time and a **Monthly Activity** chart.
-* **Multiple Metrics**: Supports switching between **Uploads**, **Approvals**, and **Notes**.
-* **Per-User Caching**: Data is cached locally using **Dexie.js** to minimize API calls and load times.
-* **Interactive Tooltips & Popovers**: detailed information on hover and click for granular data exploration.
-* **Search Integration**: Click on a day or graph element to search specifically for relevant posts.
-* **Advanced Customization**: Full control over themes (including light/dark presets) and contribution thresholds.
+* **Tag Analytics (`TagAnalyticsApp`)**: Full analytics support for any Tag, Artist, Copyright, or Character. Analyze historical trends, rankings, and milestones for specific tags.
+* **Enhanced Progress Tracking**: Real-time, descriptive loading indicators (e.g., "Analyzing monthly trends...", "Ranking top uploaders...") replacing generic loading messages.
+* **Immediate Visibility**: Analytics buttons appear immediately on page load in a "Waiting" state, ensuring accessibility even before data is fully processed.
+* **Unified Architecture**: Completely refactored codebase with a single entry point (`main`), shared `Database`, and optimized `SettingsManager`.
+* **Smart Button Injection**: Improved logic to inject analytics buttons reliably across various page layouts (Artist, Wiki, Post Lists).
+* **Refined User Experience**: Better feedback for invalid tags, automatic cleanup of old cache data, and smoother UI transitions.
 
 ## Version History
 
-### v5.0 (Latest)
+### v5.x Features
 
-* **Hourly Activity Analysis**: Introduced a new **Hourly Summary Grid** that visualizes contribution intensity by time of day (00:00 - 23:00). This provides deep insights into peak activity hours for uploads, approvals, and notes, complete with a dynamic heatmap and legend.
-* **Advanced Approvals Module**: Implemented a specialized data fetching and storage engine for **Approvals**. It now tracks exact Post IDs for every approval action, enabling a paginated "Detail View" to browse all approved posts for any specific day.
-* **Robust Data Architecture**: Completely refactored the caching layer (`completed_years`, `hourly_stats`) and sync logic. This ensures perfect data consistency across years, robust handling of API limits, and seamless integration of new metrics without affecting legacy data.
+* **Hourly Activity Analysis**: Visualizes contribution intensity by time of day (00:00 - 23:00) with a dynamic heatmap.
+* **Advanced Approvals Module**: Tracks exact Post IDs for approval actions with a paginated "Detail View".
+* **Core Analytics**: Includes Contribution Calendars, Scatter Plots for post scores, and Monthly Activity charts.
+* **Multiple Metrics**: Supports switching between **Uploads**, **Approvals**, and **Notes** with local caching (Dexie.js).
+* **Customization**: Full control over themes (light/dark presets), contribution thresholds, and visual settings.
+* **Robust Data Architecture**: Refactored caching layer ensuring consistency and performance.
 
 ### v4.x
 

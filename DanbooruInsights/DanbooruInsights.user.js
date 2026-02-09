@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.1
+// @version      6.0
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -8148,9 +8148,11 @@
     async run() {
       const tagName = this.tagName;
       if (!tagName) {
-
         return;
       }
+
+      // [IMMEDIATE UI] Show button in waiting state immediately
+      this.injectAnalyticsButton(null, 0, "Waiting...");
 
       // 0. Auto-Cleanup Old Records (>7 days)
       this.cleanupOldCache();
@@ -8240,10 +8242,13 @@
       const categoryName = categoryMap[meta.category] || `Unknown(${meta.category})`;
 
       if (validCategories.includes(meta.category)) {
-
         this.injectAnalyticsButton(meta);
       } else {
-
+        // Remove button if it was injected but category is invalid
+         const btn = document.getElementById("tag-analytics-btn");
+         if (btn) btn.remove();
+         const status = document.getElementById("tag-analytics-status");
+         if (status) status.remove();
         return; // Stop if not valid category
       }
 
@@ -8415,44 +8420,65 @@
         first100StatsPromise = Promise.resolve(this.calculateLocalStats(initialPosts || []));
       }
 
-      const promiseList = [
-        historyPromise,
-        milestonesPromise,
-        this.fetchStatusCounts(tagName),
-        this.fetchRatingCounts(tagName),
-        this.fetchLatestPost(tagName),
-        this.fetchNewPostCount(tagName),
-        this.fetchTrendingPost(tagName, false),
-        this.fetchTrendingPost(tagName, true),
-        // Report Fetches (Rankings) - These change frequently so we re-fetch them
-        this.fetchReportRanking(tagName, 'uploader', '2005-01-01', dateStrTomorrow),
-        this.fetchReportRanking(tagName, 'approver', '2005-01-01', dateStrTomorrow),
-        this.fetchReportRanking(tagName, 'uploader', dateStr1Y, dateStrTomorrow),
-        this.fetchReportRanking(tagName, 'approver', dateStr1Y, dateStrTomorrow),
-        // Resolve Names for Local Stats (First 100) - Only if we didn't cache them?
-        // Actually resolveFirst100Names modifies the object in place.
-        first100StatsPromise.then(stats => {
-          if (runDelta && baseData && baseData.rankings && baseData.rankings.uploader.first100) return stats; // Already resolved in cache
-          // Re-resolve if we just calculated it locally
-          return this.resolveFirst100Names(stats);
-        })
+      // Define tasks with user-friendly labels
+      const taskList = [
+        { id: 'history', label: 'Analyzing monthly trends...', promise: historyPromise },
+        { id: 'milestones', label: 'Checking milestones...', promise: milestonesPromise },
+        { id: 'status', label: 'Analyzing post status...', promise: this.fetchStatusCounts(tagName) },
+        { id: 'rating', label: 'Calculating rating distribution...', promise: this.fetchRatingCounts(tagName) },
+        { id: 'latest', label: 'Fetching latest info...', promise: this.fetchLatestPost(tagName) },
+        { id: 'new_count', label: 'Counting new posts...', promise: this.fetchNewPostCount(tagName) },
+        { id: 'trending', label: 'Finding trending posts...', promise: this.fetchTrendingPost(tagName, false) },
+        { id: 'trending_nsfw', label: 'Finding trending NSFW...', promise: this.fetchTrendingPost(tagName, true) },
+        { id: 'rank_up_all', label: 'Ranking top uploaders...', promise: this.fetchReportRanking(tagName, 'uploader', '2005-01-01', dateStrTomorrow) },
+        { id: 'rank_ap_all', label: 'Ranking top approvers...', promise: this.fetchReportRanking(tagName, 'approver', '2005-01-01', dateStrTomorrow) },
+        { id: 'rank_up_year', label: 'Ranking yearly uploaders...', promise: this.fetchReportRanking(tagName, 'uploader', dateStr1Y, dateStrTomorrow) },
+        { id: 'rank_ap_year', label: 'Ranking yearly approvers...', promise: this.fetchReportRanking(tagName, 'approver', dateStr1Y, dateStrTomorrow) },
+        {
+          id: 'resolve_names',
+          label: 'Resolving usernames...',
+          promise: first100StatsPromise.then(stats => {
+             if (runDelta && baseData && baseData.rankings && baseData.rankings.uploader.first100) return stats;
+             return this.resolveFirst100Names(stats);
+          })
+        }
       ];
 
       // Progress Tracker
-      let completedPromises = 0;
-      const totalPromises = promiseList.length;
+      let completedCount = 0;
+      const totalTasks = taskList.length;
 
-      this.injectAnalyticsButton(null, 0, "Fetching data..."); // Init 0%
+      this.injectAnalyticsButton(null, 0, "Initializing...");
 
-      const trackedPromises = promiseList.map(p => p.then(res => {
-        completedPromises++;
-        const pct = Math.round((completedPromises / totalPromises) * 100);
-        this.injectAnalyticsButton(null, pct, `Fetching data... ${pct}%`);
-        return res;
-      }));
+      // Wrap promises to update status on completion
+      const trackedPromises = taskList.map(task => {
+        return task.promise.then(res => {
+          completedCount++;
+          const pct = Math.round((completedCount / totalTasks) * 100);
+          // Show the label of the task that just finished, or keeping it "Fetching..." style?
+          // User wanted to know WHAT is happening.
+          // "Analyzing monthly trends... 15%"
+          this.injectAnalyticsButton(null, pct, `${task.label} ${pct}%`);
+          return res;
+        });
+      });
 
-      let [historyData, milestones, statusCounts, ratingCounts, latestPost, newPostCount, trendingPost, trendingPostNSFW,
-        uploaderAll, approverAll, uploaderYear, approverYear, first100Stats] = await Promise.all(trackedPromises);
+      // Execute all
+      let [
+        historyData,
+        milestones,
+        statusCounts,
+        ratingCounts,
+        latestPost,
+        newPostCount,
+        trendingPost,
+        trendingPostNSFW,
+        uploaderAll,
+        approverAll,
+        uploaderYear,
+        approverYear,
+        first100Stats
+      ] = await Promise.all(trackedPromises);
 
       // --- 6. Backward History Scan for merged/renamed tags ---
       const forwardTotal = (historyData && historyData.length > 0) ? historyData[historyData.length - 1].cumulative : 0;
