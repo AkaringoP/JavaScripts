@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      5.4
+// @version      6.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -404,6 +404,12 @@
      * @return {?{name: string, id: ?string, joinDate: Date}} User info or null if unavailable.
      * @private
      */
+    /**
+     * Extracts target user information from the DOM.
+     * Scrapes the user's name, ID, and join date from various elements.
+     * @return {?{name: string, id: ?string, joinDate: Date}} User info or null if unavailable.
+     * @private
+     */
     getTargetUserInfo() {
       let name = null;
       let id = null;
@@ -411,35 +417,23 @@
 
       try {
         // --- 1. Extract Name ---
-        // Priority A: Document Title (Most stable)
-        // Format: "User: [Name] | Danbooru"
         const titleMatch = document.title.match(/^User: (.+?) \|/);
         if (titleMatch) {
           name = titleMatch[1];
         }
 
-        // Priority B: H1 Header (Legacy/Visual)
         if (!name) {
           const h1 = document.querySelector('h1');
           if (h1) name = h1.textContent.trim().replace(/^User: /, '');
         }
 
         // --- 2. Extract ID ---
-        // Priority A: URL Path (Most stable for direct links)
-        // Format: /users/12345
         const urlMatch = window.location.pathname.match(/^\/users\/(\d+)/);
         if (urlMatch) {
           id = urlMatch[1];
         }
 
-        // Priority B: Meta Tags or Body Attributes (If available)
-        // Danbooru often puts the *current* user in meta, strict check needed.
-        // We skip this to avoid confusion with logged-in user unless we are sure.
-
-        // Priority C: DOM Search (Fallback)
         if (!id && name) {
-          // Try to find a link to the user's own page which usually contains ID
-          // "Messages" link is a good candidate if it exists
           const messagesLink = document.querySelector(
             'a[href*="/messages?search%5Bto_user_id%5D="]'
           );
@@ -447,70 +441,57 @@
             const match = messagesLink.href.match(/to_user_id%5D=(\d+)/);
             if (match) id = match[1];
           }
+        }
 
-          // Look for "My Account" if we are on our own profile
-          // (and it didn't redirect to /users/ID)
-          if (!id && window.location.pathname === '/profile') {
-            // On /profile, we might be able to find the ID in the "Edit" link
-            const editLink = document.querySelector(
-              'a[href^="/users/"][href$="/edit"]'
-            );
-            if (editLink) {
-              const m = editLink.getAttribute('href')
-                .match(/\/users\/(\d+)\/edit/);
-              if (m) id = m[1];
-            }
+        // Look for "My Account" if we are on our own profile
+        if (!id && window.location.pathname === '/profile') {
+          const editLink = document.querySelector(
+            'a[href^="/users/"][href$="/edit"]'
+          );
+          if (editLink) {
+            const m = editLink.getAttribute('href').match(/\/users\/(\d+)\/edit/);
+            if (m) id = m[1];
           }
+        }
 
-          // Scrape generic user links that match the name
-          if (!id) {
-            const userLinks = document.querySelectorAll(`a[href^="/users/"]`);
-            for (let link of userLinks) {
-              const m = link.getAttribute('href').match(/\/users\/(\d+)(?:\?|$)/);
-              if (m && link.textContent.trim() === name) {
-                id = m[1];
-                break;
-              }
+        // Scrape generic user links that match the name
+        if (!id && name) {
+          const userLinks = document.querySelectorAll('a[href^="/users/"]');
+          for (const link of userLinks) {
+            const m = link.getAttribute('href').match(/\/users\/(\d+)(?:\?|$)/);
+            if (m && link.textContent.trim() === name) {
+              id = m[1];
+              break;
             }
           }
         }
 
         // --- 3. Extract Join Date ---
-        // "Join Date" is in the statistics table.
-        // We search for the "Join Date" text in TH or TD (for flexibility).
-        // Try looking for a cell containing "Join Date"
-        // Danbooru format: <table>...<th>Join Date</th><td><time timestamp="...">2019-07-29</time></td>...</table>
-        // Or sometimes just text.
         const cells = Array.from(document.querySelectorAll('th, td'));
         const joinHeader = cells.find((el) => el.textContent.trim() === 'Join Date');
 
         if (joinHeader) {
-          let valEl = joinHeader.nextElementSibling;
+          const valEl = joinHeader.nextElementSibling;
           if (valEl) {
-            // Check for <time> element inside
             const timeEl = valEl.querySelector('time');
             if (timeEl) {
               joinDate = timeEl.getAttribute('datetime') || timeEl.textContent.trim();
             } else {
-              // Fallback to text content (e.g. "2019-07-29")
               joinDate = valEl.textContent.trim();
-              // If it contains "ago", we might have an issue, but usually it's date on profile.
             }
           }
         }
 
-        if (!name) return null; // Name is strictly required
+        if (!name) return null;
         if (!id) {
-          console.warn(
-            '[Danbooru Grass] User ID not found. Functionality may be limited (Notes).'
-          );
+          console.warn('[Danbooru Grass] User ID not found. Functionality may be limited (Notes).');
         }
 
         return {
-          name: name,
-          id: id,
-          created_at: joinDate, // Used as 'created_at' in other parts
-          joinDate: new Date(joinDate) // Keep for reference
+          name,
+          id,
+          created_at: joinDate,
+          joinDate: new Date(joinDate)
         };
 
       } catch (e) {
@@ -527,17 +508,10 @@
       if (!this.targetUser || !this.targetUser.name) return false;
 
       // Strict URL Check: Only main profile pages
-      // Allowed: /profile, /users/12345
-      // Disallowed: /users/12345/uploads, /users/12345/favorites, etc.
       const path = window.location.pathname;
       const isProfileUrl = path === '/profile' || /^\/users\/\d+$/.test(path);
 
-      if (!isProfileUrl) {
-
-        return false;
-      }
-
-      return true;
+      return isProfileUrl;
     }
   }
 
@@ -1054,6 +1028,7 @@
       }
     }
 
+
     /**
      * Fetches pages from an API endpoint until a stop condition is met.
      * Handles pagination and batching automatically.
@@ -1062,6 +1037,7 @@
      * @param {string|null} [stopDate=null] ISO Date string (YYYY-MM-DD). If encountered, stops fetching.
      * @param {string} [dateKey='created_at'] Key to check date against.
      * @param {string} [direction='desc'] Fetch direction ('desc' or 'asc').
+     * @param {Function|null} [onProgress=null] Optional callback for reporting fetch progress (count).
      * @return {Promise<Array<Object>>} List of all fetched items up to the stop condition.
      */
     async fetchAllPages(endpoint, params, stopDate = null, dateKey = 'created_at', direction = 'desc', onProgress = null) {
@@ -1073,8 +1049,6 @@
       const BATCH_SIZE = isApprovals ? 1 : 5;
       const DELAY_BETWEEN_BATCHES = 150;
 
-      // Outer Loop Label for breaking from nested loops
-      fetchLoop:
       while (true) {
         const promises = [];
 
@@ -1092,7 +1066,7 @@
             // 1. Random Start Delay (Approvals Only)
             if (isApprovals) {
               const delay = Math.floor(Math.random() * 300) + 200; // 200~500ms
-              await new Promise(r => setTimeout(r, delay));
+              await new Promise((r) => setTimeout(r, delay));
             }
 
             // 2. Retry Logic
@@ -1106,7 +1080,7 @@
                 if (attempt < backoff.length) {
                   const waitMs = backoff[attempt];
                   console.warn(`[Danbooru Grass] ${resp.status} on Page ${currentPage}. Retrying in ${waitMs}ms...`);
-                  await new Promise(r => setTimeout(r, waitMs));
+                  await new Promise((r) => setTimeout(r, waitMs));
                   attempt++;
                   continue;
                 } else {
@@ -1164,7 +1138,6 @@
                 }
 
                 if (shouldStop) {
-
                   finished = true;
                   break; // Break item loop
                 }
@@ -8167,6 +8140,11 @@
       }
     }
 
+    /**
+     * Main execution method for Tag Analytics.
+     * Orchestrates data fetching, caching, and UI rendering.
+     * @return {Promise<void>}
+     */
     async run() {
       const tagName = this.tagName;
       if (!tagName) {
@@ -8373,7 +8351,7 @@
           meta.characterCounts = getObjectDistribution(characterMap);
         }
 
-        this.injectAnalyticsButton(meta);
+        this.injectAnalyticsButton(meta, 100, ""); // Clear status
         this.saveToCache(meta); // Save Small Tag Data
         return;
       }
@@ -8464,12 +8442,12 @@
       let completedPromises = 0;
       const totalPromises = promiseList.length;
 
-      this.injectAnalyticsButton(null, 0); // Init 0%
+      this.injectAnalyticsButton(null, 0, "Fetching data..."); // Init 0%
 
       const trackedPromises = promiseList.map(p => p.then(res => {
         completedPromises++;
         const pct = Math.round((completedPromises / totalPromises) * 100);
-        this.injectAnalyticsButton(null, pct);
+        this.injectAnalyticsButton(null, pct, `Fetching data... ${pct}%`);
         return res;
       }));
 
@@ -8480,6 +8458,7 @@
       const forwardTotal = (historyData && historyData.length > 0) ? historyData[historyData.length - 1].cumulative : 0;
       if (forwardTotal < meta.post_count) {
 
+        this.injectAnalyticsButton(null, 100, "Scanning history backwards...");
         const backwardResult = await this.fetchHistoryBackwards(tagName, startDate, meta.post_count, forwardTotal);
 
         if (backwardResult.length > 0) {
@@ -8524,6 +8503,7 @@
         const t4 = performance.now();
         const startReq3 = this.rateLimiter.getRequestCount();
 
+        this.injectAnalyticsButton(null, 100, "Analyzing related tags...");
         [copyrightCounts, characterCounts] = await Promise.all([
           this.fetchRelatedTagDistribution(tagName, 3, totalCount), // Copyright
           this.fetchRelatedTagDistribution(tagName, 4, totalCount)  // Character
@@ -8539,6 +8519,7 @@
         const t4 = performance.now();
         const startReq3 = this.rateLimiter.getRequestCount();
 
+        this.injectAnalyticsButton(null, 100, "Analyzing related tags...");
         characterCounts = await this.fetchRelatedTagDistribution(tagName, 4, totalCount); // Character
 
         const t5 = performance.now();
@@ -8579,6 +8560,7 @@
 
       // Fetch User Metadata (ID)
       if (uRankingIds.size > 0) {
+        this.injectAnalyticsButton(null, 100, "Resolving user IDs...");
         const userMap = await this.fetchUserMap(Array.from(uRankingIds));
         userMap.forEach((uObj, id) => {
           this.userNames[id] = uObj;
@@ -8587,6 +8569,7 @@
 
       // Fetch User Metadata (Name)
       if (uRankingNames.size > 0) {
+        this.injectAnalyticsButton(null, 100, "Resolving usernames...");
         const nameMap = await this.fetchUserMapByNames(Array.from(uRankingNames));
         nameMap.forEach((uObj, name) => {
           this.userNames[name] = uObj; // Map Name -> Object
@@ -8628,7 +8611,7 @@
       };
 
       // Update Button state (Activation)
-      this.injectAnalyticsButton(meta);
+      this.injectAnalyticsButton(meta, 100, "");
       this.saveToCache(meta); // Save Full Tag Data
     }
 
@@ -8672,6 +8655,11 @@
 
         posts = await this.rateLimiter.fetch(url).then(r => r.json());
 
+        if (!Array.isArray(posts)) {
+          console.warn("[TagAnalyticsApp] Initial stats fetch returned non-array:", posts);
+          posts = [];
+        }
+
         if (posts && posts.length > 0) {
           // page=a0 returns the first 100 posts (ID 1-100), but the array itself 
           // is often returned in descending order [ID 100, ..., ID 1].
@@ -8691,7 +8679,7 @@
             only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
           });
           const fbPosts = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then(r => r.json());
-          if (fbPosts && fbPosts.length > 0) {
+          if (Array.isArray(fbPosts) && fbPosts.length > 0) {
             fbPosts.reverse();
             posts = fbPosts;
           }
@@ -9101,6 +9089,13 @@
 
     // -----------------------------------
 
+    /**
+     * Fetches monthly post counts for the tag since the start date.
+     * Iterates month by month to build a complete history.
+     * @param {string} tagName The tag name.
+     * @param {!Date} startDate The date to start fetching from.
+     * @return {Promise<!Array<{date: !Date, count: number, cumulative: number}>>} Array of monthly data.
+     */
     async fetchMonthlyCounts(tagName, startDate) {
 
 
@@ -9188,6 +9183,14 @@
       return monthlyData;
     }
 
+    /**
+     * Identifies milestone posts (e.g., 100th, 1000th) from the monthly data.
+     * Precision depends on the granularity of the monthly data.
+     * @param {string} tagName The tag name.
+     * @param {!Array<{date: !Date, count: number, cumulative: number}>} monthlyData The history data.
+     * @param {!Array<number>} targets The milestone targets (e.g., [1, 100, 1000]).
+     * @return {Promise<!Array<{milestone: number, post: ?Object}>>} Array of milestones.
+     */
     async fetchMilestones(tagName, monthlyData, targets) {
 
       const milestones = [];
@@ -9280,6 +9283,11 @@
       return milestones;
     }
 
+    /**
+     * Backfills uploader and approver names for a list of items (posts or milestones).
+     * @param {!Array<Object>} items The items to process.
+     * @return {Promise<!Array<Object>>} The items with names attached.
+     */
     async backfillUploaderNames(items) {
       const userIds = new Set();
       items.forEach(item => {
@@ -9316,6 +9324,12 @@
       return items;
     }
 
+    /**
+     * Fetches a map of user IDs to user objects (name, level).
+     * Batches requests to avoid rate limits.
+     * @param {!Array<string|number>} userIds List of user IDs.
+     * @return {Promise<!Map<string, {name: string, level: string}>>} Map of ID to user info.
+     */
     async fetchUserMap(userIds) {
       const userMap = new Map();
       if (!userIds || userIds.length === 0) return userMap;
@@ -9348,6 +9362,12 @@
       return userMap;
     }
 
+    /**
+     * Fetches a map of user names to user objects.
+     * Fetches individually as batching by name is not reliably supported.
+     * @param {!Array<string>} userNames List of user names.
+     * @return {Promise<!Map<string, {id: number, name: string, level: string}>>} Map of name to user info.
+     */
     async fetchUserMapByNames(userNames) {
       const userMap = new Map(); // Key: Name, Value: { id, name, level }
       if (!userNames || userNames.length === 0) return userMap;
@@ -9386,6 +9406,11 @@
       return userMap;
     }
 
+    /**
+     * Resolves uploader/approver names for the first 100 stats structure.
+     * @param {!Object} stats The stats object containing rankings.
+     * @return {Promise<!Object>} The updated stats object.
+     */
     async resolveFirst100Names(stats) {
       const ids = new Set();
       if (stats.uploaderRanking) stats.uploaderRanking.forEach(u => ids.add(String(u.id)));
@@ -9416,6 +9441,12 @@
       return stats;
     }
 
+    /**
+     * Calculates history data locally from an array of posts.
+     * Useful for small tags where we have all posts.
+     * @param {!Array<Object>} posts The list of posts.
+     * @return {!Array<{date: string, count: number, cumulative: number}>} Calculated history.
+     */
     calculateHistoryFromPosts(posts) {
       if (!posts || posts.length === 0) return [];
 
@@ -9459,6 +9490,10 @@
     }
 
 
+    /**
+     * Injects the settings gear icon into the UI.
+     * @param {!Element} container The container element.
+     */
     injectSettingsButton(container) {
       if (document.getElementById("tag-analytics-settings-btn")) return;
 
@@ -9480,6 +9515,10 @@
       container.appendChild(btn);
     }
 
+    /**
+     * Shows the settings popover for data retention.
+     * @param {!Element} target The button element that triggered the popover.
+     */
     showSettingsPopover(target) {
       // Remove existing
       const existing = document.getElementById('tag-analytics-settings-popover');
@@ -9547,7 +9586,14 @@
       };
     }
 
-    injectAnalyticsButton(tagData, progress = 0) {
+    /**
+     *Injecsts the main analytics button into the page header.
+     * Updates the button state (loading/ready) based on data availability.
+     * @param {?Object} tagData The analytics data object.
+     * @param {number=} progress The loading progress percentage.
+     * @param {string=} statusText Optional text to display next to the button.
+     */
+    injectAnalyticsButton(tagData, progress = 0, statusText = '') {
       let title = document.querySelector("#c-wiki-pages #a-show h1, #c-artists #a-show h1, #tag-show #posts h1, #tag-list h1");
 
       // Fallback: Try finding container via post-count (common in modern Danbooru layouts)
@@ -9597,6 +9643,33 @@
         title.appendChild(btn);
       }
 
+      // Status Label Logic
+      let statusLabel = document.getElementById("tag-analytics-status");
+      if (!statusLabel) {
+        statusLabel = document.createElement("span");
+        statusLabel.id = "tag-analytics-status";
+        statusLabel.style.marginLeft = "10px";
+        statusLabel.style.fontSize = "14px";
+        statusLabel.style.color = "#888";
+        statusLabel.style.verticalAlign = "middle";
+        statusLabel.style.fontFamily = "sans-serif";
+        
+        // Insert after button
+        if (btn.nextSibling) {
+          btn.parentNode.insertBefore(statusLabel, btn.nextSibling);
+        } else {
+          btn.parentNode.appendChild(statusLabel);
+        }
+      }
+
+      if (statusText) {
+        statusLabel.textContent = statusText;
+        statusLabel.style.display = "inline";
+      } else {
+        statusLabel.textContent = "";
+        statusLabel.style.display = "none";
+      }
+
       const isReady = tagData && !!(tagData.historyData && tagData.precalculatedMilestones && tagData.statusCounts && tagData.ratingCounts);
       const iconContainer = btn.querySelector(".icon-container");
 
@@ -9624,6 +9697,9 @@
       }
     }
 
+    /**
+     * Creates the modal overlay for the dashboard.
+     */
     createModal() {
       if (document.getElementById("tag-analytics-modal")) return;
 
@@ -9658,6 +9734,10 @@
       };
     }
 
+    /**
+     * Toggles the visibility of the dashboard modal.
+     * @param {boolean} show Whether to show or hide the modal.
+     */
     toggleModal(show) {
       if (!document.getElementById("tag-analytics-modal")) {
         this.createModal();
@@ -9675,6 +9755,10 @@
       }
     }
 
+    /**
+     * Updates the visibility of NSFW content based on user settings.
+     * Toggles blur/opacity on marked elements.
+     */
     updateNsfwVisibility() {
       const isNsfwEnabled = localStorage.getItem('tag_analytics_nsfw_enabled') === 'true';
       const items = document.querySelectorAll('.nsfw-monitor');
@@ -9727,6 +9811,10 @@
       }
     }
 
+    /**
+     * Renders the full analytics dashboard into the modal.
+     * @param {!Object} tagData The complete analytics data.
+     */
     renderDashboard(tagData) {
       if (!document.getElementById("tag-analytics-modal")) {
         this.createModal();
@@ -9985,6 +10073,11 @@
       }
     }
 
+    /**
+     * Renders a pie chart for the given data type (status, rating, etc.).
+     * @param {string} type The type of data to render (e.g., 'status', 'rating').
+     * @param {!Object} tagData The analytics data.
+     */
     renderPieChart(type, tagData) {
       const container = document.getElementById('status-pie-chart');
       const legendContainer = document.getElementById('status-pie-legend');
@@ -10220,6 +10313,11 @@
       }
     }
 
+    /**
+     * Generates a list of target numbers for milestones (e.g., 1, 100, 1000).
+     * @param {number} total The total number of posts.
+     * @return {!Array<number>} Sorted list of milestone targets.
+     */
     getMilestoneTargets(total) {
 
       const milestones = new Set([1]);
@@ -10252,6 +10350,10 @@
       return res;
     }
 
+    /**
+     * Renders the milestones grid.
+     * @param {!Array<{milestone: number, post: ?Object}>} milestonePosts The list of milestone data.
+     */
     renderMilestones(milestonePosts) {
       const grid = document.querySelector('#tag-analytics-milestones .milestones-grid');
       const toggleBtn = document.getElementById('tag-milestones-toggle');
@@ -10343,6 +10445,11 @@
     }
 
 
+    /**
+     * Renders both the monthly bar chart and cumulative area chart.
+     * @param {!Array<{date: string, count: number, cumulative: number}>} data The history data.
+     * @param {!Array<Object>=} milestones Optional pre-calculated milestones for display.
+     */
     renderHistoryCharts(data, milestones = []) {
       if (!window.d3) {
         console.error("D3.js not loaded");
@@ -10390,6 +10497,13 @@
       }
     }
 
+    /**
+     * Renders a bar chart using D3.js.
+     * @param {!Array<{date: string, count: number}>} data The data to render.
+     * @param {string} selector The CSS selector for the container.
+     * @param {string} title The title of the chart.
+     * @param {!Array<Object>=} milestones Optional milestones to overlay.
+     */
     renderBarChart(data, selector, title, milestones = []) {
       const container = document.querySelector(selector);
       if (!container) return;
@@ -10647,6 +10761,12 @@
       }, 50);
     }
 
+    /**
+     * Renders a cumulative area chart using D3.js.
+     * @param {!Array<{date: string, count: number, cumulative: number}>} data The data to render.
+     * @param {string} selector The CSS selector for the container.
+     * @param {string} title The title of the chart.
+     */
     renderAreaChart(data, selector, title) {
       const container = document.querySelector(selector);
       if (!container) return;
@@ -10818,6 +10938,11 @@
     }
 
 
+    /**
+     * Extracts the tag name from the current URL.
+     * Supports Wiki pages and Artist pages.
+     * @return {?string} The tag name or null if not found.
+     */
     getTagNameFromUrl() {
       const path = window.location.pathname;
       // Format: /wiki_pages/TAG_NAME
