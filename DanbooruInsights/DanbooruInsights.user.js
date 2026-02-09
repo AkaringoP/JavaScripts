@@ -136,8 +136,10 @@
     }
 
     /**
-     * Loads settings from localStorage with migration support.
-     * @return {Object} The loaded settings object.
+     * Loads settings from localStorage.
+     * Includes migration for legacy settings keys and deep merges with defaults.
+     * @return {!Object} The loaded settings object.
+     * @private
      */
     load() {
       try {
@@ -191,8 +193,8 @@
 
     /**
      * Gets thresholds for a specific metric.
-     * @param {string} metric 'uploads', 'approvals', or 'notes'.
-     * @return {Array<number>} Array of 4 threshold integers.
+     * @param {string} metric The metric to retrieve thresholds for ('uploads', 'approvals', or 'notes').
+     * @return {!Array<number>} An array of 4 threshold integers.
      */
     getThresholds(metric) {
       return this.settings.thresholds[metric] ||
@@ -216,7 +218,8 @@
 
     /**
      * Applies the selected theme to CSS variables on the document root.
-     * @param {string} themeKey The key of the theme to apply.
+     * Updates background, text colors, and contribution graph levels.
+     * @param {string} themeKey The key of the theme to apply (e.g., 'midnight').
      */
     applyTheme(themeKey) {
       const theme = CONFIG.THEMES[themeKey] || CONFIG.THEMES.light;
@@ -397,7 +400,9 @@
 
     /**
      * Extracts target user information from the DOM.
-     * @return {{name: string, id: string|null, joinDate: Date}|null} User info or null.
+     * Scrapes the user's name, ID, and join date from various elements.
+     * @return {?{name: string, id: ?string, joinDate: Date}} User info or null if unavailable.
+     * @private
      */
     getTargetUserInfo() {
       let name = null;
@@ -528,7 +533,7 @@
       const isProfileUrl = path === '/profile' || /^\/users\/\d+$/.test(path);
 
       if (!isProfileUrl) {
-        console.log('[Danbooru Grass] Not a main profile page (URL mismatch).');
+
         return false;
       }
 
@@ -624,7 +629,7 @@
           year,
           timestamp: Date.now()
         });
-        // console.log(`[Danbooru Grass] Marked ${year} as complete for ${metric}.`);
+
       } catch (e) {
         console.warn('Failed to mark year complete', e);
       }
@@ -705,7 +710,7 @@
         // [New] Check Completion Cache
         const isYearCompleteCache = await this.checkYearCompletion(userIdVal, metric, year);
         if (isYearCompleteCache) {
-          // console.log(`[Danbooru Grass] Year ${year} is already complete in cache. Skipping fetch.`);
+
         }
 
         // 0. Integrity Check (Past Years Only - Uploads Only)
@@ -800,7 +805,7 @@
         }
 
         if (lastEntry) {
-          // console.log(`[Danbooru Grass] Found cached data up to ${lastEntry.date}`);
+
 
           const lastDate = new Date(lastEntry.date);
           const currentYear = new Date().getFullYear();
@@ -832,7 +837,7 @@
         // We strictly rely on 'isYearCompleteCache' now.
         /*
         if (fetchFromDate && fetchFromDate >= endDate && year < new Date().getFullYear()) {
-          console.log('[Danbooru Grass] Year complete in cache. Skipping fetch.');
+
 
         } else {
         */
@@ -861,11 +866,11 @@
 
           // 2. Fetch missing range
           if (!isYearCompleteCache) {
-            // console.log(`[Danbooru Grass] Fetching delta for ${metric} (${fetchDirection}). Stop: ${stopDate || 'None'}`);
+
 
             // Pass explicit stopDate
             const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection, onProgress);
-            // console.log(`[Danbooru Grass] Fetched ${items.length} new items.`);
+
 
             // 3. Aggregate
             const dailyCounts = {};
@@ -894,9 +899,17 @@
               }
 
               // Hourly Aggregation
+              // Fix for Data Doubling:
+              // We strictly only add to hourly_stats if the data is NEWER than what we already have.
+              // Since existingHourlyStats (loaded from DB) already contains data up to lastEntry,
+              // adding counts from the overlapped buffer period would double-count them.
+              // Note: This effectively freezes the hourly distribution for the 'lastEntry' day (today) 
+              // until the next day, but this is preferable to corrupting the data with duplication.
+              const isNewData = !lastEntry || rawDate.slice(0, 10) > lastEntry.date;
+
               const itemDate = new Date(rawDate);
               const hour = itemDate.getHours();
-              if (!isNaN(hour) && hour >= 0 && hour < 24) {
+              if (isNewData && !isNaN(hour) && hour >= 0 && hour < 24) {
                 hourlyCounts[hour]++;
               }
             });
@@ -1022,7 +1035,7 @@
         const userIdVal = userInfo.id || userInfo.name;
         const tablesToClear = ['uploads', 'approvals', 'approvals_detail', 'notes', 'completed_years', 'hourly_stats'];
 
-        console.log(`[Danbooru Grass] Clearing all GrassApp cache for user ${userIdVal}...`);
+
 
         for (const storeName of tablesToClear) {
           const table = this.db[storeName];
@@ -1030,9 +1043,7 @@
           const items = await table.where('userId').equals(userIdVal).primaryKeys();
           if (items.length > 0) {
             await table.bulkDelete(items);
-            console.log(
-              `[Danbooru Grass] Cleared ${items.length} items from ${storeName} for ${userIdVal}`
-            );
+
           }
         }
 
@@ -1153,7 +1164,7 @@
                 }
 
                 if (shouldStop) {
-                  console.log(`[Danbooru Grass] Reached stop date (${direction}): ${stopDate} at access ${itemDate}`);
+
                   finished = true;
                   break; // Break item loop
                 }
@@ -1215,8 +1226,9 @@
 
 
     /**
-     * Gets statistics about the cache usage.
-     * @return {Promise<Object>} Object containing count and size stats.
+     * Gets statistics about the cache usage across storage methods.
+     * Calculates item counts and approximate byte sizes for IndexedDB and LocalStorage.
+     * @return {Promise<!Object>} Object containing count and size stats.
      */
     async getCacheStats() {
       const stats = {
@@ -1297,7 +1309,7 @@
 
       const targetUserId = userInfo.id ? parseInt(userInfo.id, 10) : 0;
 
-      //console.log(`[BubbleData] Fetching for User ${targetUserId} (${userInfo.name}) with copyrights:`, copyrights);
+
 
       for (const copyright of copyrights) {
         // ... (Server Data - Unchanged) ...
@@ -1546,13 +1558,14 @@
     }
 
     /**
-     * Updates the control/filter UI.
-     * @param {Array<number>} availableYears List of available years.
-     * @param {number} currentYear Currently selected year.
-     * @param {string} currentMetric Currently selected metric.
-     * @param {Function} onYearChange Callback for year change.
-     * @param {Function} onMetricChange Callback for metric change.
-     * @param {Function} onRefresh Callback for refresh.
+     * Updates the control and filter UI elements.
+     * Renders selects for metrics and years, plus management buttons.
+     * @param {!Array<number>} availableYears List of available years for selection.
+     * @param {number} currentYear The currently active year.
+     * @param {string} currentMetric The currently active metric.
+     * @param {function(number)} onYearChange Callback invoked when the year changes.
+     * @param {function(string)} onMetricChange Callback invoked when the metric changes.
+     * @param {function()} onRefresh Callback invoked to refresh data.
      */
     updateControls(availableYears, currentYear, currentMetric, onYearChange, onMetricChange, onRefresh) {
       const controls = document.getElementById('grass-controls');
@@ -2295,7 +2308,7 @@
 
             pop.style.display = 'none';
             if (settingsChanged) {
-              console.log('[Danbooru Grass] Settings changed. Refreshing view...');
+
               settingsChanged = false; // Reset
               if (typeof onYearChange === 'function') {
                 onYearChange(year);
@@ -2701,9 +2714,7 @@
         footer.appendChild(legend);
       }
 
-      // console.log(
-      //   `[Danbooru Grass] Rendering graph for ${year}. Data points: ${source.length}`
-      // );
+
 
       // --- GUARD: Empty Data Guard ---
       // Removed to allow empty graph rendering
@@ -2758,7 +2769,7 @@
         theme: 'light',
       })
         .then(() => {
-          // console.log('[Danbooru Grass] Render complete.');
+
           // Render Summary Grid Heatmap
           this.updateSummaryGrid(hourlyData, metric);
 
@@ -3055,7 +3066,7 @@
      * @return {Promise<void>} Resolves when the initial render is complete.
      */
     async run() {
-      // console.log('🌱 Starting GrassApp...');
+
       const context = this.context;
 
       // We pass the Shared DB instance to DataManager
@@ -3065,7 +3076,7 @@
 
       const injected = renderer.injectSkeleton();
       if (!injected) {
-        console.log('[Danbooru Grass] UI injection failed. Aborting GrassApp.');
+
         return;
       }
 
@@ -3091,7 +3102,7 @@
             // Safety: If currentYear is older than promoYear, switch to promoYear
             if (currentYear < promoYear) {
               currentYear = promoYear;
-              console.log(`[Danbooru Grass] Adjusted year to ${promoYear} (Promotion Year)`);
+
             }
           }
         }
@@ -3205,7 +3216,7 @@
      * Initializes and runs the Analytics application.
      */
     run() {
-      // console.log('📊 Analytics App Initializing...');
+
       this.injectStyles();
       this.createModal(); // Create hidden modal
       this.injectButton(); // Add entry button
@@ -3386,7 +3397,7 @@
 
           // Auto-Sync Check: If not synced, wait for sync THEN open
           if (this.isFullySynced === false) {
-            console.log('[Danbooru Grass] Auto-sync triggered on open.');
+
             try {
               await this.performPartialSync(btn, false);
             } catch (err) {
@@ -6336,11 +6347,12 @@
     }
 
     /**
-     * Specialized fetcher for thumbnails with 429 (Rate Limit) handling.
-     * @param {string} tags The tag string for searching.
-     * @param {number} [retries=3] Number of allowed retries.
-     * @param {number} [delay=1500] Delay in ms before retry.
-     * @return {Promise<string>} The preview URL or empty string.
+     * Fetches a thumbnail URL with built-in retry logic for handling rate limits.
+     * Implements exponential backoff on 429 status codes.
+     * @param {string} tags The tag string to search for.
+     * @param {number=} retries Number of allowed retries (default: 3).
+     * @param {number=} delay Initial delay in ms before retry (default: 2000).
+     * @return {Promise<string>} The preview URL or an empty string if not found or failed.
      */
     async fetchThumbnailWithRetry(tags, retries = 3, delay = 2000) {
       const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,file_url,rating`;
@@ -6371,9 +6383,9 @@
     }
 
     /**
-     * Gets simple stats about the synced posts for a user.
-     * @param {Object} userInfo The user's info object.
-     * @return {Promise<{count: number, lastSync: Date|null}>}
+     * Retrieves synchronization statistics for a specific user from the local database.
+     * @param {!Object} userInfo The user's information object.
+     * @return {Promise<{count: number, lastSync: ?string}>} Object containing post count and last sync date.
      */
     async getSyncStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -6389,9 +6401,10 @@
     }
 
     /**
-     * Calculates summary statistics (Avg Uploads, Max Uploads, etc.)
-     * @param {Object} userInfo The user's info object.
-     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: Date|null}>}
+     * Calculates summary statistics including max uploads and first upload date.
+     * Iterates through all synced posts for the user to determine the most active day.
+     * @param {!Object} userInfo The user's information object.
+     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date}>} Summary stats.
      */
     async getSummaryStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -6433,11 +6446,12 @@
     }
 
     /**
-     * Retrieves key milestone posts (e.g. 1st, 100th, 1000th ...).
-     * @param {Object} userInfo The user's info object.
-     * @param {boolean} [isNsfwEnabled=false] Whether to show NSFW content.
-     * @param {string|number} [customStep='auto'] Step interval or 'auto'.
-     * @return {Promise<Array<{type: string, post: Object, index: number}>>}
+     * Retrieves milestone posts (e.g., 1st, 100th, 1000th) based on local sequence.
+     * Automatically adjusts step size based on total post count if 'auto' is selected.
+     * @param {!Object} userInfo The user's information object.
+     * @param {boolean=} isNsfwEnabled Whether to fetch thumbnails for all posts regardless of rating.
+     * @param {(string|number)=} customStep Step interval ('auto' or a number).
+     * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
      */
     async getMilestones(userInfo, isNsfwEnabled = false, customStep = 'auto') {
       const uploaderId = parseInt(userInfo.id);
@@ -6579,11 +6593,11 @@
 
 
     /**
-     * Aggregates post counts by month from local DB.
-     * Returns array of { date: 'YYYY-MM', count: number, label: string }
-     * @param {Object} userInfo The user's info object.
-     * @param {Date} [minDate] Optional start date (inclusive) for the timeline
-     * @return {Promise<Array<{date: string, count: number, label: string}>>}
+     * Aggregates post counts by month from the local IndexedDB.
+     * Handles linear timeline generation by filling gaps with 0-count months.
+     * @param {!Object} userInfo The user's information object.
+     * @param {?Date=} minDate Optional start date to ensure the timeline begins at a specific point.
+     * @return {Promise<!Array<{date: string, count: number, label: string}>>} Array of monthly stats.
      */
     async getMonthlyStats(userInfo, minDate = null) {
       const uploaderId = parseInt(userInfo.id);
@@ -6642,9 +6656,9 @@
     }
 
     /**
-     * Fetches rating distribution from /reports/posts.json.
-     * @param {Object} userInfo The user's info object.
-     * @return {Promise<Array<{rating: string, count: number, label: string}>>}
+     * Fetches rating distribution report from Danbooru's /reports/posts.json endpoint.
+     * @param {!Object} userInfo The user's information object.
+     * @return {Promise<!Array<{rating: string, count: number, label: string}>>} Rating distribution array.
      */
     async getRatingDistribution(userInfo) {
       if (!userInfo.name) return [];
@@ -6714,10 +6728,12 @@
     }
 
     /**
-     * Fetches Character distribution from related_tag.json.
-     * @param {Object} userInfo The user's info object.
-     * @param {boolean} [forceRefresh=false] Whether to bypass cache.
-     * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
+     * Fetches character distribution using Danbooru's related tags API.
+     * Processes top 10 characters and fetches their specific uploader counts concurrently.
+     * @param {!Object} userInfo The user's information object.
+     * @param {boolean=} forceRefresh Whether to skip cache and force a new fetch.
+     * @param {?function(string)=} reportSubStatus Optional callback for progress updates.
+     * @return {Promise<!Array<{name: string, count: number, frequency: number, isOther: boolean}>>} Character distribution.
      */
     async getCharacterDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
@@ -7413,7 +7429,7 @@
       if (toFetch.length === 0) return;
 
       // Process in background
-      // console.log(`[Analytics] Background fetching ${toFetch.length} thumbnails for ${cacheKey}...`);
+
 
       await this.mapConcurrent(toFetch, 3, async (item) => {
         // Re-construct query based on cacheKey or item data?
@@ -7541,7 +7557,7 @@
 
         // 1. Get total count
         let total = await this.getTotalPostCount(userInfo);
-        // console.log(`[Danbooru Grass] Sync Goal: ${total} `);
+
 
         // 2. Resume Check
         // Strategy: overlapping sync (1 month back) to catch updates (score/tags)
@@ -7555,7 +7571,7 @@
           cutOffDate.setMonth(cutOffDate.getMonth() - 1);
 
 
-          // console.log(`[Danbooru Grass] Newest Post: ${newestDate.toISOString().split('T')[0]}, Re-syncing from: ${cutOffDate.toISOString().split('T')[0]}`);
+
 
           // Find the first post that is OLDER than cutOffDate to determine startId
           let found = false;
@@ -7579,12 +7595,12 @@
           // Fix: Count ONLY this user's posts below startId
           // Using filter() on the collection because composite index might not exist for (id, uploader_id)
           currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter(p => p.id <= startId).count();
-          // console.log(`[Danbooru Grass] Resuming count from ${currentNo} (ID: ${startId})`);
+
         } else {
-          // console.log('[Danbooru Grass] Full sync count starting from 0');
+
         }
 
-        // console.log(`[Danbooru Grass] Resuming sync for ${userInfo.name} from Post ID > ${startId} (Local Count: ${currentNo})`);
+
 
         // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced".
         // We must assume "Unknown" and proceed to try and fetch new posts.
@@ -7596,7 +7612,7 @@
         // Actually, user wants "Update". So if we calculated a startId, we should run.
 
         if (startId === 0 && total > 0 && currentNo >= total) {
-          // console.log('[Danbooru Grass] Already synced (Goal reached).');
+
           reportProgress(currentNo, total);
           return;
         }
@@ -7784,7 +7800,7 @@
           }
 
           if (shouldDelete) {
-            // console.log(`[Danbooru Grass] Cleaning up stale data for User ID: ${uid}`);
+
             await this.db.posts.where('uploader_id').equals(uid).delete();
             await this.db.piestats.where('userId').equals(uid).delete();
             await this.db.bubble_data.where('userId').equals(uid).delete(); // Also clear bubble data
@@ -7799,7 +7815,7 @@
           if (entry.updated_at) {
             const age = now - new Date(entry.updated_at).getTime();
             if (age > THRESHOLD) {
-              // console.log(`[Danbooru Grass] Cleaning up stale Server Bubble Data: ${entry.copyright}`);
+
               await this.db.bubble_data.delete([entry.userId, entry.copyright]);
             }
           } else {
@@ -7818,7 +7834,7 @@
      * @return {Promise<void>}
      */
     async refreshAllStats(userInfo) {
-      // console.log(`[Analytics] Refreshing all stats for user ${userInfo.name}`);
+
       const forceRefresh = true;
       try {
         await Promise.all([
@@ -7855,7 +7871,7 @@
             }
           })
         ]);
-        // console.log(`[Analytics] All stats refreshed for user ${userInfo.name}`);
+
       } catch (e) {
         console.warn('[Analytics] Failed to refresh stats', e);
       }
@@ -7871,7 +7887,7 @@
       const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
       // const userIdStr = String(userInfo.id); // Not used anymore for Analytics clean
 
-      // console.log(`[Analytics] Clearing Analytics data for user ${uploaderId}...`);
+
 
       // 1. Delete posts (uploader_id is INT)
       await this.db.posts.where('uploader_id').equals(uploaderId).delete();
@@ -7886,7 +7902,7 @@
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
       localStorage.removeItem(lastSyncKey);
 
-      // console.log(`[Analytics] Cleared Analytics data (posts & piestats) for user ${uploaderId}`);
+
     }
   }
 
@@ -7934,18 +7950,18 @@
 
     if (targetTagName) {
       // Tag Analytics Mode (Wiki or Artist)
-      console.log(`[Danbooru Insights] Detected Tag: "${targetTagName}"`);
+
       const tagAnalytics = new TagAnalyticsApp(db, settings, targetTagName);
       tagAnalytics.run();
     } else {
       // Profile Mode
       const context = new ProfileContext();
       if (!context.isValidProfile()) {
-        // console.log('[Danbooru Grass] Not a valid profile page. Skipping.');
+
         return;
       }
 
-      // console.log(`[Danbooru Grass] Initializing for ${context.targetUser.name}`);
+
 
       const grass = new GrassApp(db, settings, context);
       const userAnalytics = new UserAnalyticsApp(db, settings, context);
@@ -7997,20 +8013,20 @@
       const task = this.reportQueue.shift();
       this.requestCounter++;
 
-      console.log(`[RateLimitedFetch] Processing Report: ${task.url}`); // Debug Log
+
 
       try {
         const response = await fetch(task.url, task.options);
-        console.log(`[RateLimitedFetch] Report Success: ${task.url} (Status: ${response.status})`); // Debug Log
+
         task.resolve(response);
       } catch (e) {
         console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e); // Debug Log
         task.reject(e);
       } finally {
         // Strict 3s cooldown for reports
-        console.log(`[RateLimitedFetch] Report Cooldown (3s) started...`); // Debug Log
+
         await new Promise(r => setTimeout(r, 3000));
-        console.log(`[RateLimitedFetch] Report Cooldown finished.`); // Debug Log
+
         this.isProcessingReports = false;
         this.processReportQueue();
       }
@@ -8048,6 +8064,12 @@
 
   /* --- Tag Analytics App --- */
   class TagAnalyticsApp {
+    /**
+     * Initializes the TagAnalyticsApp.
+     * @param {!Database} db The Dexie database instance.
+     * @param {!SettingsManager} settings The settings manager instance.
+     * @param {string} tagName The name of the tag to analyze.
+     */
     constructor(db, settings, tagName) {
       this.db = db;
       this.settings = settings;
@@ -8058,8 +8080,14 @@
       this.resizeTimeout = null;
       this.currentData = null;
       this.currentMilestones = null;
+      this.userNames = {}; // Initialize user name map to avoid TypeErrors
     }
 
+    /**
+     * Loads the tag analytics report from the cache if not expired.
+     * Cache is considered stale after 24 hours.
+     * @return {Promise<?Object>} The cached data object or null if not found/expired.
+     */
     async loadFromCache() {
       if (!this.db || !this.db.tag_analytics) return null;
       try {
@@ -8068,55 +8096,63 @@
           // Check expiry (e.g. 24 hours)
           const age = Date.now() - cached.updatedAt;
           if (age < 24 * 60 * 60 * 1000) {
-            console.log(`[TagAnalyticsApp] Loaded from cache (${(age / 60000).toFixed(1)}m ago)`);
-            return { ...cached.data, updatedAt: cached.updatedAt };
-          } else {
-            console.log(`[TagAnalyticsApp] Cache expired (${(age / 3600000).toFixed(1)}h ago)`);
+            return {
+              ...cached.data,
+              updatedAt: cached.updatedAt,
+            };
           }
         }
       } catch (e) {
-        console.warn("[TagAnalyticsApp] Cache load failed", e);
+        console.warn('[TagAnalyticsApp] Cache load failed', e);
       }
       return null;
     }
 
+    /**
+     * Saves the current tag analytics data to the cache with a timestamp.
+     * @param {!Object} data The analytics data to cache.
+     * @return {Promise<void>}
+     */
     async saveToCache(data) {
       if (!this.db || !this.db.tag_analytics) return;
       try {
         await this.db.tag_analytics.put({
           tagName: this.tagName,
           updatedAt: Date.now(),
-          data: data
+          data: data,
         });
-        console.log("[TagAnalyticsApp] Saved to cache");
       } catch (e) {
-        console.warn("[TagAnalyticsApp] Cache save failed", e);
+        console.warn('[TagAnalyticsApp] Cache save failed', e);
       }
     }
 
     /**
-     * Get retention days from storage. Default 7.
+     * Gets the retention period for tag analytics caches from localStorage.
+     * @return {number} Number of days to keep cache (default: 7).
      */
     getRetentionDays() {
       try {
         const val = localStorage.getItem('danbooru_tag_analytics_retention');
         if (val) return parseInt(val, 10);
-      } catch (e) { }
+      } catch (e) {
+        // Fallback to default
+      }
       return 7;
     }
 
     /**
-     * Set retention days to storage.
+     * Sets the retention period for tag analytics caches in localStorage.
+     * @param {number} days Number of days to keep cache.
      */
     setRetentionDays(days) {
       if (typeof days === 'number' && days > 0) {
         localStorage.setItem('danbooru_tag_analytics_retention', days);
-        console.log(`[TagAnalyticsApp] Retention set to ${days} days`);
       }
     }
 
     /**
-     * Delete records older than retentionDays (default from settings)
+     * Deletes tag analytics cache entries older than the retention threshold.
+     * @return {Promise<void>}
      */
     async cleanupOldCache() {
       if (!this.db || !this.db.tag_analytics) return;
@@ -8125,19 +8161,16 @@
       const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
 
       try {
-        const deleteCount = await this.db.tag_analytics.where('updatedAt').below(cutoff).delete();
-        if (deleteCount > 0) {
-          console.log(`[TagAnalyticsApp] Cleaned up ${deleteCount} old records (older than ${retentionDays} days / before ${new Date(cutoff).toISOString()})`);
-        }
+        await this.db.tag_analytics.where('updatedAt').below(cutoff).delete();
       } catch (e) {
-        console.warn("[TagAnalyticsApp] Cleanup failed", e);
+        console.warn('[TagAnalyticsApp] Cleanup failed', e);
       }
     }
 
     async run() {
       const tagName = this.tagName;
       if (!tagName) {
-        console.log('[TagAnalyticsApp] No tag name found in URL.');
+
         return;
       }
 
@@ -8150,18 +8183,20 @@
       let baseData = null;
 
       if (cachedData) {
-        console.log(`[TagAnalyticsApp] Using cached data for "${tagName}". Updating volatile data (Latest/Trending).`);
+
 
         // Fetch Volatile Data (Always update these)
         try {
-          const [latestPost, trendingPost, newPostCount] = await Promise.all([
+          const [latestPost, trendingPost, trendingPostNSFW, newPostCount] = await Promise.all([
             this.fetchLatestPost(tagName),
-            this.fetchTrendingPost(tagName),
+            this.fetchTrendingPost(tagName, false),
+            this.fetchTrendingPost(tagName, true),
             this.fetchNewPostCount(tagName)
           ]);
 
           cachedData.latestPost = latestPost;
           cachedData.trendingPost = trendingPost;
+          cachedData.trendingPostNSFW = trendingPostNSFW;
           cachedData.newPostCount = newPostCount;
 
           // Update Cache with fresh volatile data
@@ -8182,7 +8217,7 @@
           if (record) {
             const age = Date.now() - record.updatedAt;
             if (age >= 24 * 60 * 60 * 1000) {
-              console.log(`[TagAnalyticsApp] Found stale cache (${(age / 3600000).toFixed(1)}h old). Attempting Delta Update.`);
+
               baseData = record.data;
               runDelta = true;
             }
@@ -8190,7 +8225,7 @@
         } catch (e) { console.warn("DB Read Error", e); }
       }
 
-      console.log(`[TagAnalyticsApp] Processing tag: "${tagName}"`);
+
 
       // 1. Fetch Initial Stats (Top 100, Metadata, First/Last Date)
       const t0 = performance.now();
@@ -8201,14 +8236,14 @@
 
       const t1 = performance.now();
       const req1 = this.rateLimiter.getRequestCount() - startReq;
-      console.log(`[TagAnalyticsApp] Step 1: Initial Stats finished in ${(t1 - t0).toFixed(0)}ms (${req1} API calls)`);
+
 
       if (!initialStats || initialStats.totalCount === 0) {
         console.warn(`[TagAnalyticsApp] Could not fetch initial stats for tag: "${tagName}"`);
         return;
       }
 
-      const {
+      let {
         firstPost,
         hundredthPost,
         totalCount,
@@ -8227,10 +8262,10 @@
       const categoryName = categoryMap[meta.category] || `Unknown(${meta.category})`;
 
       if (validCategories.includes(meta.category)) {
-        console.log(`[TagAnalyticsApp] ✅ Activation confirmed. Tag: ${tagName} (${categoryName})`);
+
         this.injectAnalyticsButton(meta);
       } else {
-        console.log(`[TagAnalyticsApp] ⛔ Activation skipped. Tag: ${tagName} (${categoryName})`);
+
         return; // Stop if not valid category
       }
 
@@ -8238,7 +8273,7 @@
 
       // OPTIMIZATION: Small Tag Handling (<= 100 posts)
       if (initialPosts && totalCount <= 100 && initialPosts.length >= totalCount) {
-        console.log(`[TagAnalyticsApp] Small tag detected (${totalCount} posts). Using local calculation.`);
+
 
         // 2. Calculate History Locally
         const historyData = this.calculateHistoryFromPosts(initialPosts);
@@ -8256,11 +8291,15 @@
         // 4. Calculate Ratings & Rankings Locally
         const localStats = this.calculateLocalStats(initialPosts);
 
-        // 5. Fetch Status Counts & Backfill Names
-        // Parallel fetch for things we can't calculate or need existing methods for
-        const [_, statusCounts] = await Promise.all([
-          this.backfillUploaderNames(milestones.map(m => m.post).concat(initialPosts)),
-          this.fetchStatusCounts(tagName)
+        // 5. Parallel Data Fetching (Volatile & Status)
+        // Note: backfillUploaderNames is CRITICAL for showing names instead of IDs
+        const [statusCounts, latestPost, trendingPost, trendingPostNSFW, newPostCount] = await Promise.all([
+          this.fetchStatusCounts(tagName),
+          this.fetchLatestPost(tagName),
+          this.fetchTrendingPost(tagName, false),
+          this.fetchTrendingPost(tagName, true),
+          this.fetchNewPostCount(tagName),
+          this.backfillUploaderNames(initialPosts) // Ensure ALL posts have names backfilled
         ]);
 
         // Attach Data
@@ -8271,31 +8310,68 @@
         meta.statusCounts = statusCounts;
         meta.ratingCounts = localStats.ratingCounts;
         meta.precalculatedMilestones = milestones;
-        meta.latestPost = initialPosts[initialPosts.length - 1]; // Sorted by ID ASC (oldest first) -> Last is newest
+        meta.latestPost = latestPost;
+        meta.newPostCount = newPostCount;
 
-        // 24h Count (Local)
-        const yesterday = new Date();
-        yesterday.setDate(yesterday.getDate() - 1);
-        meta.newPostCount = initialPosts.filter(p => new Date(p.created_at) >= yesterday).length;
+        // Trending (Local Fallback if parallel fetch fails, though we use the API result here for consistency)
+        meta.trendingPost = trendingPost;
+        meta.trendingPostNSFW = trendingPostNSFW;
 
-        // Trending (Local)
-        meta.trendingPost = [...initialPosts]
-          .filter(p => p.rating === 'g' && new Date(p.created_at) >= new Date(Date.now() - 3 * 86400000))
-          .sort((a, b) => b.score - a.score)[0] || null;
+        // 6. Map User IDs to Names in Local Rankings
+        const mapNames = (ranking) => ranking.map(r => {
+          const u = this.userNames[r.id];
+          return {
+            ...r,
+            name: (u ? u.name : null) || `user_${r.id}`,
+            level: u ? u.level : null
+          };
+        });
 
-        // Local Rankings
         meta.rankings = {
           uploader: {
-            allTime: localStats.uploaderRanking,
-            year: localStats.uploaderRanking, // Approx
-            first100: localStats.uploaderRanking // Exact
+            allTime: mapNames(localStats.uploaderRanking),
+            year: mapNames(localStats.uploaderRanking),
+            first100: mapNames(localStats.uploaderRanking)
           },
           approver: {
-            allTime: localStats.approverRanking,
-            year: localStats.approverRanking, // Approx
-            first100: localStats.approverRanking // Exact
+            allTime: mapNames(localStats.approverRanking),
+            year: mapNames(localStats.approverRanking),
+            first100: mapNames(localStats.approverRanking)
           }
         };
+
+        // 7. Calculate Related Tag Distribution Locally (Artist -> Copyright/Character)
+        if (meta.category === 1) { // Artist
+          const copyrightMap = {};
+          const characterMap = {};
+
+          initialPosts.forEach(p => {
+            if (p.tag_string_copyright) {
+              p.tag_string_copyright.split(' ').forEach(tag => {
+                if (tag) copyrightMap[tag] = (copyrightMap[tag] || 0) + 1;
+              });
+            }
+            if (p.tag_string_character) {
+              p.tag_string_character.split(' ').forEach(tag => {
+                if (tag) characterMap[tag] = (characterMap[tag] || 0) + 1;
+              });
+            }
+          });
+
+          const getObjectDistribution = (map) => {
+            const res = {};
+            Object.entries(map)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 20)
+              .forEach(([name, count]) => {
+                res[name] = count;
+              });
+            return res;
+          };
+
+          meta.copyrightCounts = getObjectDistribution(copyrightMap);
+          meta.characterCounts = getObjectDistribution(characterMap);
+        }
 
         this.injectAnalyticsButton(meta);
         this.saveToCache(meta); // Save Small Tag Data
@@ -8303,7 +8379,7 @@
       }
 
       // 2. Fetch Monthly Counts (History) & Milestones & Status/Rating Counts in parallel
-      console.log(`[TagAnalyticsApp] Step 2-5: Fetching History, Milestones, Statuses, Ratings and Rankings for "${tagName}"`);
+
 
       const t2 = performance.now();
       const startReq2 = this.rateLimiter.getRequestCount();
@@ -8335,8 +8411,10 @@
           .then(delta => this.mergeHistory(baseData.historyData, delta));
 
         // [DELTA] Milestones
-        milestonesPromise = this.fetchMilestonesDelta(tagName, totalCount, baseData.precalculatedMilestones)
-          .then(delta => this.mergeMilestones(baseData.precalculatedMilestones, delta));
+        milestonesPromise = historyPromise.then(fullHistory => {
+          return this.fetchMilestonesDelta(tagName, totalCount, baseData.precalculatedMilestones, fullHistory)
+            .then(delta => this.mergeMilestones(baseData.precalculatedMilestones, delta));
+        });
 
         // [DELTA] First 100 Ranking (Static - Reuse from cache)
         if (baseData.rankings && baseData.rankings.uploader && baseData.rankings.uploader.first100) {
@@ -8353,7 +8431,9 @@
       } else {
         // [FULL]
         historyPromise = this.fetchMonthlyCounts(tagName, startDate);
-        milestonesPromise = this.fetchMilestonePosts(tagName, totalCount, milestoneTargets);
+        milestonesPromise = historyPromise.then(monthlyData => {
+          return this.fetchMilestones(tagName, monthlyData || [], milestoneTargets);
+        });
         first100StatsPromise = Promise.resolve(this.calculateLocalStats(initialPosts || []));
       }
 
@@ -8364,7 +8444,8 @@
         this.fetchRatingCounts(tagName),
         this.fetchLatestPost(tagName),
         this.fetchNewPostCount(tagName),
-        this.fetchTrendingPost(tagName),
+        this.fetchTrendingPost(tagName, false),
+        this.fetchTrendingPost(tagName, true),
         // Report Fetches (Rankings) - These change frequently so we re-fetch them
         this.fetchReportRanking(tagName, 'uploader', '2005-01-01', dateStrTomorrow),
         this.fetchReportRanking(tagName, 'approver', '2005-01-01', dateStrTomorrow),
@@ -8392,12 +8473,45 @@
         return res;
       }));
 
-      const [historyData, milestones, statusCounts, ratingCounts, latestPost, newPostCount, trendingPost,
+      let [historyData, milestones, statusCounts, ratingCounts, latestPost, newPostCount, trendingPost, trendingPostNSFW,
         uploaderAll, approverAll, uploaderYear, approverYear, first100Stats] = await Promise.all(trackedPromises);
+
+      // --- 6. Backward History Scan for merged/renamed tags ---
+      const forwardTotal = (historyData && historyData.length > 0) ? historyData[historyData.length - 1].cumulative : 0;
+      if (forwardTotal < meta.post_count) {
+
+        const backwardResult = await this.fetchHistoryBackwards(tagName, startDate, meta.post_count, forwardTotal);
+
+        if (backwardResult.length > 0) {
+          // Merge with forward data
+          // Since we scan backwards from 1 month before startDate, we need to adjust cumulative counts
+          const backwardShift = backwardResult[backwardResult.length - 1].cumulative;
+          const adjustedForward = historyData.map(h => ({
+            ...h,
+            cumulative: h.cumulative + backwardShift
+          }));
+          historyData = [...backwardResult, ...adjustedForward];
+
+          // Re-fetch TRUE first post (absolute oldest)
+
+          const realInitialStats = await this.fetchInitialStats(tagName, null, true);
+          if (realInitialStats) {
+            firstPost = realInitialStats.firstPost;
+            hundredthPost = realInitialStats.hundredthPost;
+            timeToHundred = realInitialStats.timeToHundred;
+
+            meta.firstPost = firstPost;
+            meta.hundredthPost = hundredthPost;
+            meta.timeToHundred = timeToHundred;
+            // re-calculate milestones since cumulative counts shifted
+            milestones = await this.fetchMilestones(tagName, historyData, milestoneTargets);
+          }
+        }
+      }
 
       const t3 = performance.now();
       const req2 = this.rateLimiter.getRequestCount() - startReq2;
-      console.log(`[TagAnalyticsApp] Step 2-5: Parallel Fetch finished in ${(t3 - t2).toFixed(0)}ms (${req2} API calls)`);
+
 
       // Conditional Fetch for Copyright/Character
       let copyrightCounts = null;
@@ -8405,7 +8519,7 @@
 
       // Category 1=Artist, 3=Copyright, 4=Character
       if (meta.category === 1) { // Artist -> Fetch Copyright & Character
-        console.log(`[TagAnalyticsApp] Fetching Copyright & Character distribution for Artist (${tagName})`);
+
 
         const t4 = performance.now();
         const startReq3 = this.rateLimiter.getRequestCount();
@@ -8417,10 +8531,10 @@
 
         const t5 = performance.now();
         const req3 = this.rateLimiter.getRequestCount() - startReq3;
-        console.log(`[TagAnalyticsApp] Step 6: Copyright/Character Fetch finished in ${(t5 - t4).toFixed(0)}ms (${req3} API calls)`);
+
 
       } else if (meta.category === 3) { // Copyright -> Fetch Character
-        console.log(`[TagAnalyticsApp] Fetching Character distribution for Copyright (${tagName})`);
+
 
         const t4 = performance.now();
         const startReq3 = this.rateLimiter.getRequestCount();
@@ -8429,7 +8543,7 @@
 
         const t5 = performance.now();
         const req3 = this.rateLimiter.getRequestCount() - startReq3;
-        console.log(`[TagAnalyticsApp] Step 6: Character Fetch finished in ${(t5 - t4).toFixed(0)}ms (${req3} API calls)`);
+
       }
 
       // Attach Data to Meta
@@ -8445,15 +8559,56 @@
       meta.latestPost = latestPost;
       meta.newPostCount = newPostCount;
       meta.trendingPost = trendingPost;
+      meta.trendingPostNSFW = trendingPostNSFW;
+
+      // --- Collect All User IDs & Names for Batch Backfill ---
+      const uRankingIds = new Set();
+      const uRankingNames = new Set();
+      const getKey = (r) => r.name || r.uploader || r.approver || r.user;
+      const normalize = (n) => n ? n.replace(/ /g, '_') : '';
+
+      [uploaderAll, uploaderYear, approverAll, approverYear].forEach(report => {
+        if (Array.isArray(report)) report.forEach(r => {
+          if (r.id) uRankingIds.add(String(r.id));
+          else {
+            const n = normalize(getKey(r));
+            if (n && n !== 'Unknown') uRankingNames.add(n);
+          }
+        });
+      });
+
+      // Fetch User Metadata (ID)
+      if (uRankingIds.size > 0) {
+        const userMap = await this.fetchUserMap(Array.from(uRankingIds));
+        userMap.forEach((uObj, id) => {
+          this.userNames[id] = uObj;
+        });
+      }
+
+      // Fetch User Metadata (Name)
+      if (uRankingNames.size > 0) {
+        const nameMap = await this.fetchUserMapByNames(Array.from(uRankingNames));
+        nameMap.forEach((uObj, name) => {
+          this.userNames[name] = uObj; // Map Name -> Object
+          if (uObj.id) this.userNames[String(uObj.id)] = uObj; // Map ID -> Object
+        });
+      } else {
+        // No names collected from rankings.
+      }
 
       // Process Report Data to Rankings
       const processReport = (report) => {
         if (Array.isArray(report)) {
           return report.map(r => {
-            // Keys can be: uploader, approver, user, name... and posts, count, post_count
-            const name = r.uploader || r.approver || r.name || r.user || "Unknown";
+            const rawKey = getKey(r) || "Unknown";
+            const nName = normalize(rawKey);
+            // Lookup by ID first, then by Name
+            const u = (r.id ? this.userNames[String(r.id)] : null) || this.userNames[nName];
+
+            const level = u ? u.level : null;
+            const finalName = u ? u.name : rawKey;
             const count = r.posts || r.count || r.post_count || 0;
-            return { id: r.id, name, count };
+            return { id: r.id || (u ? u.id : null), name: finalName, level, count };
           });
         }
         return [];
@@ -8477,15 +8632,15 @@
       this.saveToCache(meta); // Save Full Tag Data
     }
 
-    async fetchInitialStats(tagName, cachedData = null) {
-      console.log(`[TagAnalyticsApp] Step 1: Fetching Initial Stats for "${tagName}"`);
+    async fetchInitialStats(tagName, cachedData = null, absoluteOldest = false) {
+
       // Get Tag Metadata first to know count and category
       const tagData = await this.fetchTagData(tagName); // Existing helper
       if (!tagData) return null;
 
       // [DELTA] Use Cached First 100 Data if available
       if (cachedData && cachedData.firstPost) {
-        console.log(`[TagAnalyticsApp] Using cached Initial Stats.`);
+
         return {
           firstPost: cachedData.firstPost,
           hundredthPost: cachedData.hundredthPost,
@@ -8497,41 +8652,52 @@
         };
       }
 
-      // Get First 100 Posts (Pagination with Timeout Retry)
+      // Get First 100 Posts (Always Ascending to find actual first posts)
       const limit = 100;
-      let startId = 0;
-      const increment = 1000000;
-      const maxId = 30000000; // 30M safety limit
+
+      // Extract created_at from tagData
+      // If absoluteOldest is true, we ignore created_at to find history hidden by renames
+      const tagCreatedAt = absoluteOldest ? "2005-01-01" : tagData.created_at;
 
       let posts = [];
+      const params = new URLSearchParams({
+        tags: `${tagName} date:>=${tagCreatedAt}`,
+        limit: limit,
+        page: 'a0',
+        only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
+      });
+      const url = `/posts.json?${params.toString()}`;
 
-      while (startId < maxId) {
-        const params = new URLSearchParams({
-          tags: tagName, // Removed order:id
-          limit: limit,
-          page: `a${startId}`,
-          only: 'id,created_at,uploader_id,approver_id,file_url'
-        });
-        const url = `/posts.json?${params.toString()}`;
+      try {
 
-        try {
-          console.log(`[TagAnalyticsApp] Fetching First 100: page=a${startId}`);
-          posts = await this.rateLimiter.fetch(url).then(r => r.json());
+        posts = await this.rateLimiter.fetch(url).then(r => r.json());
 
-          if (posts && posts.length > 0) {
-            break; // Found our data
-          }
-          if (posts && posts.length === 0) {
-            // No posts found after this ID. 
-            // If we had timeouts previously, we missed data. 
-            // If this is the first try (a0), tag is empty.
-            break;
-          }
-        } catch (e) {
-          console.warn(`[TagAnalyticsApp] Timeout/Error at a${startId}, retrying with a${startId + increment}`, e);
-          startId += increment;
-          // Continue to next chunk
+        if (posts && posts.length > 0) {
+          // page=a0 returns the first 100 posts (ID 1-100), but the array itself 
+          // is often returned in descending order [ID 100, ..., ID 1].
+          // We reverse it so posts[0] is always the absolute oldest in the set.
+          posts.reverse();
         }
+
+        // Fix for Small Tags: If optimization failed to get all posts (due to renames/merges),
+        // and it's a small tag (<=100), re-fetch absolute oldest to trigger optimization correctly.
+        const expectedCountForSmallTag = Math.min(100, tagData.post_count);
+        if (tagData.post_count <= 100 && posts.length < expectedCountForSmallTag) {
+
+          const fbParams = new URLSearchParams({
+            tags: `${tagName}`,
+            limit: 100,
+            page: 'a0',
+            only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
+          });
+          const fbPosts = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then(r => r.json());
+          if (fbPosts && fbPosts.length > 0) {
+            fbPosts.reverse();
+            posts = fbPosts;
+          }
+        }
+      } catch (e) {
+        console.warn(`[TagAnalyticsApp] Fetch failed for initial stats gather`, e);
       }
 
       if (!posts || posts.length === 0) {
@@ -8562,7 +8728,7 @@
     }
 
     async fetchStatusCounts(tagName) {
-      console.log(`[TagAnalyticsApp] Step 4: Fetching Status Counts for "${tagName}"`);
+
       const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
       const results = {};
 
@@ -8584,19 +8750,24 @@
       return results;
     }
 
+    /**
+     * Fetches post counts for all ratings (g, s, q, e) for a tag.
+     * @param {string} tagName The tag name.
+     * @return {Promise<!Object<string, number>>} Map of rating characters to counts.
+     */
     async fetchRatingCounts(tagName) {
-      console.log(`[TagAnalyticsApp] Step 5: Fetching Rating Counts for "${tagName}"`);
       const ratings = ['g', 's', 'q', 'e'];
       const results = {};
 
-      const tasks = ratings.map(rating => {
+      const tasks = ratings.map((rating) => {
         const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+rating:${rating}`;
         return this.rateLimiter.fetch(url)
-          .then(r => r.json())
-          .then(data => {
-            results[rating] = (data.counts && typeof data.counts === 'object') ? (data.counts.posts || 0) : (data.counts || 0);
+          .then((r) => r.json())
+          .then((data) => {
+            results[rating] = (data.counts && typeof data.counts === 'object') ?
+              (data.counts.posts || 0) : (data.counts || 0);
           })
-          .catch(e => {
+          .catch((e) => {
             console.warn(`[TagAnalyticsApp] Failed to fetch count for rating:${rating}`, e);
             results[rating] = 0;
           });
@@ -8608,7 +8779,7 @@
 
     async fetchRelatedTagDistribution(tagName, categoryId, totalTagCount) {
       const catName = categoryId === 3 ? 'Copyright' : 'Character';
-      console.log(`[TagAnalyticsApp] Step 6: Fetching ${catName} distribution for "${tagName}"`);
+
 
       // 1. Fetch Related Tags
       const relatedUrl = `/related_tag.json?commit=Search&search[category]=${categoryId}&search[order]=Frequency&search[query]=${encodeURIComponent(tagName)}`;
@@ -8705,10 +8876,67 @@
       }
     }
 
+    async fetchHistoryBackwards(tagName, forwardStartDate, targetTotal, currentForwardTotal) {
+      const history = [];
+      let totalSum = currentForwardTotal;
+      let currentMonth = new Date(forwardStartDate);
+
+      // We strictly start scanning from 1 month before the forward start date
+      // to avoid overlapping with fetchMonthlyCounts which already covers the starting month.
+      currentMonth.setMonth(currentMonth.getMonth() - 1); // Start from month BEFORE forward scan
+
+
+
+      // Danbooru founded in late 2005. Don't go past that.
+      const hardLimit = new Date("2005-01-01");
+
+      while (totalSum < targetTotal && currentMonth > hardLimit) {
+        const year = currentMonth.getFullYear();
+        const month = currentMonth.getMonth() + 1;
+
+        // Use next month's 1st day as end of range to include the last day of current month fully
+        const nextDate = new Date(currentMonth);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+        const nYear = nextDate.getFullYear();
+        const nMonth = nextDate.getMonth() + 1;
+
+        const dateRange = `${year}-${String(month).padStart(2, '0')}-01...${nYear}-${String(nMonth).padStart(2, '0')}-01`;
+        const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+date:${dateRange}`;
+
+        try {
+          const data = await this.rateLimiter.fetch(url).then(r => r.json());
+          const count = (data.counts && typeof data.counts === 'object') ? (data.counts.posts || 0) : (data.counts || 0);
+
+          if (count > 0) {
+            history.unshift({
+              date: `${year}-${String(month).padStart(2, '0')}-01`,
+              count: count,
+              cumulative: 0 // Will fix in post-process
+            });
+            totalSum += count;
+
+          }
+        } catch (e) {
+          console.warn(`[TagAnalyticsApp] Backward fetch failed for ${year}-${month}`, e);
+        }
+
+        currentMonth.setMonth(currentMonth.getMonth() - 1);
+      }
+
+      // Calculate cumulative counts for backward data
+      let runningSum = 0;
+      for (let i = 0; i < history.length; i++) {
+        runningSum += history[i].count;
+        history[i].cumulative = runningSum;
+      }
+
+      return history;
+    }
+
     async fetchHistoryDelta(tagName, lastDate, startDate) {
       if (!lastDate) return this.fetchMonthlyCounts(tagName, startDate);
 
-      console.log(`[TagAnalyticsApp] Fetching History Delta since ${lastDate.toISOString()}`);
+
 
       // Re-fetch the last month to ensure it's up to date (it might have been partial)
       // And fetch everything after.
@@ -8741,15 +8969,15 @@
       return merged;
     }
 
-    async fetchMilestonesDelta(tagName, currentTotal, cachedMilestones) {
+    async fetchMilestonesDelta(tagName, currentTotal, cachedMilestones, fullHistory) {
       const allTargets = this.getMilestoneTargets(currentTotal);
       const existingTargets = new Set(cachedMilestones.map(m => m.milestone));
       const missingTargets = allTargets.filter(t => !existingTargets.has(t));
 
       if (missingTargets.length === 0) return [];
 
-      console.log(`[TagAnalyticsApp] Fetching ${missingTargets.length} missing milestones:`, missingTargets);
-      return this.fetchMilestonePosts(tagName, currentTotal, missingTargets);
+
+      return this.fetchMilestones(tagName, fullHistory, missingTargets);
     }
 
     mergeMilestones(oldMilestones, newMilestones) {
@@ -8782,10 +9010,11 @@
       }
     }
 
-    async fetchTrendingPost(tagName) {
-      // Query for the most popular SFW post in the last 3 days
-      // age:..3d, order:score, rating:g
-      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+is:sfw&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext,score`;
+    async fetchTrendingPost(tagName, isNSFW = false) {
+      // Query for the most popular SFW (or NSFW) post in the last 3 days
+      // age:..3d, order:score, rating:g (or is:nsfw)
+      const ratingQuery = isNSFW ? 'is:nsfw' : 'is:sfw';
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+${ratingQuery}&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext,score`;
       try {
         const posts = await this.rateLimiter.fetch(url).then(r => r.json());
         return (posts && posts.length > 0) ? posts[0] : null;
@@ -8795,40 +9024,6 @@
       }
     }
 
-    async fetchMonthlyCounts(tagName, startDate) {
-      console.log(`[TagAnalyticsApp] Step 2: Fetching Monthly Counts since ${startDate.toISOString()}`);
-
-      const startYear = startDate.getFullYear();
-      const currentYear = new Date().getFullYear();
-      const searches = [];
-
-      for (let y = startYear; y <= currentYear; y++) {
-        // Fetch by Year-Month for efficiency?
-        // Actually, fetching by year and parsing dates is better for fewer requests?
-        // Limit is 1000 per year? No, counts API is efficient.
-        // We can fetch counts per month: date:2020-01, date:2020-02...
-        // Or fetch counts by year and group by month?
-        // API: /counts/posts.json?tags=TAG+date:2020
-        // Returns counts for that entire year? No.
-        // We need monthly granularity.
-        // Construct search for each month?
-        // If tag is old (2005), that's 20 years * 12 = 240 requests. Too many?
-        // But we have concurrency 8. 240/8 = 30 batches. 1s cooldown. 30s?
-        // Optimization: Use `created_at` from `posts.json`?
-        // No, we can't fetch all posts for large tags.
-        // Alternative: Use /reports/posts.json?search[group]=month ?
-        // That might be rate limited (3s).
-        // Let's stick to /counts/posts.json but maybe optimize range?
-        // Actually, the current implementation (which I might not see fully here) likely does logic.
-        // Let's assume the EXISTING logic passed to me is correct for now or if I need to write it?
-        // Ah, this function body is hidden in previous "search" or "view".
-        // Let's just Paste what was there or the logic.
-        // Wait, I am REPLACING `fetchMonthlyCounts`? No, I am inserting BEFORE or AFTER.
-        // The instruction said "Add helper methods".
-        // I will add them BEFORE `fetchMonthlyCounts`.
-      }
-      return []; // Placeholder if I replaced it, but I shouldn't replace it.
-    }
 
     // --- Helper Methods for Rankings ---
 
@@ -8885,9 +9080,9 @@
         const data = await resp.json();
 
         // Debug Log
-        console.log(`[TagAnalyticsApp] Ranking Data (${group}) items:`, Array.isArray(data) ? data.length : 0);
+
         if (Array.isArray(data) && data.length > 0) {
-          console.log(`[TagAnalyticsApp] First Item Sample (${group}):`, data[0]);
+
         }
 
         return data;
@@ -8907,7 +9102,7 @@
     // -----------------------------------
 
     async fetchMonthlyCounts(tagName, startDate) {
-      console.log(`[TagAnalyticsApp] Step 2: Fetching Monthly Counts since ${startDate.toISOString()}`);
+
 
       const startYear = startDate.getFullYear();
       const startMonth = startDate.getMonth(); // 0-based
@@ -8993,102 +9188,88 @@
       return monthlyData;
     }
 
-    async fetchMilestonePosts(tagName, totalCount, targets) {
-      console.log(`[TagAnalyticsApp] Step 3: Fetching Milestones (Targets: ${targets.length})`);
+    async fetchMilestones(tagName, monthlyData, targets) {
+
       const milestones = [];
 
-      // We need to fetch specific posts for each target (1, 100, 1000...)
-      // Strategy: 
-      // 1. Identify Page and Offset for each target (limit=200).
-      // 2. Group by Page to minimize requests (if multiple milestones on same page).
-      // 3. Handle > 1000 pages via ID shifting. (Block Skipping)
-
-      // However, since targets are sparse (order of magnitude), grouping is unlikely except for very dense small milestones.
-      // Also we need to be careful about the "ID Shifting".
-
-      // Constraint: We don't know the "Boundary IDs" (post at 200k, 400k...) unless we fetch them.
-      // So we must fetch sequentially if we cross boundaries.
-
-      const LIMIT = 200;
-      const MAX_PAGE = 1000;
-      const BLOCK_SIZE = LIMIT * MAX_PAGE; // 200,000
-
-      let currentBlockStartId = 0; // "id > 0" initially
-      let currentBlockIndex = 0; // 0-200k
-
-      // Sort targets just in case
+      // Sort targets
       targets.sort((a, b) => a - b);
 
+      if (!monthlyData || monthlyData.length === 0) return [];
+
       for (const target of targets) {
-        // 1-based target index
-        // e.g. 1st post is index 0.
-        // target 100 => index 99.
-        const index = target - 1;
+        // Find month where accum >= target
+        // monthlyData is sorted by date asc
+        let targetData = null;
+        let prevCumulative = 0;
 
-        // Calculate which Block this target is in
-        const blockIndex = Math.floor(index / BLOCK_SIZE);
-        const indexInBlock = index % BLOCK_SIZE;
-
-        // Calculate Page in that Block
-        const pageInBlock = Math.floor(indexInBlock / LIMIT) + 1; // 1-based page
-
-        // If we moved to a new block, we need to find the ID of the end of the previous blocks.
-        // This is tricky. We need to "jump".
-        // To get to Block 1 (200k+), we need the ID of the 200,000th post.
-        // To get that, we need to fetch Page 1000 of Block 0.
-
-        while (currentBlockIndex < blockIndex) {
-          console.log(`[TagAnalyticsApp] Jumping from Block ${currentBlockIndex} to ${currentBlockIndex + 1}...`);
-          // Fetch the last page of the current block to get the boundary ID
-          const lastPage = MAX_PAGE;
-          const params = new URLSearchParams({
-            tags: `${tagName} order:id`,
-            limit: LIMIT,
-            page: lastPage,
-            only: 'id'
-          });
-          if (currentBlockStartId > 0) {
-            params.set('tags', `${tagName} order:id id:>${currentBlockStartId}`);
-          }
-
-          const url = `/posts.json?${params.toString()}`;
-          const posts = await this.rateLimiter.fetch(url).then(r => r.json());
-
-          if (posts && posts.length > 0) {
-            const lastPost = posts[posts.length - 1];
-            currentBlockStartId = lastPost.id;
-            console.log(`[TagAnalyticsApp] New Boundary ID: ${currentBlockStartId} (Block ${currentBlockIndex + 1})`);
-            currentBlockIndex++;
-          } else {
-            console.warn(`[TagAnalyticsApp] Failed to find boundary for Block ${currentBlockIndex}. Stopping.`);
+        for (const mData of monthlyData) {
+          if (mData.cumulative >= target) {
+            targetData = mData;
             break;
           }
+          prevCumulative = mData.cumulative;
         }
 
-        // Now we are in the correct block (or as close as we could get)
-        if (currentBlockIndex === blockIndex) {
-          const params = new URLSearchParams({
-            tags: `${tagName} order:id`,
-            limit: LIMIT,
-            page: pageInBlock,
-            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url,rating'
-          });
-          if (currentBlockStartId > 0) {
-            params.set('tags', `${tagName} order:id id:>${currentBlockStartId}`);
+        if (targetData) {
+          const offset = target - prevCumulative;
+
+
+          // targetData.date can be a "YYYY-MM-01" string (from fetchMonthlyCounts) 
+          // OR a Date object (from calculateHistoryFromPosts or old cache).
+          let y, m;
+
+          if (targetData.date instanceof Date) {
+            y = targetData.date.getFullYear();
+            m = targetData.date.getMonth() + 1; // 1-12
+          } else {
+            // Assume string "YYYY-MM-DD"
+            const dParts = targetData.date.split('-');
+            y = parseInt(dParts[0], 10);
+            m = parseInt(dParts[1], 10); // 1-12
           }
 
+          // Date(y, m-1, 0) gives last day of prev month
+          // Month is 0-indexed in Date constructor.
+          // m is 1-based (Feb=2). Date(2020, 1, 1) is Feb 1.
+          // We want last day of Jan. Date(2020, 0, 0)? No.
+          // Date(year, monthIndex, 0) is the last day of the *previous* month.
+          // So Date(2020, 1, 0) is Jan 31? Yes.
+          // targetData.date is 2020-02-01. m=2. 
+          // new Date(y, m - 1, 0) -> new Date(2020, 1, 0) -> 2020-01-31.
+
+          const prevMonthEnd = new Date(y, m - 1, 0);
+          // Format to YYYY-MM-DD
+          const prevDateStr = `${prevMonthEnd.getFullYear()}-${String(prevMonthEnd.getMonth() + 1).padStart(2, '0')}-${String(prevMonthEnd.getDate()).padStart(2, '0')}`;
+
+          const limit = 200;
+          const page = Math.ceil(offset / limit);
+          const indexInPage = (offset - 1) % limit;
+
+          // Query
+          // Note: order:id assumes IDs increase with time. Usually true but imported posts might break this.
+          // User asked for "date:>..." and "offset". 
+          // We must use order:id to ensure deterministic sort matching the "count" order roughly.
+          // Actually "count" is just total. 
+          const params = new URLSearchParams({
+            tags: `${tagName} date:>${prevDateStr} order:id`,
+            limit: limit,
+            page: page,
+            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url,rating'
+          });
+
           const url = `/posts.json?${params.toString()}`;
+
           try {
-            const pagePosts = await this.rateLimiter.fetch(url).then(r => r.json());
-            // Find the specific item
-            const itemIndex = indexInBlock % LIMIT;
-            if (pagePosts && pagePosts[itemIndex]) {
-              const post = pagePosts[itemIndex];
-              // Wrap in object to match renderMilestones expectations
-              milestones.push({ milestone: target, post: post });
+
+            const posts = await this.rateLimiter.fetch(url).then(r => r.json());
+            if (posts && posts[indexInPage]) {
+              milestones.push({ milestone: target, post: posts[indexInPage] });
+            } else {
+              console.warn(`[TagAnalyticsApp] Milestone ${target} post not found at index ${indexInPage} (Page ${page}). Posts len: ${posts ? posts.length : 0}`);
             }
           } catch (e) {
-            console.warn(`[TagAnalyticsApp] Failed to fetch milestone ${target}`, e);
+            console.warn(`[TagAnalyticsApp] Failed milestone ${target}`, e);
           }
         }
       }
@@ -9104,16 +9285,31 @@
       items.forEach(item => {
         const p = item.post || item; // Handle both raw post and { milestone, post } wrapper
         if (p.uploader_id) userIds.add(p.uploader_id);
+        if (p.approver_id) userIds.add(p.approver_id);
       });
 
       if (userIds.size > 0) {
         const userMap = await this.fetchUserMap(Array.from(userIds));
 
-        // Backfill names
+        // Store in instance map for rankings
+        userMap.forEach((uObj, id) => {
+          this.userNames[id] = uObj;
+        });
+
+        // Backfill names & levels
         items.forEach(item => {
           const p = item.post || item;
-          if (p.uploader_id && userMap.has(String(p.uploader_id))) {
-            p.uploader_name = userMap.get(String(p.uploader_id));
+          const uId = String(p.uploader_id);
+          if (p.uploader_id && userMap.has(uId)) {
+            const u = userMap.get(uId);
+            p.uploader_name = u.name;
+            p.uploader_level = u.level;
+          }
+          const aId = String(p.approver_id);
+          if (p.approver_id && userMap.has(aId)) {
+            const a = userMap.get(aId);
+            p.approver_name = a.name;
+            p.approver_level = a.level;
           }
         });
       }
@@ -9135,17 +9331,55 @@
       const userPromises = userBatches.map(batch => {
         const params = new URLSearchParams({
           'search[id]': batch.join(','),
-          'only': 'id,name'
+          'only': 'id,name,level_string'
         });
         const url = `/users.json?${params.toString()}`;
         return this.rateLimiter.fetch(url)
           .then(r => r.json())
           .then(users => {
             if (Array.isArray(users)) {
-              users.forEach(u => userMap.set(String(u.id), u.name));
+              users.forEach(u => userMap.set(String(u.id), { name: u.name, level: u.level_string }));
             }
           })
           .catch(e => console.warn("[TagAnalyticsApp] Failed to fetch user batch", e));
+      });
+
+      await Promise.all(userPromises);
+      return userMap;
+    }
+
+    async fetchUserMapByNames(userNames) {
+      const userMap = new Map(); // Key: Name, Value: { id, name, level }
+      if (!userNames || userNames.length === 0) return userMap;
+
+      const uniqueNames = Array.from(new Set(userNames));
+      // Batch fetching by name is unreliable (no clear support for comma-separated list in search[name])
+      // Fetch individually for robustness. 
+      // RateLimiter handles concurrency.
+
+      const userPromises = uniqueNames.map(name => {
+        const params = new URLSearchParams({
+          'search[name]': name, // Exact match usually
+          'only': 'id,name,level_string'
+        });
+        const url = `/users.json?${params.toString()}`;
+
+        return this.rateLimiter.fetch(url)
+          .then(r => r.json())
+          .then(users => {
+            if (Array.isArray(users) && users.length > 0) {
+              // Should return 1 user if exact match
+              const u = users[0];
+              if (u) {
+                userMap.set(name, { id: u.id, name: u.name, level: u.level_string });
+                // Also map by returned name just in case case sensitivity differs
+                userMap.set(u.name, { id: u.id, name: u.name, level: u.level_string });
+              }
+            } else {
+              console.warn(`[TagAnalyticsApp] User not found by name: "${name}"`);
+            }
+          })
+          .catch(e => console.warn(`[TagAnalyticsApp] Failed to fetch user: "${name}"`, e));
       });
 
       await Promise.all(userPromises);
@@ -9162,13 +9396,21 @@
       if (stats.uploaderRanking) {
         stats.uploaderRanking.forEach(u => {
           const uid = String(u.id);
-          if (userMap.has(uid)) u.name = userMap.get(uid);
+          if (userMap.has(uid)) {
+            const uObj = userMap.get(uid);
+            u.name = uObj.name;
+            u.level = uObj.level;
+          }
         });
       }
       if (stats.approverRanking) {
         stats.approverRanking.forEach(u => {
           const uid = String(u.id);
-          if (userMap.has(uid)) u.name = userMap.get(uid);
+          if (userMap.has(uid)) {
+            const uObj = userMap.get(uid);
+            u.name = uObj.name;
+            u.level = uObj.level;
+          }
         });
       }
       return stats;
@@ -9203,8 +9445,10 @@
         const count = counts[key] || 0;
         cumulative += count;
 
+        const dateStr = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, '0')}-${String(current.getUTCDate()).padStart(2, '0')}`;
+
         history.push({
-          date: new Date(current),
+          date: dateStr, // Store as string for consistency with fetchMonthlyCounts
           count: count,
           cumulative: cumulative
         });
@@ -9304,7 +9548,16 @@
     }
 
     injectAnalyticsButton(tagData, progress = 0) {
-      const title = document.querySelector("#c-wiki-pages #a-show h1, #c-artists #a-show h1, #tag-show #posts h1, #tag-list h1");
+      let title = document.querySelector("#c-wiki-pages #a-show h1, #c-artists #a-show h1, #tag-show #posts h1, #tag-list h1");
+
+      // Fallback: Try finding container via post-count (common in modern Danbooru layouts)
+      if (!title) {
+        const postCount = document.querySelector('.post-count, span[class*="post-count"]');
+        if (postCount && postCount.parentElement) {
+          title = postCount.parentElement;
+        }
+      }
+
       if (!title) {
         console.warn("[TagAnalyticsApp] Could not find a suitable title element for button injection.");
         return;
@@ -9460,13 +9713,25 @@
       // Update Checkbox State if it exists
       const cb = document.getElementById('tag-analytics-nsfw-toggle');
       if (cb) cb.checked = isNsfwEnabled;
+
+      // Toggle Trending Post Visibility
+      const trendingSFW = document.getElementById('trending-post-sfw');
+      const trendingNSFW = document.getElementById('trending-post-nsfw');
+
+      if (isNsfwEnabled) {
+        if (trendingSFW) trendingSFW.style.display = 'none';
+        if (trendingNSFW) trendingNSFW.style.display = 'flex';
+      } else {
+        if (trendingSFW) trendingSFW.style.display = 'flex';
+        if (trendingNSFW) trendingNSFW.style.display = 'none';
+      }
     }
 
     renderDashboard(tagData) {
       if (!document.getElementById("tag-analytics-modal")) {
         this.createModal();
       }
-      console.log('[TagAnalyticsApp] Rendering Dashboard. Rankings:', tagData.rankings);
+
 
       const content = document.getElementById("tag-analytics-content");
       const categoryMap = {
@@ -9484,16 +9749,19 @@
       const titleColor = colorMap[tagData.category] || '#333';
 
       content.innerHTML = `
+            <style>
+                .ranking-username:hover { font-weight: bold; }
+            </style>
             <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
             <div>
                 <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
-                    <span style="font-size: 0.9em; color: #777;">ID: ${tagData.id}</span>
-                    <span style="font-size: 0.9em; color: #777; border-left: 1px solid #ddd; padding-left: 10px;" id="tag-updated-at">
-                        Updated: ${tagData.updatedAt ? new Date(tagData.updatedAt).toISOString().split('T')[0] : 'N/A'}
+                    <span style="font-size: 0.9em; color: #777;">Created: ${tagData.created_at ? new Date(tagData.created_at).toLocaleDateString('en-CA') : 'N/A'}</span>
+                    <span style="font-size: 0.9em; color: #777; border-left: 1px solid #ddd; padding-left: 10px; display: flex; align-items: center;" id="tag-updated-at">
+                        Updated: ${tagData.updatedAt ? new Date(tagData.updatedAt).toLocaleDateString('en-CA') : 'N/A'}
+                        <span id="tag-settings-anchor" style="display: inline-flex; align-items: center; margin-left: 5px;"></span>
                     </span>
-                    <span id="tag-settings-anchor"></span>
                 </div>
             </div>
             <div>
@@ -9508,7 +9776,7 @@
         <!-- Main Grid: Summary & Distribution -->
 
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px;">
              <!-- Summary Card -->
              <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; min-height: 180px; position: relative; display: flex; flex-direction: column; justify-content: space-between;">
                 <!-- ... (Summary content) ... -->
@@ -9530,7 +9798,7 @@
                      <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                            <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                              <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
+                              <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                            </a>
                         </div>
                         <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
@@ -9538,16 +9806,29 @@
                      </div>
                      ` : ''}
 
-                         <!-- Trending Post -->
+                         <!-- Trending Post (SFW) -->
                          ${tagData.trendingPost ? `
-                     <div class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                     <div id="trending-post-sfw" class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                                <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/images/download-preview.png';">
+                                <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                            </a>
                         </div>
                         <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
                         <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPost.score}</div>
+                     </div>
+                    ` : ''}
+
+                         <!-- Trending Post (NSFW) -->
+                         ${tagData.trendingPostNSFW ? `
+                     <div id="trending-post-nsfw" class="nsfw-monitor" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                        <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
+                           <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                                <img src="${tagData.trendingPostNSFW.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                           </a>
+                        </div>
+                        <div style="font-size: 0.75em; font-weight: bold; color: #cc0000; margin-top: 5px;">Trending(NSFW)</div>
+                        <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPostNSFW.score}</div>
                      </div>
                     ` : ''}
                 </div>
@@ -9592,9 +9873,9 @@
              </div>
              
              <div id="ranking-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                ${this.renderRankingColumn('All-time', tagData.rankings.uploader.allTime)}
-                ${this.renderRankingColumn('Last 1 Year', tagData.rankings.uploader.year)}
-                ${this.renderRankingColumn('First 100 Post', tagData.rankings.uploader.first100)}
+                ${this.renderRankingColumn('All-time', tagData.rankings.uploader.allTime, 'uploader', tagData.name)}
+                ${this.renderRankingColumn('Last 1 Year', tagData.rankings.uploader.year, 'uploader', tagData.name)}
+                ${this.renderRankingColumn('First 100 Post', tagData.rankings.uploader.first100, 'uploader', tagData.name)}
              </div>
         </div>
         ` : ''}
@@ -9822,13 +10103,12 @@
       path.exit()
         .transition().duration(500)
         .attrTween('d', function (d) {
-          // Safety check
-          if (!d || isNaN(d.startAngle) || isNaN(d.endAngle)) return () => "";
-
-          const i = d3.interpolate(d.startAngle, d.endAngle);
+          const start = d.startAngle;
+          const end = d.endAngle;
+          const i = d3.interpolate(start, end);
           return function (t) {
-            d.startAngle = i(t);
-            return arc(d) || ""; // Fallback to empty string
+            // Create a temp object for arc, do NOT modify d in place
+            return arc({ ...d, startAngle: i(t) }) || "";
           };
         })
         .remove();
@@ -9836,12 +10116,11 @@
       // UPDATE
       path.transition().duration(500)
         .attrTween('d', function (d) {
-          // Safety: use current or d, default to 0-0 if missing
           const prev = this._current || { startAngle: 0, endAngle: 0, padAngle: 0 };
           const i = d3.interpolate(prev, d);
           return function (t) {
             const val = i(t);
-            this._current = val; // Store for next time replacement
+            this._current = val;
             return arc(val) || "";
           };
         })
@@ -9857,11 +10136,10 @@
         .style('cursor', 'pointer')
         .transition().duration(500)
         .attrTween('d', function (d) {
-          // Animate from 0 to full
           const i = d3.interpolate({ startAngle: 0, endAngle: 0, padAngle: 0 }, d);
           return function (t) {
             const val = i(t);
-            this._current = val; // Keep track during animation
+            this._current = val;
             return arc(val) || "";
           };
         });
@@ -9943,7 +10221,7 @@
     }
 
     getMilestoneTargets(total) {
-      console.log(`[Milestones] Calculating targets for total: ${total}`);
+
       const milestones = new Set([1]);
       if (total >= 100) milestones.add(100);
       if (total >= 1000) milestones.add(1000);
@@ -9970,7 +10248,7 @@
       }
 
       const res = Array.from(milestones).sort((a, b) => a - b);
-      console.log(`[Milestones] Targets:`, res);
+
       return res;
     }
 
@@ -10045,11 +10323,11 @@
                       <div style="font-size: 0.85em; color: #555;">${dateStr}</div>
                   </div>
                   <a href="/posts/${p.id}" target="_blank" style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; flex-shrink: 0; background: #eee; margin-left: 10px;">
-                      <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+                      <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                   </a>
               </div>
               <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
-                  <a href="/users/${p.uploader_id}" target="_blank" style="color: #888; text-decoration: none;">${uploaderName}</a>
+                  <a href="/users/${p.uploader_id}" target="_blank" style="color: ${this.getLevelColor(p.uploader_level)}; text-decoration: none;">${uploaderName}</a>
               </div>
           `;
 
@@ -10071,14 +10349,27 @@
         return;
       }
 
-      this.currentData = data;
       this.currentMilestones = milestones;
 
+      // Sanitize Data: Ensure all dates are strings YYYY-MM-DD
+      const chartData = data.map(d => {
+        let dateStr = d.date;
+        if (d.date instanceof Date) {
+          dateStr = d.date.toISOString().slice(0, 10);
+        }
+        return {
+          ...d,
+          date: dateStr
+        };
+      });
+
+      this.currentData = chartData;
+
       // 1. Monthly Bar Chart (Scrollable)
-      this.renderBarChart(data, "#history-chart-monthly", "Monthly Posts", milestones);
+      this.renderBarChart(chartData, "#history-chart-monthly", "Monthly Posts", milestones);
 
       // 2. Cumulative Line/Area Chart (Fit to width, usually readable as line)
-      this.renderAreaChart(data, "#history-chart-cumulative", "Cumulative Posts");
+      this.renderAreaChart(chartData, "#history-chart-cumulative", "Cumulative Posts");
 
       // Responsive Resize Handling
       if (!this.resizeObserver) {
@@ -10088,6 +10379,7 @@
             if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
             this.resizeTimeout = setTimeout(() => {
               if (this.currentData && document.getElementById("history-chart-monthly")) {
+                // Re-render using stored sanitized data
                 this.renderBarChart(this.currentData, "#history-chart-monthly", "Monthly Posts", this.currentMilestones);
                 this.renderAreaChart(this.currentData, "#history-chart-cumulative", "Cumulative Posts");
               }
@@ -10181,7 +10473,11 @@
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
       const x = d3.scaleBand()
-        .domain(data.map(d => d.date))
+        // Handle both Date objects (old cache/calc) and strings (new fetch). Use Local Time YYYY-MM-DD
+        .domain(data.map(d => {
+          if (d.date instanceof Date) return d.date.toLocaleDateString('en-CA');
+          return d.date; // already YYYY-MM-DD string
+        }))
         .range([0, width - margin.left - margin.right])
         .padding(0.2);
 
@@ -10207,14 +10503,20 @@
       // 4. Clickable Monthly Overlays (Full height clickable area)
       const overlayGroups = svg.append("g").attr("class", "monthly-overlays");
       data.forEach(d => {
-        const nextDate = new Date(d.date);
-        nextDate.setMonth(nextDate.getMonth() + 1);
+        // d.date can be "YYYY-MM-DD" string or Date object
+        const dateStr = (d.date instanceof Date) ? d.date.toLocaleDateString('en-CA') : d.date;
+        const dateObj = (d.date instanceof Date) ? d.date : new Date(dateStr);
 
-        const dateRange = `${d.date.getFullYear()}-${String(d.date.getMonth() + 1).padStart(2, '0')}-01...${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-01`;
+        const nextDate = new Date(dateObj);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+        const nextDateStr = nextDate.toLocaleDateString('en-CA');
+
+        const dateRange = `${dateStr}...${nextDateStr}`;
         const searchUrl = `/posts?tags=${encodeURIComponent(this.tagName)}+date:${dateRange}`;
 
         const colWidth = x.step();
-        const colX = x(d.date) - (x.step() - x.bandwidth()) / 2;
+        // Use the string date key for x-scale lookup
+        const colX = x(dateStr) - (x.step() - x.bandwidth()) / 2;
 
         overlayGroups.append("rect")
           .attr("x", colX)
@@ -10223,25 +10525,24 @@
           .attr("height", height - margin.top - margin.bottom)
           .attr("fill", "transparent")
           .style("cursor", "pointer")
-          .style("pointer-events", "all")
-          .style("pointer-events", "all")
+          .style("pointer-events", "all") // Ensure it captures events
           .on("mouseover", function () {
             d3.select(this).attr("fill", "rgba(0, 123, 255, 0.05)");
             // Highlight Bar
-            const bar = svg.select(`.monthly-bar-${d.date.getTime()}`);
-            if (bar) bar.attr("fill", "#2e7d32"); // Darker/Vivid Green (Matches screenshot)
+            const bar = svg.select(`.monthly-bar-${dateStr}`); // Use string date for class
+            if (bar.node()) bar.attr("fill", "#2e7d32"); // Darker/Vivid Green (Matches screenshot)
           })
           .on("mouseout", function () {
             d3.select(this).attr("fill", "transparent");
             // Reset Bar
-            const bar = svg.select(`.monthly-bar-${d.date.getTime()}`);
-            if (bar) bar.attr("fill", "#69b3a2"); // Original Green
+            const bar = svg.select(`.monthly-bar-${dateStr}`); // Use string date for class
+            if (bar.node()) bar.attr("fill", "#69b3a2"); // Original Green
           })
           .on("click", (event) => {
             window.open(searchUrl, '_blank');
           })
           .append("title")
-          .text(`${d.date.getFullYear()}-${String(d.date.getMonth() + 1).padStart(2, '0')}\nCount: ${d.count.toLocaleString()}`);
+          .text(`${dateStr}\nCount: ${d.count.toLocaleString()}`);
       });
 
       // 4. Bars
@@ -10249,15 +10550,16 @@
         .data(data)
         .enter()
         .append("rect")
-        .attr("class", d => `monthly-bar monthly-bar-${d.date.getTime()}`)
-        .attr("x", d => x(d.date))
+        // d.date might be Date or String. Use safe conversion.
+        .attr("class", d => `monthly-bar monthly-bar-${(d.date instanceof Date) ? d.date.toLocaleDateString('en-CA') : d.date}`)
+        .attr("x", d => x((d.date instanceof Date) ? d.date.toLocaleDateString('en-CA') : d.date))
         .attr("y", d => y(d.count))
         .attr("width", x.bandwidth())
         .attr("height", d => height - margin.top - margin.bottom - y(d.count))
         .attr("fill", "#69b3a2")
         .style("pointer-events", "none") // Let clicks pass through to overlays
         .append("title")
-        .text(d => `${d.date.getFullYear()}-${String(d.date.getMonth() + 1).padStart(2, '0')}: ${d.count} posts`);
+        .text(d => `${(d.date instanceof Date) ? d.date.toLocaleDateString('en-CA') : d.date}: ${d.count} posts`);
 
       // 5. Render Stars (Milestones) - Render AFTER bars and overlays
       if (milestones && milestones.length > 0) {
@@ -10265,11 +10567,12 @@
         const milestonesByMonth = {};
         milestones.forEach(m => {
           // Filter milestones: show only #1 and multiples of 1000
+          if (!m.post) return;
           if (m.milestone !== 1 && m.milestone % 1000 !== 0) return;
 
           const pDate = new Date(m.post.created_at);
           // Use local date methods to match fetchMonthlyCounts buckets
-          const mKey = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}`;
+          const mKey = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, '0')}-01`; // Match string format
           if (!milestonesByMonth[mKey]) milestonesByMonth[mKey] = [];
           milestonesByMonth[mKey].push(m);
         });
@@ -10278,7 +10581,7 @@
 
         data.forEach((d) => {
           // Use local date methods for consistent matching
-          const mKey = `${d.date.getFullYear()}-${String(d.date.getMonth() + 1).padStart(2, '0')}`;
+          const mKey = (d.date instanceof Date) ? d.date.toISOString().slice(0, 10) : d.date;
           const monthMilestones = milestonesByMonth[mKey];
 
           if (monthMilestones) {
@@ -10331,8 +10634,8 @@
 
       // X Axis
       const xAxis = d3.axisBottom(x)
-        .tickValues(x.domain().filter(d => d.getMonth() === 0))
-        .tickFormat(d3.timeFormat("%Y"));
+        .tickValues(x.domain().filter(d => new Date(d).getMonth() === 0)) // Parse string to Date for month check
+        .tickFormat(d => d3.timeFormat("%Y")(new Date(d))); // Parse string to Date for formatting
 
       svg.append("g")
         .attr("transform", `translate(0,${height - margin.top - margin.bottom})`)
@@ -10383,7 +10686,7 @@
         .attr("transform", `translate(${margin.left},${margin.top})`);
 
       const x = d3.scaleTime()
-        .domain(d3.extent(data, d => d.date))
+        .domain(d3.extent(data, d => new Date(d.date))) // Parse string to Date for scaleTime
         .range([0, width - margin.left - margin.right]);
 
       const y = d3.scaleLinear()
@@ -10398,7 +10701,7 @@
         .attr("stroke", "#69b3a2")
         .attr("stroke-width", 1.5)
         .attr("d", d3.area()
-          .x(d => x(d.date))
+          .x(d => x(new Date(d.date)))
           .y0(y(0))
           .y1(d => y(d.cumulative))
         );
@@ -10406,7 +10709,15 @@
       // X Axis
       svg.append("g")
         .attr("transform", `translate(0,${height - margin.top - margin.bottom})`)
-        .call(d3.axisBottom(x));
+        .call(d3.axisBottom(x)
+          .tickFormat(d => {
+            // D3 time scale uses Date objects for ticks.
+            // We want YYYY-MM-DD local string if possible, or just YYYY if not enough space?
+            // Actually user asked for YYYY-MM-DD.
+            // But for Axis labels, YYYY is usually better for long history.
+            // Let's stick to YYYY for Axis as per original code, but Tooltip MUST be YYYY-MM-DD.
+            return d3.timeFormat("%Y")(d);
+          }));
 
       // Y Axis
       svg.append("g").call(d3.axisLeft(y));
@@ -10437,15 +10748,14 @@
         .style("z-index", "11000") // Corrected Z-Index (Higher than modal)
         .style("background", "rgba(0, 0, 0, 0.8)")
         .style("color", "#fff")
-        .style("padding", "6px 10px")
+        .style("padding", "8px")
         .style("border-radius", "4px")
         .style("font-size", "12px")
         .style("pointer-events", "none")
-        .style("display", "none")
-        .style("white-space", "nowrap")
-        .style("box-shadow", "0 2px 5px rgba(0,0,0,0.2)");
+        .style("opacity", 0)
+        .style("transition", "opacity 0.2s");
 
-      // Overlay to capture mouse events
+      // Overlay recto to capture events
       svg.append("rect")
         .attr("class", "overlay")
         .attr("width", width - margin.left - margin.right)
@@ -10454,82 +10764,59 @@
         .style("pointer-events", "all")
         .on("mouseover", () => {
           focus.style("display", null);
-          tooltip.style("display", "block");
+          tooltip.style("opacity", 1);
         })
         .on("mouseout", () => {
           focus.style("display", "none");
-          tooltip.style("display", "none");
+          tooltip.style("opacity", 0);
         })
-        .on("mousemove", mousemove);
+        .on("mousemove", (event) => {
+          try {
+            const bisectDate = d3.bisector(d => new Date(d.date)).left;
+            // Use pointer relative to SVG g element (which has margins)
+            // But event is relative to page or viewport? 
+            // d3.pointer(event) returns [x, y] relative to current element
+            const [mx] = d3.pointer(event);
+            const x0 = x.invert(mx);
 
-      const bisectDate = d3.bisector(d => d.date).left;
+            const i = bisectDate(data, x0, 1);
+            const d0 = data[i - 1];
+            const d1 = data[i];
 
-      function mousemove(event) {
-        // Calculate X based on mouse position relative to SVG/Group
-        const coords = d3.pointer(event, this);
-        const x0 = x.invert(coords[0]);
+            let d = d0;
+            if (d1 && d0) {
+              const date0 = new Date(d0.date);
+              const date1 = new Date(d1.date);
+              d = (x0 - date0 > date1 - x0) ? d1 : d0;
+            } else if (d1) {
+              d = d1;
+            }
 
-        // Find closest data point
-        const i = bisectDate(data, x0, 1);
-        const d0 = data[i - 1];
-        const d1 = data[i];
+            if (!d) return;
 
-        let d = d0;
-        if (d1 && d0) {
-          d = (x0 - d0.date > d1.date - x0) ? d1 : d0;
-        } else if (d1) {
-          d = d1;
-        }
+            const dateObj = new Date(d.date);
+            const dateStr = dateObj.toLocaleDateString('en-CA');
 
-        if (!d) return;
+            focus.attr("transform", `translate(${x(dateObj)},${y(d.cumulative)})`);
 
-        // Move focus
-        const cx = x(d.date);
-        const cy = y(d.cumulative);
-        focus.attr("transform", `translate(${cx},${cy})`);
+            // Smart layout for tooltip
+            let left = event.pageX + 15;
+            let top = event.pageY - 28;
 
-        // Update Tooltip Content
-        tooltip.html(`<strong>${d.cumulative.toLocaleString()}</strong> posts<br><span style="color:#ddd">${d.date.toISOString().slice(0, 7)}</span>`);
+            if (left + 150 > document.documentElement.clientWidth) {
+              left = event.pageX - 160;
+            }
 
-        // Tooltip Positioning (Smart)
-        const tooltipNode = tooltip.node();
-        const tooltipWidth = tooltipNode.offsetWidth;
-        const tooltipHeight = tooltipNode.offsetHeight;
-
-        // Use client coordinates for viewport checking
-        const viewportWidth = document.documentElement.clientWidth;
-        const viewportHeight = document.documentElement.clientHeight;
-
-        // Initial target: 15px right, 15px up from cursor (Page coords)
-        let left = event.pageX + 15;
-        let top = event.pageY - 15;
-
-        // Check Horizontal Overflow (Right edge)
-        // Check space remaining using clientX
-        const spaceRight = viewportWidth - event.clientX;
-
-
-
-        if (spaceRight < tooltipWidth + 20) {
-          // Flip to left: cursor X - width - offset
-          left = event.pageX - tooltipWidth - 15;
-        }
-
-        // Check Vertical Overflow (Bottom edge)
-        const spaceBottom = viewportHeight - event.clientY;
-        if (spaceBottom < tooltipHeight + 20) {
-          // Shift up
-          top = event.pageY - tooltipHeight - 15;
-        }
-
-        // Ensure not off-screen to the left or top
-        if (left < 0) left = 10;
-        if (top < 0) top = 10;
-
-        tooltip.style("left", `${left}px`)
-          .style("top", `${top}px`);
-      }
+            tooltip
+              .html(`<strong>${dateStr}</strong><br>Cumulative: ${d.cumulative.toLocaleString()}`)
+              .style("left", left + "px")
+              .style("top", top + "px");
+          } catch (e) {
+            // console.warn(e);
+          }
+        });
     }
+
 
     getTagNameFromUrl() {
       const path = window.location.pathname;
@@ -10559,7 +10846,7 @@
       }
     }
 
-    renderRankingColumn(title, data) {
+    renderRankingColumn(title, data, role, tagName) {
       if (!data || data.length === 0) {
         return `
             <div style="background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eee;">
@@ -10572,10 +10859,30 @@
 
       const list = data.slice(0, 10).map((u, i) => {
         let nameHtml = 'Unknown';
-        if (u.id) {
-          nameHtml = `<a href="/users/${u.id}" target="_blank" style="color: #007bff; text-decoration: none;">${u.name || u.id}</a>`;
-        } else if (u.name) {
-          nameHtml = `<a href="/users?search[name]=${u.name}" target="_blank" style="color: #007bff; text-decoration: none;">${u.name}</a>`;
+        const name = u.name || `user_${u.id} `;
+        // Normalize name: replace spaces with underscores for search query
+        const normalizedName = name.replace(/ /g, '_');
+
+        // Level Lookup: Check object first, then instance cache (ID -> Object), then instance cache (Name -> Object)
+        const userCached = this.userNames[String(u.id)] || this.userNames[name];
+        const level = u.level || (userCached && typeof userCached === 'object' ? userCached.level : null);
+        const userColor = this.getLevelColor(level);
+
+        let query = '';
+        if (role && tagName) {
+          // user:name+tag or approver:name+tag
+          // "uploader" -> "user", "approver" -> "approver"
+          const queryRole = role === 'uploader' ? 'user' : role;
+          query = `${queryRole}:${normalizedName} ${tagName} `;
+        }
+
+        if (query) {
+          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="ranking-username" style="color: ${userColor}; text-decoration: none;">${name}</a>`;
+        } else if (u.id) {
+          // Fallback
+          nameHtml = `<a href="/users/${u.id}" target="_blank" class="ranking-username" style="color: ${userColor}; text-decoration: none;">${name}</a>`;
+        } else {
+          nameHtml = `<span class="ranking-username" style="color: ${userColor}; cursor: default;">${name}</span>`;
         }
 
         const count = u.count || u.post_count || 0;
@@ -10583,7 +10890,7 @@
 
         return `
             <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 5px; border-bottom: 1px solid #f5f5f5; background: linear-gradient(90deg, rgba(0,0,0,0.06) ${percentage}%, transparent ${percentage}%);">
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${u.name}">${i + 1}. ${nameHtml}</span>
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${name}">${i + 1}. ${nameHtml}</span>
                 <span style="color: #666; font-weight: bold;">${count}</span>
             </div>`;
       }).join('');
@@ -10595,16 +10902,28 @@
         </div>`;
     }
 
+    getLevelColor(level) {
+      if (!level) return '#007bff';
+      const l = level.toLowerCase();
+      if (l.includes('admin') || l.includes('owner')) return '#e67300'; // Orange
+      if (l.includes('moderator')) return '#00aa00'; // Green
+      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return '#a0a'; // Purple
+      if (l.includes('platinum')) return '#888';  // Grey
+      if (l.includes('gold')) return '#e6b800';   // Yellow
+      if (l.includes('member')) return '#007bff'; // Blue (Default member)
+      return '#007bff';
+    }
+
     updateRankingTabs(role, tagData) {
       const container = document.getElementById('ranking-container');
       if (!container || !tagData.rankings || !tagData.rankings[role]) return;
 
       const rData = tagData.rankings[role];
       container.innerHTML = `
-            ${this.renderRankingColumn('All-time', rData.allTime)}
-            ${this.renderRankingColumn('Last 1 Year', rData.year)}
-            ${this.renderRankingColumn('First 100 Post', rData.first100)}
-        `;
+            ${this.renderRankingColumn('All-time', rData.allTime, role, tagData.name)}
+            ${this.renderRankingColumn('Last 1 Year', rData.year, role, tagData.name)}
+            ${this.renderRankingColumn('First 100 Post', rData.first100, role, tagData.name)}
+`;
     }
   }
 
