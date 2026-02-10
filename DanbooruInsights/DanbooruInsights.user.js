@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.0
+// @version      6.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -363,8 +363,6 @@
       });
 
       // [v6] Tag Analytics Cache
-      // Cache for TagAnalyticsApp reports
-      // PK: tagName
       this.version(6).stores({
         uploads: 'id, userId, date, count',
         approvals: 'id, userId, date, count',
@@ -376,6 +374,21 @@
         hourly_stats: 'id, userId, metric, year',
         bubble_data: '[userId+copyright], userId, copyright, updated_at',
         tag_analytics: 'tagName, updatedAt'
+      });
+
+      // [v7] Per-User GrassApp Layout Settings
+      this.version(7).stores({
+        uploads: 'id, userId, date, count',
+        approvals: 'id, userId, date, count',
+        notes: 'id, userId, date, count',
+        posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general',
+        piestats: '[key+userId], userId, updated_at',
+        completed_years: 'id, userId, metric, year',
+        approvals_detail: 'id, userId',
+        hourly_stats: 'id, userId, metric, year',
+        bubble_data: '[userId+copyright], userId, copyright, updated_at',
+        tag_analytics: 'tagName, updatedAt',
+        grass_settings: 'userId' // PK: userId
       });
     }
   }
@@ -570,6 +583,39 @@
       }
     }
 
+    /**
+     * Retrieves GrassApp layout settings for a specific user.
+     * @param {string|number} userId The user's ID.
+     * @return {Promise<Object|null>} The settings (width, xOffset) or null.
+     */
+    async getGrassSettings(userId) {
+      if (!userId) return null;
+      try {
+        return await this.db.grass_settings.get(userId.toString());
+      } catch (e) {
+        console.warn('Failed to load grass settings', e);
+        return null;
+      }
+    }
+
+    /**
+     * Saves GrassApp layout settings for a specific user.
+     * @param {string|number} userId The user's ID.
+     * @param {Object} settings The settings to save.
+     * @return {Promise<void>}
+     */
+    async saveGrassSettings(userId, settings) {
+      if (!userId) return;
+      try {
+        await this.db.grass_settings.put({
+          userId: userId.toString(),
+          ...settings,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Failed to save grass settings', e);
+      }
+    }
     /**
      * Checks if a year is already marked as complete for a specific user and metric.
      * @param {string} userId
@@ -1438,9 +1484,11 @@
 
     /**
      * Injects the skeleton HTML structure into the page.
-     * @return {boolean} True if injection was successful or already exists.
+     * @param {DataManager} dataManager The data manager for fetching settings.
+     * @param {string|number} userId The user's ID for settings.
+     * @return {Promise<boolean>} Resolves to true if injection was successful.
      */
-    injectSkeleton() {
+    async injectSkeleton(dataManager, userId) {
       // Check if container already exists
       if (document.getElementById(this.containerId)) {
         return true; // Preservation Logic: Do not destroy!
@@ -1487,8 +1535,131 @@
 
       const container = document.createElement('div');
       container.id = this.containerId;
-      container.style.flex = '1';
+      container.style.position = 'relative';
+      
+      // Fetch Per-User Settings from IndexedDB
+      const grassSettings = await dataManager.getGrassSettings(userId);
+      let savedWidth = grassSettings ? grassSettings.width : null;
+      let savedX = grassSettings ? grassSettings.xOffset : 0;
+      
+      // Constraints logic
+      const applyConstraints = () => {
+        const wrapperWidth = wrapper.offsetWidth;
+        const statsWidth = stats.offsetWidth;
+        const gap = 20;
+        const maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+
+        if (savedWidth) {
+          const numericWidth = parseFloat(savedWidth);
+          const clampedWidth = Math.max(300, Math.min(numericWidth, maxAvailableWidth));
+          container.style.flex = '0 0 auto';
+          container.style.width = `${clampedWidth}px`;
+          
+          // Also clamp X to ensure it doesn't overflow right
+          const clampedX = Math.max(0, Math.min(savedX, maxAvailableWidth - clampedWidth));
+          container.style.transform = `translateX(${clampedX}px)`;
+        } else {
+          container.style.flex = '1';
+          container.style.transform = `translateX(0px)`;
+        }
+      };
+
+      // Initial apply (might be 0 if not 100% rendered, so we use a small delay or observer)
+      setTimeout(applyConstraints, 0);
+      
       container.style.minWidth = '300px';
+
+      // Resize & Move Logic
+      const createHandle = (type, side) => {
+        const handle = document.createElement('div');
+        if (type === 'resize') {
+          handle.style.cssText = `
+            position: absolute;
+            top: 0;
+            ${side}: -5px;
+            width: 10px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 101;
+          `;
+        } else if (type === 'move') {
+          handle.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 30px;
+            height: 30px;
+            cursor: move;
+            z-index: 102;
+            background: rgba(136, 136, 136, 0.1);
+            border-bottom-right-radius: 8px;
+            border-top-left-radius: 8px;
+          `;
+        }
+
+        handle.onmousedown = (e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startWidth = container.offsetWidth;
+          const startXOffset = parseFloat(container.style.transform.replace(/translateX\(|px\)/g, '')) || 0;
+          
+          const onMouseMove = (mE) => {
+            const delta = mE.clientX - startX;
+            
+            // Constraints
+            const wrapperWidth = wrapper.offsetWidth;
+            const statsWidth = stats.offsetWidth;
+            const gap = 20;
+            const maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+
+            if (type === 'move') {
+              let newX = startXOffset + delta;
+              // Don't go left into stats, don't go right out of wrapper
+              newX = Math.max(0, Math.min(newX, maxAvailableWidth - startWidth));
+              container.style.transform = `translateX(${newX}px)`;
+            } else if (type === 'resize') {
+              if (side === 'right') {
+                const maxWidth = maxAvailableWidth - startXOffset;
+                const newWidth = Math.max(300, Math.min(startWidth + delta, maxWidth));
+                container.style.flex = '0 0 auto';
+                container.style.width = `${newWidth}px`;
+              } else if (side === 'left') {
+                // Expansion left is limited by XOffset reaching 0
+                const minDelta = -startXOffset;
+                const clampedDelta = Math.max(delta, minDelta);
+                let newWidth = Math.max(300, startWidth - clampedDelta);
+                
+                // If width hits 300, stop moving X
+                const finalDelta = startWidth - newWidth;
+                const newX = startXOffset + finalDelta;
+                
+                container.style.flex = '0 0 auto';
+                container.style.width = `${newWidth}px`;
+                container.style.transform = `translateX(${newX}px)`;
+              }
+            }
+          };
+          
+          const onMouseUp = () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            const finalX = parseFloat(container.style.transform.replace(/translateX\(|px\)/g, '')) || 0;
+            dataManager.saveGrassSettings(userId, {
+              width: container.style.width,
+              xOffset: finalX
+            });
+            // Trigger a re-render or layout update if needed
+            if (window.cal) {
+               // CalHeatmap might need a resize or just re-paint
+            }
+          };
+          
+          document.addEventListener('mousemove', onMouseMove);
+          document.addEventListener('mouseup', onMouseUp);
+        };
+        return handle;
+      };
+
       container.style.background = 'var(--card-background-color, #222)';
       container.style.padding = '15px';
       container.style.borderRadius = '8px';
@@ -1502,6 +1673,11 @@
         <div id="cal-heatmap" style="overflow-x:auto; padding-bottom:5px;"></div>
         <div id="grass-loading" style="text-align:center; padding:20px; color:#888;">Initializing...</div>
       `;
+
+      // Append handles AFTER innerHTML to prevent them from being overwritten
+      container.appendChild(createHandle('resize', 'left'));
+      container.appendChild(createHandle('resize', 'right'));
+      container.appendChild(createHandle('move'));
 
       // Apply Initial Theme
       const currentTheme = this.settingsManager.getTheme();
@@ -3042,20 +3218,17 @@
 
       const context = this.context;
 
-      // We pass the Shared DB instance to DataManager
       const dataManager = new DataManager(this.db);
       // We pass the Shared Settings instance to GraphRenderer
       const renderer = new GraphRenderer(this.settings, this.db);
 
-      const injected = renderer.injectSkeleton();
+      const userId = context.targetUser.id || context.targetUser.name;
+      const injected = await renderer.injectSkeleton(dataManager, userId);
       if (!injected) {
-
         return;
       }
 
       let currentYear = new Date().getFullYear();
-      // Load last mode for this user, duplicate 'uploads' if not found
-      const userId = context.targetUser.id || context.targetUser.name;
       let currentMetric = this.settings.getLastMode(userId) || 'uploads';
 
       const joinYear = context.targetUser.joinDate.getFullYear();
@@ -3450,7 +3623,7 @@
         this.updateHeaderStatus(headerHtml + subHtml, containerColor);
       };
 
-      // Start Animation
+        // Start Animation
       render();
       animInterval = setInterval(render, 500);
 
@@ -3504,7 +3677,6 @@
           btn.style.cursor = 'pointer';
         }
         if (shouldRender) {
-          this.renderDashboard();
           this.toggleModal(true);
         }
       } catch (e) {
@@ -3853,18 +4025,92 @@
       });
     }
 
+    async fetchDashboardData() {
+      const dataManager = new AnalyticsDataManager(this.db);
+      const user = this.context.targetUser;
+
+      // NSFW State for milestones
+      const nsfwKey = 'danbooru_grass_nsfw_enabled';
+      const isNsfwEnabled = localStorage.getItem(nsfwKey) === 'true';
+
+      const [
+        stats,
+        total,
+        summaryStats,
+        distributions,
+        topPosts,
+        promotions,
+        milestones1k,
+        scatterData
+      ] = await Promise.all([
+        dataManager.getSyncStats(user),
+        dataManager.getTotalPostCount(user),
+        dataManager.getSummaryStats(user),
+        Promise.all([
+          dataManager.getRatingDistribution(user),
+          dataManager.getCharacterDistribution(user),
+          dataManager.getCopyrightDistribution(user),
+          dataManager.getFavCopyrightDistribution(user),
+          dataManager.getBreastsDistribution(user),
+          dataManager.getHairLengthDistribution(user),
+          dataManager.getHairColorDistribution(user)
+        ]).then(([rating, char, copy, favCopy, breasts, hairL, hairC]) => ({
+          rating, character: char, copyright: copy, fav_copyright: favCopy, breasts, hair_length: hairL, hair_color: hairC
+        })),
+        dataManager.getTopPostsByType(user),
+        dataManager.getPromotionHistory(user),
+        dataManager.getMilestones(user, isNsfwEnabled, 1000),
+        dataManager.getScatterData(user)
+      ]);
+
+      return {
+        stats,
+        total,
+        summaryStats,
+        distributions,
+        topPosts,
+        promotions,
+        milestones1k,
+        scatterData
+      };
+    }
+
     /**
      * Renders the main dashboard content inside the modal.
      * Handles sync checks, header controls, and widget initialization.
      * @return {Promise<void>}
      */
     async renderDashboard() {
-      const content = document.getElementById(`${this.modalId}-content`);
-      if (!content) return;
+      if (this.isRendering) return;
+      this.isRendering = true;
 
-      content.innerHTML = ''; // Clear previous
+      try {
+        const content = document.getElementById(`${this.modalId}-content`);
+        if (!content) return;
 
-      // 1. Header (Flexbox with Refresh Button)
+        // Show Loading State Immediately
+        content.innerHTML = `
+          <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+             <div style="font-size:48px; margin-bottom:20px; animation: danbooru-spin 2s linear infinite;">⌛</div>
+             <div style="font-size:1.2em; font-weight:600;">Generating Report...</div>
+             <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
+             <style>
+                @keyframes danbooru-spin {
+                   from { transform: rotate(0deg); }
+                   to { transform: rotate(360deg); }
+                }
+             </style>
+          </div>
+        `;
+
+        // Pre-fetch all data!
+        const dashboardData = await this.fetchDashboardData();
+        const { stats, total, summaryStats, distributions, topPosts, promotions, milestones1k, scatterData } = dashboardData;
+        const { maxUploads, maxDate, firstUploadDate } = summaryStats;
+        const today = new Date();
+        const oneDay = 1000 * 60 * 60 * 24;
+
+        // 1. Header (Flexbox)
       // NSFW State
       const nsfwKey = 'danbooru_grass_nsfw_enabled';
       let isNsfwEnabled = localStorage.getItem(nsfwKey) === 'true';
@@ -3882,33 +4128,24 @@
            <h2 style="margin-top:0; color:#333; margin-bottom:4px;">Analytics Dashboard</h2>
            <p style="color:#555; margin:0;">Detailed statistics and history for ${this.context.targetUser.name}</p>
         </div>
-        <div id="analytics-header-controls" style="display:none; align-items:center;">
+         <div id="analytics-header-controls" style="display:none; align-items:center;">
            <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
               <input type="checkbox" id="user-analytics-nsfw-toggle" ${isNsfwEnabled ? 'checked' : ''} style="margin-right:6px;">
               Enable NSFW
            </label>
-           <button id="analytics-refresh-btn" title="Update Data (Partial Sync)" style="
-              background: none; 
-              border: 1px solid #e1e4e8; 
-              border-radius: 6px; 
-              padding: 6px 10px; 
-              cursor: pointer;
-              color: #555;
-              transition: all 0.2s;
-              margin-right: 8px;
-           ">🔄</button>
-           <button id="analytics-reset-btn" title="Full Reset (Delete All Data)" style="
-              background: none; 
-              border: 1px solid #e1e4e8; 
-              border-radius: 6px; 
-              padding: 6px 10px; 
-              cursor: pointer;
-              color: #d73a49;
-              transition: all 0.2s;
-           ">🗑️</button>
-        </div>
+            <button id="analytics-reset-btn" title="Full Reset (Delete All Data)" style="
+               background: none; 
+               border: 1px solid #e1e4e8; 
+               border-radius: 6px; 
+               padding: 6px 10px; 
+               cursor: pointer;
+               color: #d73a49;
+               transition: all 0.2s;
+            ">🗑️</button>
+         </div>
       `;
       content.appendChild(header);
+      const dBtn = header.querySelector('#analytics-reset-btn');
 
       // NSFW Logic
       setTimeout(() => {
@@ -3935,34 +4172,20 @@
             if (applyNsfwUpdate) applyNsfwUpdate();
           };
         }
-      }, 0);
 
-      // Refresh & Reset Handler
-      setTimeout(() => {
-        const rBtn = header.querySelector('#analytics-refresh-btn');
-        const dBtn = header.querySelector('#analytics-reset-btn');
 
-        if (rBtn) {
-          rBtn.onclick = async () => {
-            // Partial Sync (Update) via reusable method
-            await this.performPartialSync(rBtn);
-          };
-          rBtn.onmouseover = () => rBtn.style.background = '#f6f8fa';
-          rBtn.onmouseout = () => rBtn.style.background = 'none';
-        }
-
-        if (dBtn) {
-          dBtn.onclick = async () => {
-            if (confirm("⚠ FULL RESET WARNING ⚠\n\nThis will DELETE all local analytics data for this user and require a full re-sync.\n\nContinue?")) {
-              dBtn.innerHTML = '⌛';
-              await dataManager.clearUserData(this.context.targetUser);
-              alert("Data cleared.");
-              this.toggleModal(false);
-            }
-          };
-          dBtn.onmouseover = () => { dBtn.style.background = '#ffeef0'; dBtn.style.borderColor = '#d73a49'; };
-          dBtn.onmouseout = () => { dBtn.style.background = 'none'; dBtn.style.borderColor = '#e1e4e8'; };
-        }
+         if (dBtn) {
+           dBtn.onclick = async () => {
+             if (confirm("⚠ FULL RESET WARNING ⚠\n\nThis will DELETE all local analytics data for this user and require a full re-sync.\n\nContinue?")) {
+               dBtn.innerHTML = '⌛';
+               await this.dataManager.clearUserData(this.context.targetUser);
+               alert("Data cleared.");
+               this.toggleModal(false);
+             }
+           };
+           dBtn.onmouseover = () => { dBtn.style.background = '#ffeef0'; dBtn.style.borderColor = '#d73a49'; };
+           dBtn.onmouseout = () => { dBtn.style.background = 'none'; dBtn.style.borderColor = '#e1e4e8'; };
+         }
 
         // Stale Data Check (Last sync > 7 days)
         const lastSyncKey = `danbooru_grass_last_sync_${this.context.targetUser.id}`;
@@ -3973,10 +4196,10 @@
           const diffTime = Math.abs(now - lastSyncDate);
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-          if (diffDays > 7) {
+          if (diffDays > 7 && dBtn) {
             // Show Notification Bubble
             const bubble = document.createElement('div');
-            bubble.innerHTML = 'Full data refresh required';
+            bubble.innerHTML = 'Full data refresh recommended';
             bubble.style.cssText = `
                 position: absolute;
                 top: -45px;
@@ -4005,12 +4228,9 @@
               `;
             bubble.appendChild(arrow);
 
-            // Wrapper for relative positioning to the button container
-            // Note: The parent 'header' is flex, but we can append to the button container if we make it relative
-            // Or just append to 'content' (which is the modal body) and use absolute positioning logic.
-            // Actually, rBtn is inside the second div of header. Let's make that div relative.
-            rBtn.parentNode.style.position = 'relative';
-            rBtn.parentNode.appendChild(bubble);
+            // Anchor to Reset button parent
+            dBtn.parentNode.style.position = 'relative';
+            dBtn.parentNode.appendChild(bubble);
 
             // Auto remove after 10 seconds
             setTimeout(() => {
@@ -4018,45 +4238,13 @@
             }, 10000);
           }
         }
-      }, 0);
+       }, 0);
 
-      // Data Check
-      const dataManager = new AnalyticsDataManager(this.db);
-      const stats = await dataManager.getSyncStats(this.context.targetUser);
+      // Now clear content and append new data
+      content.innerHTML = '';
+      content.appendChild(header);
 
-      // Robust Total
-      const total = await dataManager.getTotalPostCount(this.context.targetUser);
-
-      // Condition: Show Dashboard if Synced OR if we have data and total is unknown (meaning we can't strictly block)
-      // Actually, if total is 0, we treat it as incomplete usually.
-      // But if count > 0 and total is 0, and we are here...
-      // Let's stick to strict gating: Need count >= total.
-      // User issue: "Resume Sync not working" was because total=0 and we blocked dashboard.
-      // Modified Logic: If total > 0, check count >= total.
-      // If total == 0, check if we have "enough" posts? 
-      // Or just show "Sync Required" but with a "Force View" option?
-      // No, "Resume Sync" should work even if total=0 (fixed in syncAllPosts).
-      // So if total=0, we show Sync Screen. User clicks Resume. Sync runs.
-      // Sync finishes (because no new items).
-      // Re-renders. total=0 again. Screen stays "Required".
-      // Loop!
-
-      // FIX: If total is 0, but Last Sync was very recent? 
-      // OR: Trust that `syncAllPosts` sets a flag?
-      // Alternative: If total is 0, we assume total = count (optimistic). -> Dashboard opens.
-      // But we need to know if we *tried* to sync?
-      // `stats.lastSync` tells us.
-      // If `lastSync` exists, we should probably allow viewing.
-      // Usually users want to view *history* even if incomplete.
-      // But we gated it.
-
-      // Updated Gating Logic: 
-      // If (count < total) AND (total > 0), show Sync Screen.
-      // If (total === 0), show Sync Screen ONLY IF count === 0.
-      // If we have some posts (count > 0) and total is unknown, SHOW DASHBOARD.
-      // This prevents the infinite loop for failed profile fetches.
-
-      // Allow a small tolerance for deleted posts/API caching drift (e.g. 10 posts)
+      // Condition: Show Dashboard if Synced OR if we have data and total is unknown
       const tolerance = 10;
       const needsSync = (total > 0 && stats.count < total - tolerance) || (total === 0 && stats.count === 0);
 
@@ -4222,13 +4410,6 @@
             </div>
          `;
 
-      // Stats Calculations
-      const summaryStats = await dataManager.getSummaryStats(this.context.targetUser);
-      const { maxUploads, maxDate, firstUploadDate } = summaryStats;
-
-      const today = new Date();
-      const oneDay = 1000 * 60 * 60 * 24;
-
       // Calculations for Card 1 (Uploads)
       let avgUploads = 0;
       let daysSinceFirst = 0;
@@ -4282,31 +4463,40 @@
       topStatsRow.style.gap = '15px';
       topStatsRow.style.marginBottom = '35px'; // Increased Spacing
 
-      // 1. Pie Chart Placeholder
       const pieContainer = document.createElement('div');
       pieContainer.style.background = '#fff';
       pieContainer.style.border = '1px solid #e1e4e8';
       pieContainer.style.borderRadius = '8px';
       pieContainer.style.padding = '15px';
-      pieContainer.style.minHeight = '150px';
       pieContainer.style.display = 'flex';
-      pieContainer.style.alignItems = 'center';
-      pieContainer.style.justifyContent = 'center';
+      pieContainer.style.flexDirection = 'column';
       pieContainer.style.color = '#888';
-      pieContainer.innerHTML = '<div>⌛ Loading Stats...</div>';
+
+      const topPostContainer = document.createElement('div');
+      topPostContainer.style.background = '#fff';
+      topPostContainer.style.border = '1px solid #e1e4e8';
+      topPostContainer.style.borderRadius = '8px';
+      topPostContainer.style.padding = '15px';
+      topPostContainer.style.display = 'flex';
+      topPostContainer.style.flexDirection = 'column';
 
       // --- PIE CHART WIDGET REFRACTOR ---
 
-      // Async Data Store for Pie Charts
-      const pieData = {
-        rating: null,
-        character: null,
-        fav_copyright: null,
-        breasts: null,
-        hair_length: null,
-        hair_color: null,
-        copyright: null // Keep copyright last as it is default but handled specially
-      };
+      // Data Store for Pie Charts (Initialized with pre-fetched data)
+      const pieData = { ...distributions };
+
+      // Pre-process special distributions
+      if (pieData.breasts) {
+        const data = pieData.breasts;
+        const total = data.reduce((acc, c) => acc + c.count, 0);
+        pieData.breasts = data.map(d => ({
+          ...d,
+          frequency: total > 0 ? d.count / total : 0,
+          value: total > 0 ? d.count / total : 0,
+          label: d.name,
+          details: { ...d, thumb: null }
+        }));
+      }
 
       // Render Loop State based on RAF
       let renderPending = false;
@@ -4897,32 +5087,6 @@
            </div>
       `;
 
-      // Trigger Data Fetch & Render
-      // This was missing previously, causing empty charts or 'Loading...' forever if not cached/called elsewhere.
-      Promise.all([
-        dataManager.getRatingDistribution(this.context.targetUser),
-        dataManager.getCharacterDistribution(this.context.targetUser),
-        dataManager.getCopyrightDistribution(this.context.targetUser),
-        dataManager.getFavCopyrightDistribution(this.context.targetUser),
-        dataManager.getBreastsDistribution(this.context.targetUser),
-        dataManager.getHairLengthDistribution(this.context.targetUser),
-        dataManager.getHairColorDistribution(this.context.targetUser)
-      ]).then(([rating, char, copy, favCopy, breasts, hairL, hairC]) => {
-        pieData.rating = rating;
-        pieData.character = char;
-        pieData.copyright = copy;
-        pieData.fav_copyright = favCopy;
-        pieData.breasts = breasts;
-        pieData.hair_length = hairL;
-        pieData.hair_color = hairC;
-
-        // Render initial view
-        renderPieContent();
-      }).catch(err => {
-        console.error('[Danbooru Grass] Failed to load Pie Stats:', err);
-        const container = pieContainer.querySelector('.pie-content');
-        if (container) container.innerHTML = '<div style="color:red; font-size:0.8em;">Error loading stats.</div>';
-      });
 
       // Lazy Loading for Pie Chart Tabs
       const loadTab = async (tabName) => {
@@ -4940,15 +5104,15 @@
         try {
           let data = [];
           if (tabName === 'rating') {
-            data = await dataManager.getRatingDistribution(this.context.targetUser);
+            data = await this.dataManager.getRatingDistribution(this.context.targetUser);
           } else if (tabName === 'character') {
-            data = await dataManager.getCharacterDistribution(this.context.targetUser);
+            data = await this.dataManager.getCharacterDistribution(this.context.targetUser);
           } else if (tabName === 'copyright') {
-            data = await dataManager.getCopyrightDistribution(this.context.targetUser);
+            data = await this.dataManager.getCopyrightDistribution(this.context.targetUser);
           } else if (tabName === 'fav_copyright') {
-            data = await dataManager.getFavCopyrightDistribution(this.context.targetUser);
+            data = await this.dataManager.getFavCopyrightDistribution(this.context.targetUser);
           } else if (tabName === 'breasts') {
-            data = await dataManager.getBreastsDistribution(this.context.targetUser);
+            data = await this.dataManager.getBreastsDistribution(this.context.targetUser);
             // Ensure 'value' property exists for pie chart logic if not present
             // getBreastsReturns {name, count}
             // Pie logic uses 'value' (frequency) or calculates it
@@ -4988,29 +5152,18 @@
         }
       });
 
-      topStatsRow.appendChild(pieContainer);
 
       // Initial Load (Default Tab: Copyright)
       updatePieTabs();
       loadTab(currentPieTab);
 
 
-      // 2. Top Post Widget
-      const topPostContainer = document.createElement('div');
-      topPostContainer.style.background = '#fff';
-      topPostContainer.style.border = '1px solid #e1e4e8';
-      topPostContainer.style.borderRadius = '8px';
       topPostContainer.style.padding = '15px';
-      topPostContainer.innerHTML = 'Loading Top Post...';
 
-      topStatsRow.appendChild(topPostContainer);
-      dashboardDiv.appendChild(topStatsRow);
-
-      // Async Load Top Post Data (Parallel with Pie Chart)
-      // Stores fetched data for instant switching
+      // Use pre-fetched top posts
       const topPostData = {
-        sfw: null,
-        nsfw: null
+        sfw: topPosts.sfw,
+        nsfw: topPosts.nsfw
       };
 
       let currentTab = 'sfw'; // Default
@@ -5101,15 +5254,11 @@
         }
       });
 
-      // Initial Tab State
-      updateTabs();
+      topStatsRow.appendChild(pieContainer);
+      topStatsRow.appendChild(topPostContainer);
+      dashboardDiv.appendChild(topStatsRow);
 
-      // Fetch Data
-      dataManager.getTopPostsByType(this.context.targetUser).then(result => {
-        topPostData.sfw = result.sfw;
-        topPostData.nsfw = result.nsfw;
-        renderTopPostContent();
-      });
+      renderTopPostContent();
       content.appendChild(dashboardDiv);
 
       // 3. Milestones Widget
@@ -5123,11 +5272,7 @@
        * Renders the Milestones widget.
        */
       const renderMilestones = async () => {
-        // Clear previous content but keep structure if possible? 
-        // Actually, just rebuild.
-        milestonesDiv.innerHTML = '<div style="color:#888; padding:20px 0;">Loading milestones...</div>';
-
-        const milestones = await dataManager.getMilestones(this.context.targetUser, isNsfwEnabled, currentMilestoneStep);
+        const milestones = await (new AnalyticsDataManager(this.db)).getMilestones(this.context.targetUser, isNsfwEnabled, currentMilestoneStep);
 
         let msHtml = '<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:8px; margin-bottom:10px;">';
         msHtml += '<h3 style="color:#333; margin:0;">🏆 Milestones</h3>';
@@ -5252,16 +5397,12 @@
       await renderMilestones();
 
       // 4. Monthly Activity Chart
-      // 4. Monthly Activity Chart
-      // Fetch promotions first to extend graph range if needed
-      const promotions = await dataManager.getPromotionHistory(this.context.targetUser);
-
       let minDate = null;
       if (promotions.length > 0) {
         minDate = promotions[0].date;
       }
 
-      const monthly = await dataManager.getMonthlyStats(this.context.targetUser, minDate);
+      const monthly = await (new AnalyticsDataManager(this.db)).getMonthlyStats(this.context.targetUser, minDate);
       if (monthly.length > 0) {
         const chartDiv = document.createElement('div');
         chartDiv.style.marginTop = '24px';
@@ -5415,8 +5556,7 @@
           });
         }
 
-        // 5. Milestone Stars
-        const milestones1k = await dataManager.getMilestones(this.context.targetUser, isNsfwEnabled, 1000);
+        // 5. Milestone Stars (Pre-fetched)
 
         // Map milestones to months
         monthly.forEach((mo, idx) => {
@@ -5492,9 +5632,7 @@
       }
 
       // ========================================================
-      // 4. Scatter Plot Widget (High Performance)
-      // ========================================================
-      const scatterData = await dataManager.getScatterData(this.context.targetUser);
+      // 4. Scatter Plot Widget (High Performance) (Pre-fetched)
 
       if (scatterData.length > 0) {
         // Wrapper for Header + Widget
@@ -6301,8 +6439,11 @@
 
       // Update header status (ensure it's green if ready)
       this.updateHeaderStatus();
+    } finally {
+      this.isRendering = false;
     }
   }
+}
 
   /**
    * AnalyticsDataManager: Handles heavy data fetching for full history.
