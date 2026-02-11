@@ -15,6 +15,10 @@ The script consists of three main components:
 <img width="706" height="500" alt="UserAnalyticsApp 1" src="https://github.com/user-attachments/assets/30116ec5-497a-471e-bff5-9fb9a48baa41" />
 <img width="706" height="525" alt="UserAnalyticsApp 2" src="https://github.com/user-attachments/assets/9ce42888-1f12-4b15-90bf-be2809d1b5b5" />
 
+#### TagAnalyticsApp
+<img width="608" height="685" alt="TagAnalyticsApp 1" src="https://github.com/user-attachments/assets/981b57c3-bb01-423b-927c-8a5f5a17d55b" />
+<img width="564" height="551" alt="TagAnalyticsApp 2" src="https://github.com/user-attachments/assets/a66065f8-87cc-4d3e-9772-953ee037871e" />
+
 ## Features (v6.0)
 
 * **Tag Analytics (`TagAnalyticsApp`)**: Full analytics support for any Tag, Artist, Copyright, or Character. Analyze historical trends, rankings, and milestones for specific tags.
