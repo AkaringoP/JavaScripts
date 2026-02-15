@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.1
+// @version      6.2
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -8252,9 +8252,30 @@
       } catch (e) {
         // Fallback to default
       }
-      return 7;
+        return 7;
     }
 
+    /**
+     * Gets the sync threshold (new posts) for triggering partial sync.
+     * @return {number} Number of new posts (default: 50).
+     */
+    getSyncThreshold() {
+      try {
+        const val = localStorage.getItem('danbooru_tag_analytics_sync_threshold');
+        if (val) return parseInt(val, 10);
+      } catch (e) {
+        // Fallback
+      }
+      return 50;
+    }
+
+    /**
+     * Sets the sync threshold.
+     * @param {number} count The threshold.
+     */
+    setSyncThreshold(count) {
+      localStorage.setItem('danbooru_tag_analytics_sync_threshold', count.toString());
+    }
     /**
      * Sets the retention period for tag analytics caches in localStorage.
      * @param {number} days Number of days to keep cache.
@@ -8284,8 +8305,22 @@
 
     /**
      * Main execution method for Tag Analytics.
-     * Orchestrates data fetching, caching, and UI rendering.
-     * @return {Promise<void>}
+     * Orchestrates the entire process of data fetching, caching, and UI rendering.
+     *
+     * Flow:
+     * 1. Checks and cleans up old cache (retention policy).
+     * 2. Loads data from IndexedDB cache.
+     * 3. Determines if a Partial Sync is needed based on:
+     *    - Time elapsed since last update (> 24h).
+     *    - Significant increase in post count.
+     * 4. If Sync is needed or Cache is missing:
+     *    - Fetches initial stats (first 100 posts, metadata).
+     *    - handling for small tags (<= 100 posts) vs large tags.
+     *    - Parallel fetching of volatile data (status, trending, etc.).
+     *    - History backfilling for large tags.
+     * 5. Updates the UI and saves the fresh data to cache.
+     *
+     * @return {Promise<void>} Resolves when the analytics process is complete.
      */
     async run() {
       const tagName = this.tagName;
@@ -8305,48 +8340,74 @@
       let baseData = null;
 
       if (cachedData) {
-
-
-        // Fetch Volatile Data (Always update these)
+        // Determine if Partial Sync is needed
+        // Conditions: 
+        // 1. Time-based (Retention period expired? No, retention is for DELETION. Sync is for Update.)
+        //    Actually, previous logic was: if record.updatedAt > 24h -> Partial Sync.
+        // 2. Count-based: New posts >= Threshold
+        
+        const age = Date.now() - cachedData.updatedAt;
+        const isTimeExpired = age >= 24 * 60 * 60 * 1000;
+        
+        let postCountDiff = 0;
         try {
-          const [latestPost, trendingPost, trendingPostNSFW, newPostCount] = await Promise.all([
-            this.fetchLatestPost(tagName),
-            this.fetchTrendingPost(tagName, false),
-            this.fetchTrendingPost(tagName, true),
-            this.fetchNewPostCount(tagName)
-          ]);
-
-          cachedData.latestPost = latestPost;
-          cachedData.trendingPost = trendingPost;
-          cachedData.trendingPostNSFW = trendingPostNSFW;
-          cachedData.newPostCount = newPostCount;
-
-          // Update Cache with fresh volatile data
-          this.saveToCache(cachedData);
-        } catch (e) {
-          console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
-        }
-
-        cachedData._isCached = true;
-        this.injectAnalyticsButton(cachedData);
-        return;
-      }
-
-      // Check for stale cache for Delta
-      if (this.db && this.db.tag_analytics) {
-        try {
-          const record = await this.db.tag_analytics.get(tagName);
-          if (record) {
-            const age = Date.now() - record.updatedAt;
-            if (age >= 24 * 60 * 60 * 1000) {
-
-              baseData = record.data;
-              runDelta = true;
+            const currentTagData = await this.fetchTagData(tagName);
+            if (currentTagData) {
+                const currentTotal = currentTagData.post_count;
+                const cachedTotal = cachedData.post_count || 0;
+                postCountDiff = Math.max(0, currentTotal - cachedTotal);
             }
-          }
-        } catch (e) { console.warn("DB Read Error", e); }
+        } catch (e) { console.warn("Failed to check post count diff", e); }
+
+        const threshold = this.getSyncThreshold();
+        const isCountThresholdMet = postCountDiff >= threshold;
+
+        if (isTimeExpired || isCountThresholdMet) {
+           console.log(`[TagAnalyticsApp] Partial Sync Triggered. TimeExpired=${isTimeExpired} (${(age/3600000).toFixed(1)}h), CountThreshold=${isCountThresholdMet} (${postCountDiff} >= ${threshold})`);
+           baseData = cachedData;
+           runDelta = true;
+        } else {
+           // Use Cache
+           cachedData._isCached = true;
+           // Update volatile anyway? The block above ALREADY updated volatile data in cache object but didn't save it if we return early?
+           // Wait, the block above (lines 8331-8347 in original) logic was:
+           // "If cachedData exists -> Update Volatile -> Save -> Return".
+           // This prevents Delta Sync from ever running if we just return!
+           // The previous logic (lines 8356-) checked "stale cache for Delta" strictly from DB.
+           // But here we loaded from Cache first.
+           
+           // Refactored flow:
+           // 1. Load Cache.
+           // 2. Check Sync Criteria (Time or Count).
+           // 3. If Sync needed -> Set runDelta=true, baseData=cache. Proceed to fetch loop.
+           // 4. If Sync NOT needed -> Update Volatile -> Save -> Return.
+           
+           try {
+              // Fetch 24h count for UI
+              const newPostCount24h = await this.fetchNewPostCount(tagName);
+
+              const [latestPost, trendingPost, trendingPostNSFW] = await Promise.all([
+                this.fetchLatestPost(tagName),
+                this.fetchTrendingPost(tagName, false),
+                this.fetchTrendingPost(tagName, true)
+              ]);
+
+              cachedData.latestPost = latestPost;
+              cachedData.trendingPost = trendingPost;
+              cachedData.trendingPostNSFW = trendingPostNSFW;
+              cachedData.newPostCount = newPostCount24h;
+
+              this.saveToCache(cachedData);
+            } catch (e) {
+              console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
+            }
+
+            this.injectAnalyticsButton(cachedData);
+            return;
+        }
       }
 
+      // If we are here, either No Cache OR Partial Sync triggered.
 
 
       // 1. Fetch Initial Stats (Top 100, Metadata, First/Last Date)
@@ -8421,12 +8482,13 @@
 
         // 5. Parallel Data Fetching (Volatile & Status)
         // Note: backfillUploaderNames is CRITICAL for showing names instead of IDs
-        const [statusCounts, latestPost, trendingPost, trendingPostNSFW, newPostCount] = await Promise.all([
+        const [statusCounts, latestPost, trendingPost, trendingPostNSFW, newPostCount, commentaryCounts] = await Promise.all([
           this.fetchStatusCounts(tagName),
           this.fetchLatestPost(tagName),
           this.fetchTrendingPost(tagName, false),
           this.fetchTrendingPost(tagName, true),
           this.fetchNewPostCount(tagName),
+          this.fetchCommentaryCounts(tagName),
           this.backfillUploaderNames(initialPosts) // Ensure ALL posts have names backfilled
         ]);
 
@@ -8436,6 +8498,7 @@
         meta.hundredthPost = hundredthPost;
         meta.timeToHundred = timeToHundred;
         meta.statusCounts = statusCounts;
+        meta.commentaryCounts = commentaryCounts;
         meta.ratingCounts = localStats.ratingCounts;
         meta.precalculatedMilestones = milestones;
         meta.latestPost = latestPost;
@@ -8576,7 +8639,8 @@
         { id: 'trending', label: 'Finding trending posts...', promise: trendingPromise },
         { id: 'trending_nsfw', label: 'Finding trending NSFW...', promise: trendingNsfwPromise },
         { id: 'related_copy', label: 'Analyzing related copyrights...', promise: copyrightPromise },
-        { id: 'related_char', label: 'Analyzing related characters...', promise: characterPromise }
+        { id: 'related_char', label: 'Analyzing related characters...', promise: characterPromise },
+        { id: 'commentary', label: 'Analyzing commentary status...', promise: measure('Commentary Status', this.fetchCommentaryCounts(tagName)) }
       ];
 
       // --- [PHASE 2] HEAVY STATS DEFINITION (But delayed execution logic handled by promise creation timing) ---
@@ -8627,7 +8691,8 @@
         trendingPost,
         trendingPostNSFW,
         copyrightCounts,
-        characterCounts
+        characterCounts,
+        commentaryCounts
       ] = quickResults;
 
       console.log(`[TagAnalytics] [Phase 1] Finished Quick Stats in ${(performance.now() - tGroup1Start).toFixed(2)}ms`);
@@ -8686,7 +8751,10 @@
           }
         }
 
-        if (forwardTotal < referenceTotal) {
+
+        console.log(`[TagAnalyticsApp] Reverse Scan Check: ForwardTotal=${forwardTotal}, ReferenceTotal=${referenceTotal}, NeedScan=${forwardTotal < referenceTotal}`);
+
+        if (forwardTotal < referenceTotal && !runDelta) { // Disable Reverse Scan on Partial Sync
           this.injectAnalyticsButton(null, null, "Scanning history backwards...");
           const backwardResult = await this.fetchHistoryBackwards(tagName, startDate, referenceTotal, forwardTotal);
 
@@ -8698,7 +8766,11 @@
             }));
             const fullHistory = [...backwardResult, ...adjustedForward];
 
-            const realInitialStats = await this.fetchInitialStats(tagName, null, true);
+            // If reverse scan happened, we likely found an earlier start date than metadata suggested.
+            // We should use that to find the TRUE first post efficiently without scanning from 2005.
+            const earliestDateFound = backwardResult[0].date;
+            
+            const realInitialStats = await this.fetchInitialStats(tagName, null, true, earliestDateFound);
             if (realInitialStats) {
               firstPost = realInitialStats.firstPost;
               hundredthPost = realInitialStats.hundredthPost;
@@ -8790,6 +8862,7 @@
       meta.trendingPostNSFW = trendingPostNSFW;
       meta.copyrightCounts = copyrightCounts;
       meta.characterCounts = characterCounts;
+      meta.commentaryCounts = commentaryCounts;
       meta.historyData = historyData;
       meta.precalculatedMilestones = milestones;
       meta.firstPost = firstPost; // Ensure this is passed
@@ -8812,7 +8885,18 @@
       this.injectAnalyticsButton(meta, 100, "");
       this.saveToCache(meta); // Save Full Tag Data
     }
-    async fetchInitialStats(tagName, cachedData = null, absoluteOldest = false) {
+    /**
+     * Fetches initialization statistics for a tag (First post, 100th post, Total count).
+     * This defines the scope of data to fetch.
+     *
+     * @param {string} tagName - The tag to analyze.
+     * @param {?Object} cachedData - Existing cached data to serve as a base for delta updates.
+     * @param {boolean} absoluteOldest - If true, forces a scan from 2005-01-01 (ignoring cache/hints).
+     * @param {?string} foundEarliestDate - An optimized starting date (YYYY-MM-DD) found via reverse scan.
+     *                                      Used to narrow the search range for recent tags.
+     * @return {Promise<Object|null>} - Initial stats object or null on failure.
+     */
+    async fetchInitialStats(tagName, cachedData = null, absoluteOldest = false, foundEarliestDate = null) {
 
       // Get Tag Metadata first to know count and category
       const tagData = await this.fetchTagData(tagName); // Existing helper
@@ -8837,16 +8921,25 @@
 
       // Extract created_at from tagData
       // If absoluteOldest is true, we ignore created_at to find history hidden by renames
-      const tagCreatedAt = absoluteOldest ? "2005-01-01" : tagData.created_at;
+      // If foundEarliestDate is provided (from Reverse Scan), use it as a strong hint!
+      
+      let tagCreatedAt = tagData.created_at;
+      if (foundEarliestDate) {
+         tagCreatedAt = foundEarliestDate;
+      } else if (absoluteOldest) {
+         tagCreatedAt = "2005-01-01";
+      }
 
       let posts = [];
-      const params = new URLSearchParams({
+      // Use page=a0 (After ID 0) to get oldest posts efficiently.
+      // Use date filter to avoid full table scan on large tags that started recently.
+      let params = new URLSearchParams({
         tags: `${tagName} date:>=${tagCreatedAt}`,
         limit: limit,
         page: 'a0',
         only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
       });
-      const url = `/posts.json?${params.toString()}`;
+      let url = `/posts.json?${params.toString()}`;
 
       try {
 
@@ -8857,11 +8950,14 @@
           posts = [];
         }
 
-        if (posts && posts.length > 0) {
-          // page=a0 returns the first 100 posts (ID 1-100), but the array itself 
-          // is often returned in descending order [ID 100, ..., ID 1].
-          // We reverse it so posts[0] is always the absolute oldest in the set.
-          posts.reverse();
+        if (posts && posts.length > 1) {
+          // Check order. We want Ascending (Oldest First).
+          const firstId = posts[0].id;
+          const lastId = posts[posts.length - 1].id;
+          if (firstId > lastId) {
+             // It came in Descending. Reverse it.
+             posts.reverse();
+          }
         }
 
         // Fix for Small Tags: If optimization failed to get all posts (due to renames/merges),
@@ -8912,6 +9008,47 @@
 
     }
 
+    /**
+     * Fetches the count of new posts within the last 24 hours.
+     * @param {string} tagName - The tag to analyze.
+     * @return {Promise<number>} - Count of posts created in the last 24 hours.
+     */
+    async fetchNewPostCount(tagName) {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+date:>=${yesterday}`;
+      return this.rateLimiter.fetch(url).then(r => r.json()).then(d => d.counts.posts).catch(() => 0);
+    }
+
+    /**
+     * Fetches commentary-related counts for a tag (Total, Translated, Requested).
+     * @param {string} tagName - The tag to analyze.
+     * @return {Promise<Object>} - Object containing counts for 'total', 'translated', and 'requested'.
+     */
+    async fetchCommentaryCounts(tagName) {
+      const queries = {
+        total: `tags=${encodeURIComponent(tagName)}+has:commentary`,
+        translated: `tags=${encodeURIComponent(tagName)}+has:commentary+commentary`,
+        requested: `tags=${encodeURIComponent(tagName)}+has:commentary+commentary_request`
+      };
+
+      const results = {};
+      await Promise.all(Object.entries(queries).map(async ([key, query]) => {
+        const url = `/counts/posts.json?${query}`;
+        try {
+          const data = await this.rateLimiter.fetch(url).then(r => r.json());
+          results[key] = (data.counts && typeof data.counts === 'object') ? (data.counts.posts || 0) : (data.counts || 0);
+        } catch (e) {
+          console.warn(`[TagAnalyticsApp] Failed to fetch commentary count for ${key}`, e);
+          results[key] = 0;
+        }
+      }));
+      return results;
+    }
+    /**
+     * Fetches post counts for each status (active, deleted, etc.).
+     * @param {string} tagName - The tag to analyze.
+     * @return {Promise<Object>} - Map of status strings to counts.
+     */
     async fetchStatusCounts(tagName) {
 
       const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
@@ -9062,6 +9199,7 @@
     }
 
     async fetchHistoryBackwards(tagName, forwardStartDate, targetTotal, currentForwardTotal) {
+      console.log(`[TagAnalyticsApp] Starting Reverse Scan. Tag: ${tagName}, Start: ${forwardStartDate}, Target: ${targetTotal}, Current: ${currentForwardTotal}`);
       const history = [];
       let totalSum = currentForwardTotal;
       let currentMonth = new Date(forwardStartDate);
@@ -9099,6 +9237,7 @@
               cumulative: 0 // Will fix in post-process
             });
             totalSum += count;
+            console.log(`[TagAnalyticsApp] Reverse Scan Hit: ${year}-${month} => ${count} posts. Total: ${totalSum}/${targetTotal}`);
 
           }
         } catch (e) {
@@ -9107,6 +9246,7 @@
 
         currentMonth.setMonth(currentMonth.getMonth() - 1);
       }
+      console.log(`[TagAnalyticsApp] Reverse Scan Completed. Total: ${totalSum}/${targetTotal}, Months Checked: ${history.length} (hits)`);
 
       // Calculate cumulative counts for backward data
       let runningSum = 0;
@@ -9123,10 +9263,15 @@
 
 
 
-      // Re-fetch the last month to ensure it's up to date (it might have been partial)
-      // And fetch everything after.
-      // Actually, we can just use fetchMonthlyCounts logic but start from lastDate!
-      return this.fetchMonthlyCounts(tagName, lastDate);
+      // Delta Sync: Check last 2 months only
+      const now = new Date();
+      const twoMonthsAgo = new Date(now);
+      twoMonthsAgo.setMonth(now.getMonth() - 2);
+      twoMonthsAgo.setDate(1); // Start from 1st of month
+      
+      const effectiveStart = (lastDate && lastDate > twoMonthsAgo) ? twoMonthsAgo : (lastDate || startDate);
+
+      return this.fetchMonthlyCounts(tagName, effectiveStart);
     }
 
     mergeHistory(oldHistory, newHistory) {
@@ -9137,18 +9282,31 @@
       // Actually, standard is array of objects { date: Date, count: number, cumulative: number }
       // newHistory starts from lastDate.
 
-      // Remove overlapping months from oldHistory (specifically the last one if we re-fetched it)
+      // Remove overlapping months from oldHistory
+      // We keep old history UP TO the month before newStart.
+      // newStart is likely YYYY-MM-DD. We want to avoid duplication.
+      // fetchMonthlyCounts returns dates as YYYY-MM-01.
+      
       const newStart = newHistory[0].date;
       const filteredOld = oldHistory.filter(h => h.date < newStart);
 
       // Concatenate
       let merged = filteredOld.concat(newHistory);
 
-      // Recalculate Cumulative
-      let cumulative = 0;
-      merged = merged.map(h => {
-        cumulative += h.count;
-        return { ...h, cumulative };
+      // Recalculate Cumulative strictly from start
+      // Note: This assumes the first item in merged has correct 'count' but 'cumulative' might need offset if we cropped pure start.
+      // But we are appending to a base.
+      
+      // If we cut the tail of oldHistory, the last item of filteredOld has a cumulative count.
+      // We can just iterate and update.
+      
+      let runningSum = 0;
+      merged = merged.map((h, index) => {
+        // We can't just sum 'count' unless we are sure we have the WHOLE history from 2005.
+        // partial sync means we have (Old - Tail) + New.
+        // So valid history.
+        runningSum += h.count;
+        return { ...h, cumulative: runningSum };
       });
 
       return merged;
@@ -9699,28 +9857,65 @@
 
 
     /**
-     * Injects the settings gear icon into the UI.
+     * Injects header controls (Settings, Reset) into the UI.
      * @param {!Element} container The container element.
      */
-    injectSettingsButton(container) {
-      if (document.getElementById("tag-analytics-settings-btn")) return;
+    injectHeaderControls(container) {
+      if (document.getElementById("tag-analytics-controls-container")) return;
 
-      const btn = document.createElement("span");
-      btn.id = "tag-analytics-settings-btn";
-      btn.innerHTML = '⚙️';
-      btn.style.cursor = 'pointer';
-      btn.style.marginLeft = '6px';
-      btn.style.fontSize = '12px';
-      btn.style.verticalAlign = 'middle';
-      btn.title = 'Configure Data Retention';
+      const wrapper = document.createElement("span");
+      wrapper.id = "tag-analytics-controls-container";
+      container.appendChild(wrapper);
 
-      btn.onclick = (e) => {
+      // 1. Settings Button (Gear)
+      const settingsBtn = document.createElement("span");
+      settingsBtn.id = "tag-analytics-settings-btn";
+      settingsBtn.innerHTML = '⚙️';
+      settingsBtn.style.cursor = 'pointer';
+      settingsBtn.style.marginLeft = '6px';
+      settingsBtn.style.fontSize = '12px';
+      settingsBtn.style.verticalAlign = 'middle';
+      settingsBtn.title = 'Configure Data Retention';
+
+      settingsBtn.onclick = (e) => {
         e.stopPropagation();
         e.preventDefault();
-        this.showSettingsPopover(btn);
+        this.showSettingsPopover(settingsBtn);
       };
 
-      container.appendChild(btn);
+      wrapper.appendChild(settingsBtn);
+
+      // 2. Reset Button (Trash)
+      const resetBtn = document.createElement("span");
+      resetBtn.id = "tag-analytics-reset-btn";
+      resetBtn.innerHTML = '🗑️';
+      resetBtn.style.cursor = 'pointer';
+      resetBtn.style.marginLeft = '8px';
+      resetBtn.style.fontSize = '12px';
+      resetBtn.style.verticalAlign = 'middle';
+      resetBtn.title = 'Reset Data & Re-fetch';
+
+      resetBtn.onclick = async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (confirm(`Are you sure you want to reset the analytics data for "${this.tagName}"?\nThis will clear the local cache and fetch fresh data.`)) {
+          if (this.db && this.db.tag_analytics) {
+            try {
+              await this.db.tag_analytics.delete(this.tagName);
+              console.log(`[TagAnalyticsApp] Deleted cache for ${this.tagName}`);
+              // Close existing modal to prevent conflicts or stale state
+              this.toggleModal(false);
+              // Re-run
+              this.run();
+            } catch (err) {
+              console.error('[TagAnalyticsApp] Failed to delete cache:', err);
+              alert('Failed to reset data. Check console for details.');
+            }
+          }
+        }
+      };
+
+      wrapper.appendChild(resetBtn);
     }
 
     /**
@@ -9733,6 +9928,7 @@
       if (existing) existing.remove();
 
       const currentDays = this.getRetentionDays();
+      const currentThreshold = this.getSyncThreshold();
 
       const popover = document.createElement('div');
       popover.id = 'tag-analytics-settings-popover';
@@ -9745,7 +9941,7 @@
       popover.style.boxShadow = '0 2px 10px rgba(0,0,0,0.1)';
       popover.style.fontSize = '11px';
       popover.style.color = '#333';
-      popover.style.width = '240px';
+      popover.style.width = '260px';
 
       // Position logic
       const rect = target.getBoundingClientRect();
@@ -9756,15 +9952,24 @@
       popover.style.left = `${rect.right + scrollLeft + 10}px`;
 
       popover.innerHTML = `
-        <div style="margin-bottom:8px; line-height:1.4;">
-          <strong>Data Retention Period</strong><br>
-          Records older than this will be deleted automatically.
-        </div>
-        <div style="display:flex; align-items:center; justify-content:space-between;">
-           <input type="number" id="retention-days-input" value="${currentDays}" min="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
-           <button id="retention-save-btn" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
-        </div>
-      `;
+    <div style="margin-bottom:8px; line-height:1.4;">
+      <strong>Data Retention Period</strong><br>
+      Records older than this (days) will be deleted.
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+       <input type="number" id="retention-days-input" value="${currentDays}" min="1" step="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
+       <span>days</span>
+    </div>
+
+    <div style="margin-bottom:8px; line-height:1.4; border-top:1px solid #eee; padding-top:8px;">
+      <strong>Sync Threshold</strong><br>
+      Run partial sync if new posts exceed this count.
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between;">
+       <input type="number" id="sync-threshold-input" value="${currentThreshold}" min="1" step="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
+       <button id="retention-save-btn" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
+    </div>
+  `;
 
       document.body.appendChild(popover);
 
@@ -9780,16 +9985,22 @@
       // Save Handler
       const saveBtn = popover.querySelector('#retention-save-btn');
       saveBtn.onclick = () => {
-        const input = popover.querySelector('#retention-days-input');
-        const days = parseInt(input.value, 10);
-        if (!isNaN(days) && days > 0) {
+        const daysInput = popover.querySelector('#retention-days-input');
+        const thresholdInput = popover.querySelector('#sync-threshold-input');
+
+        const days = parseInt(daysInput.value, 10);
+        const threshold = parseInt(thresholdInput.value, 10);
+
+        if (!isNaN(days) && days > 0 && !isNaN(threshold) && threshold > 0) {
           this.setRetentionDays(days);
+          this.setSyncThreshold(threshold);
+
           popover.remove();
           document.removeEventListener('click', closeHandler);
-          alert(`Retention period set to ${days} days.\nCleaning up old data now...`);
+          alert(`Settings Saved:\n- Retention: ${days} days\n- Sync Threshold: ${threshold} posts\n\nCleaning up old data now...`);
           this.cleanupOldCache(); // Run cleanup immediately
         } else {
-          alert('Please enter a valid number.');
+          alert('Please enter valid positive numbers.');
         }
       };
     }
@@ -10021,7 +10232,17 @@
 
     /**
      * Renders the full analytics dashboard into the modal.
-     * @param {!Object} tagData The complete analytics data.
+     *
+     * Layout Overview:
+     * - Header: Tag name, category, created/updated dates, NSFW toggle.
+     * - Main Grid (2 columns on large screens):
+     *   1. Summary Card: Total uploads, 24h trend, latest/trending posts thumbnails.
+     *   2. Distribution Card: Pie chart with tabs (Status, Rating, etc.) and legend.
+     * - User Rankings: Uploader and Approver leaderboards.
+     * - History Graph: Monthly uploads bar chart.
+     * - Milestone Cards (if any).
+     *
+     * @param {!Object} tagData The complete analytics data to render.
      */
     renderDashboard(tagData) {
       if (!document.getElementById("tag-analytics-modal")) {
@@ -10087,24 +10308,25 @@
                         </div>
                     </div>
                     
-                    <!-- Right Side: Latest & Trending -->
-                    <div style="display: flex; gap: 15px;">
-                         <!-- Latest Post -->
-                         ${tagData.latestPost ? `
-                     <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
-                        <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
-                           <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                              <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
-                           </a>
-                        </div>
-                        <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
-                        <div style="font-size: 0.7em; color: #999;">${tagData.latestPost.created_at.split('T')[0]}</div>
-                     </div>
-                     ` : ''}
+                
+                <!-- Right Side: Latest & Trending -->
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+                     <!-- Latest Post -->
+                     ${tagData.latestPost ? `
+                 <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                    <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                       <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                          <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                       </a>
+                    </div>
+                    <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
+                    <div style="font-size: 0.7em; color: #999;">${tagData.latestPost.created_at.split('T')[0]}</div>
+                 </div>
+                 ` : ''}
 
                          <!-- Trending Post (SFW) -->
                          ${tagData.trendingPost ? `
-                     <div id="trending-post-sfw" class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                     <div id="trending-post-sfw" class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                                 <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
@@ -10117,7 +10339,7 @@
 
                          <!-- Trending Post (NSFW) -->
                          ${tagData.trendingPostNSFW ? `
-                     <div id="trending-post-nsfw" class="nsfw-monitor" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                     <div id="trending-post-nsfw" class="nsfw-monitor" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                                 <img src="${tagData.trendingPostNSFW.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
@@ -10137,24 +10359,30 @@
              <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; min-height: 180px; position: relative; display: flex; flex-direction: column;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                    <div style="font-size: 0.9em; color: #666; font-weight: bold;">Distribution</div>
-                   <div class="pie-tabs" style="display: flex; background: #eee; padding: 2px; border-radius: 4px;">
-                      <button class="pie-tab active" data-type="status" style="padding: 2px 8px; border: none; background: #fff; border-radius: 3px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Status</button>
-                      <button class="pie-tab" data-type="rating" style="padding: 2px 8px; border: none; background: transparent; border-radius: 3px; font-size: 0.75em; cursor: pointer; transition: all 0.2s; margin-left: 2px;">Rating</button>
-                      ${tagData.copyrightCounts ? `<button class="pie-tab" data-type="copyright" style="padding: 2px 8px; border: none; background: transparent; border-radius: 3px; font-size: 0.75em; cursor: pointer; transition: all 0.2s; margin-left: 2px;">Copyright</button>` : ''}
-                      ${tagData.characterCounts ? `<button class="pie-tab" data-type="character" style="padding: 2px 8px; border: none; background: transparent; border-radius: 3px; font-size: 0.75em; cursor: pointer; transition: all 0.2s; margin-left: 2px;">Character</button>` : ''}
+                   <!-- Pie Chart Tabs:
+                        - Uses 'Pill' style for better visual distinction.
+                        - 'flex-wrap: wrap' ensures tabs don't overflow on small screens.
+                        - Active tab styling is handled via CSS classes (.active) to prevent layout shifts.
+                   -->
+                   <div class="pie-tabs" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
+                      <button class="pie-tab active" data-type="status" style="padding: 2px 10px; border: none; background: #555; color: #fff; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Status</button>
+                      <button class="pie-tab" data-type="rating" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Rating</button>
+                      ${tagData.copyrightCounts ? `<button class="pie-tab" data-type="copyright" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Copyright</button>` : ''}
+                      ${tagData.characterCounts ? `<button class="pie-tab" data-type="character" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Character</button>` : ''}
+                      ${tagData.commentaryCounts ? `<button class="pie-tab" data-type="commentary" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Commentary</button>` : ''}
                    </div>
                 </div>
                 <div id="status-pie-chart-wrapper" style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; opacity: 0; transition: opacity 0.5s;">
                    <div id="status-pie-chart" style="width: 120px; height: 120px; flex-shrink: 0;"></div>
-                   <div id="status-pie-legend" style="margin-left: 15px; font-size: 0.75em; flex: 1; max-height: 140px; overflow-y: auto;"></div>
+                   <div id="status-pie-legend" style="margin-left: 15px; font-size: 0.75em; flex: 1; min-width: 140px; max-height: 140px; overflow-y: auto; padding-right: 10px;"></div>
                 </div>
                 <div id="status-pie-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; font-size: 0.8em;">Loading data...</div>
              </div>
         </div>
 
         <style>
-          .pie-tab.active { box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-weight: bold; }
-          .pie-tab:not(.active):hover { background: rgba(255,255,255,0.5) !important; }
+          .pie-tab.active { background: #555 !important; color: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+          .pie-tab:not(.active):hover { background: #ddd !important; }
         </style>
 
         <!-- User Rankings Section -->
@@ -10201,8 +10429,8 @@
             </div>
         `;
 
-      // Inject Settings Button into Header
-      this.injectSettingsButton(document.getElementById('tag-settings-anchor'));
+      // Inject Header Controls (Settings, Reset)
+      this.injectHeaderControls(document.getElementById('tag-settings-anchor'));
 
       // NSFW Logic
       const nsfwCheck = document.getElementById('tag-analytics-nsfw-toggle');
@@ -10250,10 +10478,13 @@
           tabs.forEach(tab => {
             tab.onclick = () => {
               const newType = tab.getAttribute('data-type');
-              tabs.forEach(t => t.classList.remove('active'));
-              tabs.forEach(t => t.style.background = 'transparent');
+              tabs.forEach(t => {
+                  t.classList.remove('active');
+                  t.style.background = ''; // Clear inline style to let CSS take over
+                  t.style.color = ''; // Clear inline color
+              });
               tab.classList.add('active');
-              tab.style.background = '#fff';
+              // Don't set inline style for active, let CSS .active handle it
               this.renderPieChart(newType, tagData);
             };
           });
@@ -10285,10 +10516,13 @@
       }
     }
 
+
     /**
-     * Renders a pie chart for the given data type (status, rating, etc.).
-     * @param {string} type The type of data to render (e.g., 'status', 'rating').
-     * @param {!Object} tagData The analytics data.
+     * Renders a D3.js pie chart for the specified data type.
+     * Handles data preparation, SVG rendering, tooltips, legend generation, and click interactions.
+     *
+     * @param {string} type - The type of data to render ('status', 'rating', 'copyright', 'character', 'commentary').
+     * @param {Object} tagData - The full tag data object containing counts and other metadata.
      */
     renderPieChart(type, tagData) {
       const container = document.getElementById('status-pie-chart');
@@ -10303,6 +10537,20 @@
       else if (type === 'rating') counts = tagData.ratingCounts;
       else if (type === 'copyright') counts = tagData.copyrightCounts;
       else if (type === 'character') counts = tagData.characterCounts;
+      else if (type === 'commentary') {
+         // Transform Commentary Counts
+         const c = tagData.commentaryCounts;
+         const translated = c.translated || 0;
+         const requested = c.requested || 0;
+         const total = c.total || 0;
+         const untagged = Math.max(0, total - (translated + requested)); // Avoid negative
+
+         counts = {
+            'commentary': translated,
+            'commentary_request': requested,
+            'has:comments -commentary -commentary_request': untagged
+         };
+      }
       if (!counts) return;
 
       const ratingLabels = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -10312,6 +10560,11 @@
         let name = key;
         if (type === 'status') name = key.charAt(0).toUpperCase() + key.slice(1);
         else if (type === 'rating') name = ratingLabels[key] || key;
+        else if (type === 'commentary') {
+           if (key === 'commentary') name = 'Commentary';
+           else if (key === 'commentary_request') name = 'Requested';
+           else if (key === 'has:comments -commentary -commentary_request') name = 'Untagged';
+        }
         else name = key.replace(/_/g, ' ');
 
         if (key === 'others') name = 'Others';
@@ -10360,6 +10613,11 @@
       const getColor = (key) => {
         if (type === 'status') return statusColors[key] || '#999';
         if (type === 'rating') return ratingColors[key] || '#999';
+        if (type === 'commentary') {
+            if (key === 'commentary') return '#007bff'; // Blue
+            if (key === 'commentary_request') return '#ffc107';    // Yellow/Orange
+            if (key === 'has:comments -commentary -commentary_request') return '#6c757d';   // Grey
+        }
         if (key === 'others') return '#888'; // Grey for Others
         return ordinalColor(key);
       };
@@ -10466,6 +10724,21 @@
         .on('mouseout', function () {
           d3.select(this).transition().duration(200).attr('d', arc).style('opacity', 0.8);
           tooltip.transition().duration(200).style('opacity', 0);
+        })
+        .on('click', (event, d) => {
+           if (d.data.key === 'others') return;
+
+           let query = '';
+           if (type === 'status') {
+             query = `${this.tagName} status:${d.data.key}`;
+           } else if (type === 'rating') {
+             query = `${this.tagName} rating:${d.data.key}`;
+           } else {
+             // Copyright/Character/Commentary
+             query = `${this.tagName} ${d.data.key}`;
+           }
+           const url = `/posts?tags=${encodeURIComponent(query)}`;
+           window.open(url, '_blank');
         });
 
       // Legend
