@@ -10242,15 +10242,21 @@
       const categoryLabel = categoryMap[tagData.category] || 'Unknown';
 
       const colorMap = {
-        1: '#e67300', // Artist - Orange
-        3: '#a0a',    // Copyright - Purple
-        4: '#00aa00'  // Character - Green
+        1: '#c00004', // Artist - Red
+        3: '#a800aa',    // Copyright - Purple/Magenta
+        4: '#00ab2c'  // Character - Green
       };
       const titleColor = colorMap[tagData.category] || '#333';
 
       content.innerHTML = `
             <style>
                 .ranking-username:hover { font-weight: bold; }
+                .user-admin { color: #ed2426; } .user-admin:hover { color: #ff5a5b; }
+                .user-moderator { color: #00ab2c; } .user-moderator:hover { color: #35c64a; }
+                .user-builder { color: #a800aa; } .user-builder:hover { color: #d700d9; }
+                .user-platinum { color: #777892; } .user-platinum:hover { color: #9192a7; }
+                .user-gold { color: #fd9200; } .user-gold:hover { color: #ffc5a5; }
+                .user-member { color: #0075f8; } .user-member:hover { color: #5091fa; }
             </style>
             <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
             <div>
@@ -10967,7 +10973,7 @@
                   </a>
               </div>
               <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
-                  <a href="/users/${p.uploader_id}" target="_blank" style="color: ${this.getLevelColor(p.uploader_level)}; text-decoration: none;">${uploaderName}</a>
+                  <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${uploaderName}</a>
               </div>
           `;
 
@@ -11529,7 +11535,7 @@
         // Level Lookup: Check object first, then instance cache (ID -> Object), then instance cache (Name -> Object)
         const userCached = this.userNames[String(u.id)] || this.userNames[name];
         const level = u.level || (userCached && typeof userCached === 'object' ? userCached.level : null);
-        const userColor = this.getLevelColor(level);
+        const userClass = this.getLevelClass(level);
 
         let query = '';
         if (role && tagName) {
@@ -11543,12 +11549,12 @@
         }
 
         if (query) {
-          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="ranking-username" style="color: ${userColor}; text-decoration: none;">${name}</a>`;
+          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
         } else if (u.id) {
           // Fallback
-          nameHtml = `<a href="/users/${u.id}" target="_blank" class="ranking-username" style="color: ${userColor}; text-decoration: none;">${name}</a>`;
+          nameHtml = `<a href="/users/${u.id}" target="_blank" class="ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
         } else {
-          nameHtml = `<span class="ranking-username" style="color: ${userColor}; cursor: default;">${name}</span>`;
+          nameHtml = `<span class="ranking-username ${userClass}" style="cursor: default;">${name}</span>`;
         }
 
         const count = u.count || u.post_count || 0;
@@ -11568,16 +11574,16 @@
         </div>`;
     }
 
-    getLevelColor(level) {
-      if (!level) return '#007bff';
+    getLevelClass(level) {
+      if (!level) return 'user-member';
       const l = level.toLowerCase();
-      if (l.includes('admin') || l.includes('owner')) return '#e67300'; // Orange
-      if (l.includes('moderator')) return '#00aa00'; // Green
-      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return '#a0a'; // Purple
-      if (l.includes('platinum')) return '#888';  // Grey
-      if (l.includes('gold')) return '#e6b800';   // Yellow
-      if (l.includes('member')) return '#007bff'; // Blue (Default member)
-      return '#007bff';
+      if (l.includes('admin') || l.includes('owner')) return 'user-admin';
+      if (l.includes('moderator')) return 'user-moderator';
+      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
+      if (l.includes('platinum')) return 'user-platinum';
+      if (l.includes('gold')) return 'user-gold';
+      if (l.includes('member')) return 'user-member';
+      return 'user-member';
     }
 
     updateRankingTabs(role, tagData) {
