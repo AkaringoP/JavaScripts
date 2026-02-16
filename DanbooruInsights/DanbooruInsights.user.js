@@ -11569,15 +11569,15 @@
     }
 
     getLevelColor(level) {
-      if (!level) return '#007bff';
+      if (!level) return '#009BE6';
       const l = level.toLowerCase();
-      if (l.includes('admin') || l.includes('owner')) return '#e67300'; // Orange
-      if (l.includes('moderator')) return '#00aa00'; // Green
-      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return '#a0a'; // Purple
-      if (l.includes('platinum')) return '#888';  // Grey
-      if (l.includes('gold')) return '#e6b800';   // Yellow
-      if (l.includes('member')) return '#007bff'; // Blue (Default member)
-      return '#007bff';
+      if (l.includes('admin') || l.includes('owner')) return '#FF8A8B'; // Orange
+      if (l.includes('moderator')) return '#31C64A'; // Green
+      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return '#A997FF'; // Purple
+      if (l.includes('platinum')) return '#ABABBC';  // Grey
+      if (l.includes('gold')) return '#EAD084';   // Yellow
+      if (l.includes('member')) return '#009BE6'; // Blue (Default member)
+      return '#009BE6';
     }
 
     updateRankingTabs(role, tagData) {
