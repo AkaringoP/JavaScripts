@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.2
+// @version      6.2.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -963,27 +963,10 @@
               await this.db.approvals_detail.bulkPut(detailData);
             }
 
-            // We iterate dailyCounts to update hourly stats? No, hourlyCounts is already aggregated from items.
-            // But this overwrites hourly stats for the whole year with just the delta?
-            // NO! If we fetch delta, 'hourlyCounts' only contains delta.
-            // We must MERGE with existing hourly stats if we want to save correct values.
-            // OR: simpler - we just save the DELTA increment?
-            // IndexedDB doesn't support atomic increment easily.
-            // We should load existing hourly stats for this year, merge, and save.
-
-            const existingHourly = await this.db.hourly_stats.where('id')
-              .between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false)
-              .toArray();
-
-            const hourlyMap = new Map();
-            existingHourly.forEach(h => hourlyMap.set(h.hour, h.count));
-            hourlyCounts.forEach((count, h) => {
-              const prev = hourlyMap.get(h) || 0;
-              hourlyMap.set(h, prev + count);
-            });
-
+            // [Fix] Hourly Stats are already initialized from DB (lines 813) and incremented with new data (lines 933).
+            // We just need to save the current state of 'hourlyCounts' to the DB.
             const hourlyBulk = [];
-            hourlyMap.forEach((count, h) => {
+            hourlyCounts.forEach((count, h) => {
               hourlyBulk.push({
                 id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, '0')}`,
                 userId: userIdVal,
@@ -8252,7 +8235,7 @@
       } catch (e) {
         // Fallback to default
       }
-        return 7;
+      return 7;
     }
 
     /**
@@ -8345,65 +8328,65 @@
         // 1. Time-based (Retention period expired? No, retention is for DELETION. Sync is for Update.)
         //    Actually, previous logic was: if record.updatedAt > 24h -> Partial Sync.
         // 2. Count-based: New posts >= Threshold
-        
+
         const age = Date.now() - cachedData.updatedAt;
         const isTimeExpired = age >= 24 * 60 * 60 * 1000;
-        
+
         let postCountDiff = 0;
         try {
-            const currentTagData = await this.fetchTagData(tagName);
-            if (currentTagData) {
-                const currentTotal = currentTagData.post_count;
-                const cachedTotal = cachedData.post_count || 0;
-                postCountDiff = Math.max(0, currentTotal - cachedTotal);
-            }
+          const currentTagData = await this.fetchTagData(tagName);
+          if (currentTagData) {
+            const currentTotal = currentTagData.post_count;
+            const cachedTotal = cachedData.post_count || 0;
+            postCountDiff = Math.max(0, currentTotal - cachedTotal);
+          }
         } catch (e) { console.warn("Failed to check post count diff", e); }
 
         const threshold = this.getSyncThreshold();
         const isCountThresholdMet = postCountDiff >= threshold;
 
         if (isTimeExpired || isCountThresholdMet) {
-           console.log(`[TagAnalyticsApp] Partial Sync Triggered. TimeExpired=${isTimeExpired} (${(age/3600000).toFixed(1)}h), CountThreshold=${isCountThresholdMet} (${postCountDiff} >= ${threshold})`);
-           baseData = cachedData;
-           runDelta = true;
+          console.log(`[TagAnalyticsApp] Partial Sync Triggered. TimeExpired=${isTimeExpired} (${(age / 3600000).toFixed(1)}h), CountThreshold=${isCountThresholdMet} (${postCountDiff} >= ${threshold})`);
+          baseData = cachedData;
+          runDelta = true;
         } else {
-           // Use Cache
-           cachedData._isCached = true;
-           // Update volatile anyway? The block above ALREADY updated volatile data in cache object but didn't save it if we return early?
-           // Wait, the block above (lines 8331-8347 in original) logic was:
-           // "If cachedData exists -> Update Volatile -> Save -> Return".
-           // This prevents Delta Sync from ever running if we just return!
-           // The previous logic (lines 8356-) checked "stale cache for Delta" strictly from DB.
-           // But here we loaded from Cache first.
-           
-           // Refactored flow:
-           // 1. Load Cache.
-           // 2. Check Sync Criteria (Time or Count).
-           // 3. If Sync needed -> Set runDelta=true, baseData=cache. Proceed to fetch loop.
-           // 4. If Sync NOT needed -> Update Volatile -> Save -> Return.
-           
-           try {
-              // Fetch 24h count for UI
-              const newPostCount24h = await this.fetchNewPostCount(tagName);
+          // Use Cache
+          cachedData._isCached = true;
+          // Update volatile anyway? The block above ALREADY updated volatile data in cache object but didn't save it if we return early?
+          // Wait, the block above (lines 8331-8347 in original) logic was:
+          // "If cachedData exists -> Update Volatile -> Save -> Return".
+          // This prevents Delta Sync from ever running if we just return!
+          // The previous logic (lines 8356-) checked "stale cache for Delta" strictly from DB.
+          // But here we loaded from Cache first.
 
-              const [latestPost, trendingPost, trendingPostNSFW] = await Promise.all([
-                this.fetchLatestPost(tagName),
-                this.fetchTrendingPost(tagName, false),
-                this.fetchTrendingPost(tagName, true)
-              ]);
+          // Refactored flow:
+          // 1. Load Cache.
+          // 2. Check Sync Criteria (Time or Count).
+          // 3. If Sync needed -> Set runDelta=true, baseData=cache. Proceed to fetch loop.
+          // 4. If Sync NOT needed -> Update Volatile -> Save -> Return.
 
-              cachedData.latestPost = latestPost;
-              cachedData.trendingPost = trendingPost;
-              cachedData.trendingPostNSFW = trendingPostNSFW;
-              cachedData.newPostCount = newPostCount24h;
+          try {
+            // Fetch 24h count for UI
+            const newPostCount24h = await this.fetchNewPostCount(tagName);
 
-              this.saveToCache(cachedData);
-            } catch (e) {
-              console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
-            }
+            const [latestPost, trendingPost, trendingPostNSFW] = await Promise.all([
+              this.fetchLatestPost(tagName),
+              this.fetchTrendingPost(tagName, false),
+              this.fetchTrendingPost(tagName, true)
+            ]);
 
-            this.injectAnalyticsButton(cachedData);
-            return;
+            cachedData.latestPost = latestPost;
+            cachedData.trendingPost = trendingPost;
+            cachedData.trendingPostNSFW = trendingPostNSFW;
+            cachedData.newPostCount = newPostCount24h;
+
+            this.saveToCache(cachedData);
+          } catch (e) {
+            console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
+          }
+
+          this.injectAnalyticsButton(cachedData);
+          return;
         }
       }
 
@@ -8769,7 +8752,7 @@
             // If reverse scan happened, we likely found an earlier start date than metadata suggested.
             // We should use that to find the TRUE first post efficiently without scanning from 2005.
             const earliestDateFound = backwardResult[0].date;
-            
+
             const realInitialStats = await this.fetchInitialStats(tagName, null, true, earliestDateFound);
             if (realInitialStats) {
               firstPost = realInitialStats.firstPost;
@@ -8922,12 +8905,12 @@
       // Extract created_at from tagData
       // If absoluteOldest is true, we ignore created_at to find history hidden by renames
       // If foundEarliestDate is provided (from Reverse Scan), use it as a strong hint!
-      
+
       let tagCreatedAt = tagData.created_at;
       if (foundEarliestDate) {
-         tagCreatedAt = foundEarliestDate;
+        tagCreatedAt = foundEarliestDate;
       } else if (absoluteOldest) {
-         tagCreatedAt = "2005-01-01";
+        tagCreatedAt = "2005-01-01";
       }
 
       let posts = [];
@@ -8955,8 +8938,8 @@
           const firstId = posts[0].id;
           const lastId = posts[posts.length - 1].id;
           if (firstId > lastId) {
-             // It came in Descending. Reverse it.
-             posts.reverse();
+            // It came in Descending. Reverse it.
+            posts.reverse();
           }
         }
 
@@ -9268,7 +9251,7 @@
       const twoMonthsAgo = new Date(now);
       twoMonthsAgo.setMonth(now.getMonth() - 2);
       twoMonthsAgo.setDate(1); // Start from 1st of month
-      
+
       const effectiveStart = (lastDate && lastDate > twoMonthsAgo) ? twoMonthsAgo : (lastDate || startDate);
 
       return this.fetchMonthlyCounts(tagName, effectiveStart);
@@ -9286,7 +9269,7 @@
       // We keep old history UP TO the month before newStart.
       // newStart is likely YYYY-MM-DD. We want to avoid duplication.
       // fetchMonthlyCounts returns dates as YYYY-MM-01.
-      
+
       const newStart = newHistory[0].date;
       const filteredOld = oldHistory.filter(h => h.date < newStart);
 
@@ -9296,10 +9279,10 @@
       // Recalculate Cumulative strictly from start
       // Note: This assumes the first item in merged has correct 'count' but 'cumulative' might need offset if we cropped pure start.
       // But we are appending to a base.
-      
+
       // If we cut the tail of oldHistory, the last item of filteredOld has a cumulative count.
       // We can just iterate and update.
-      
+
       let runningSum = 0;
       merged = merged.map((h, index) => {
         // We can't just sum 'count' unless we are sure we have the WHOLE history from 2005.
@@ -10479,9 +10462,9 @@
             tab.onclick = () => {
               const newType = tab.getAttribute('data-type');
               tabs.forEach(t => {
-                  t.classList.remove('active');
-                  t.style.background = ''; // Clear inline style to let CSS take over
-                  t.style.color = ''; // Clear inline color
+                t.classList.remove('active');
+                t.style.background = ''; // Clear inline style to let CSS take over
+                t.style.color = ''; // Clear inline color
               });
               tab.classList.add('active');
               // Don't set inline style for active, let CSS .active handle it
@@ -10538,18 +10521,18 @@
       else if (type === 'copyright') counts = tagData.copyrightCounts;
       else if (type === 'character') counts = tagData.characterCounts;
       else if (type === 'commentary') {
-         // Transform Commentary Counts
-         const c = tagData.commentaryCounts;
-         const translated = c.translated || 0;
-         const requested = c.requested || 0;
-         const total = c.total || 0;
-         const untagged = Math.max(0, total - (translated + requested)); // Avoid negative
+        // Transform Commentary Counts
+        const c = tagData.commentaryCounts;
+        const translated = c.translated || 0;
+        const requested = c.requested || 0;
+        const total = c.total || 0;
+        const untagged = Math.max(0, total - (translated + requested)); // Avoid negative
 
-         counts = {
-            'commentary': translated,
-            'commentary_request': requested,
-            'has:comments -commentary -commentary_request': untagged
-         };
+        counts = {
+          'commentary': translated,
+          'commentary_request': requested,
+          'has:comments -commentary -commentary_request': untagged
+        };
       }
       if (!counts) return;
 
@@ -10561,9 +10544,9 @@
         if (type === 'status') name = key.charAt(0).toUpperCase() + key.slice(1);
         else if (type === 'rating') name = ratingLabels[key] || key;
         else if (type === 'commentary') {
-           if (key === 'commentary') name = 'Commentary';
-           else if (key === 'commentary_request') name = 'Requested';
-           else if (key === 'has:comments -commentary -commentary_request') name = 'Untagged';
+          if (key === 'commentary') name = 'Commentary';
+          else if (key === 'commentary_request') name = 'Requested';
+          else if (key === 'has:comments -commentary -commentary_request') name = 'Untagged';
         }
         else name = key.replace(/_/g, ' ');
 
@@ -10614,9 +10597,9 @@
         if (type === 'status') return statusColors[key] || '#999';
         if (type === 'rating') return ratingColors[key] || '#999';
         if (type === 'commentary') {
-            if (key === 'commentary') return '#007bff'; // Blue
-            if (key === 'commentary_request') return '#ffc107';    // Yellow/Orange
-            if (key === 'has:comments -commentary -commentary_request') return '#6c757d';   // Grey
+          if (key === 'commentary') return '#007bff'; // Blue
+          if (key === 'commentary_request') return '#ffc107';    // Yellow/Orange
+          if (key === 'has:comments -commentary -commentary_request') return '#6c757d';   // Grey
         }
         if (key === 'others') return '#888'; // Grey for Others
         return ordinalColor(key);
@@ -10726,19 +10709,19 @@
           tooltip.transition().duration(200).style('opacity', 0);
         })
         .on('click', (event, d) => {
-           if (d.data.key === 'others') return;
+          if (d.data.key === 'others') return;
 
-           let query = '';
-           if (type === 'status') {
-             query = `${this.tagName} status:${d.data.key}`;
-           } else if (type === 'rating') {
-             query = `${this.tagName} rating:${d.data.key}`;
-           } else {
-             // Copyright/Character/Commentary
-             query = `${this.tagName} ${d.data.key}`;
-           }
-           const url = `/posts?tags=${encodeURIComponent(query)}`;
-           window.open(url, '_blank');
+          let query = '';
+          if (type === 'status') {
+            query = `${this.tagName} status:${d.data.key}`;
+          } else if (type === 'rating') {
+            query = `${this.tagName} rating:${d.data.key}`;
+          } else {
+            // Copyright/Character/Commentary
+            query = `${this.tagName} ${d.data.key}`;
+          }
+          const url = `/posts?tags=${encodeURIComponent(query)}`;
+          window.open(url, '_blank');
         });
 
       // Legend
