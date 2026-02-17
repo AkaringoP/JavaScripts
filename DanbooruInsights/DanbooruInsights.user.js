@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.2.1
+// @version      6.3
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -4016,10 +4016,13 @@
       const nsfwKey = 'danbooru_grass_nsfw_enabled';
       const isNsfwEnabled = localStorage.getItem(nsfwKey) === 'true';
 
+      // 1. Fetch Summary Stats first (Local DB) to get starting date for optimizations
+      const summaryStats = await dataManager.getSummaryStats(user);
+      const { firstUploadDate } = summaryStats;
+
       const [
         stats,
         total,
-        summaryStats,
         distributions,
         topPosts,
         promotions,
@@ -4028,19 +4031,21 @@
       ] = await Promise.all([
         dataManager.getSyncStats(user),
         dataManager.getTotalPostCount(user),
-        dataManager.getSummaryStats(user),
         Promise.all([
-          dataManager.getRatingDistribution(user),
+          dataManager.getStatusDistribution(user, firstUploadDate),
+          dataManager.getRatingDistribution(user, firstUploadDate), // Optimized with date range
           dataManager.getCharacterDistribution(user),
           dataManager.getCopyrightDistribution(user),
           dataManager.getFavCopyrightDistribution(user),
           dataManager.getBreastsDistribution(user),
           dataManager.getHairLengthDistribution(user),
           dataManager.getHairColorDistribution(user)
-        ]).then(([rating, char, copy, favCopy, breasts, hairL, hairC]) => ({
-          rating, character: char, copyright: copy, fav_copyright: favCopy, breasts, hair_length: hairL, hair_color: hairC
+        ]).then(([status, rating, char, copy, favCopy, breasts, hairL, hairC]) => ({
+          status, rating, character: char, copyright: copy, fav_copyright: favCopy, breasts, hair_length: hairL, hair_color: hairC
         })),
         dataManager.getTopPostsByType(user),
+        dataManager.getRecentPopularPosts(user),
+        dataManager.getRandomPosts(user),
         dataManager.getPromotionHistory(user),
         dataManager.getMilestones(user, isNsfwEnabled, 1000),
         dataManager.getScatterData(user)
@@ -4052,6 +4057,8 @@
         summaryStats,
         distributions,
         topPosts,
+        recentPopularPosts,
+        randomPosts,
         promotions,
         milestones1k,
         scatterData
@@ -4795,12 +4802,12 @@
           ];
 
           const processedData = data.map((d, i) => {
-            if (['rating', 'breasts', 'hair_length', 'hair_color'].includes(currentPieTab)) {
+            if (['rating', 'status', 'breasts', 'hair_length', 'hair_color'].includes(currentPieTab)) {
               return {
                 value: d.count,
-                label: (currentPieTab === 'rating') ? (ratingLabels[d.rating] || d.rating) : d.name,
+                label: (currentPieTab === 'rating') ? (ratingLabels[d.rating] || d.rating) : d.label || d.name,
                 color: (currentPieTab === 'rating') ? (ratingColors[d.rating] || '#999') : (
-                  (currentPieTab === 'hair_color' && d.color) ? d.color : (d.isOther ? '#bdbdbd' : palette[i % palette.length])
+                  (currentPieTab === 'hair_color' && d.color) ? d.color : (d.color || (d.isOther ? '#bdbdbd' : palette[i % palette.length]))
                 ),
                 details: d
               };
@@ -5012,6 +5019,9 @@
                 } else if (currentPieTab === 'fav_copyright') {
                   query = `ordfav:${contextUser.name.replace(/ /g, '_')} ${d.details.tagName || d.label}`;
                   targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
+                } else if (currentPieTab === 'status') {
+                  query = `status:${d.details.name}`;
+                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${query}`)}`;
                 } else {
                   query = d.details.tagName || d.label;
                   targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${query}`)}`;
@@ -5025,7 +5035,7 @@
                   ? `<div style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.label}">${d.label}</div>`
                   : `<a href="${targetUrl}" target="_blank" style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:none;" title="${d.label}" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${d.label}</a>`
                 }
-                        <div style="font-weight:bold; color:#333; margin-left:auto;">${pct}</div>
+                        <div style="font-weight:bold; color:#333; margin-left:auto;" title="${d.details.count ? d.details.count.toLocaleString() : ''}">${pct}</div>
                      </div>`;
             }).join('');
 
@@ -5041,27 +5051,37 @@
           btns.forEach(btn => {
             const mode = btn.getAttribute('data-mode');
             if (mode === currentPieTab) {
-              btn.style.background = '#0969da';
+              // Active Style (Dark Pill)
+              btn.style.background = '#555';
               btn.style.color = '#fff';
+              btn.style.boxShadow = '0 1px 3px rgba(0,0,0,0.2)';
             } else {
-              btn.style.background = '#f6f8fa';
-              btn.style.color = '#24292f';
+              // Inactive Style (Light Pill)
+              btn.style.background = '#eee';
+              btn.style.color = '#555';
+              btn.style.boxShadow = 'none';
             }
           });
         };
 
-        // Header with Tabs
+        // Header with Tabs (Pill Style)
         pieContainer.innerHTML = `
            <div style="width:100%; display:flex; flex-direction:column;">
                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; width:100%;">
-                   <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
-                       <button class="pie-tab" data-mode="copyright" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Copy</button>
-                       <button class="pie-tab" data-mode="character" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Char</button>
-                       <button class="pie-tab" data-mode="hair_length" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Hair_L</button>
-                       <button class="pie-tab" data-mode="hair_color" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Hair_C</button>
-                       <button class="pie-tab" data-mode="rating" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Rate</button>
-                       <button class="pie-tab" data-mode="fav_copyright" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Fav_Copy</button>
-                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">Boobs</button>
+                   <!-- Tabs Container: Flex Wrap, Gap -->
+                   <div style="display:flex; flex-wrap:wrap; gap:4px; max-width:100%;">
+                       <style>
+                         .pie-tab:hover { background: #ddd !important; }
+                         .pie-tab[data-mode="${currentPieTab}"]:hover { background: #555 !important; }
+                       </style>
+                       <button class="pie-tab" data-mode="copyright" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Copy</button>
+                       <button class="pie-tab" data-mode="character" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Char</button>
+                       <button class="pie-tab" data-mode="fav_copyright" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Fav_Copy</button>
+                       <button class="pie-tab" data-mode="status" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Status</button>
+                       <button class="pie-tab" data-mode="rating" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Rate</button>
+                       <button class="pie-tab" data-mode="hair_length" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Hair_L</button>
+                       <button class="pie-tab" data-mode="hair_color" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Hair_C</button>
+                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Boobs</button>
                    </div>
                </div>
                <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
@@ -5087,7 +5107,21 @@
           try {
             let data = [];
             if (tabName === 'rating') {
-              data = await this.dataManager.getRatingDistribution(this.context.targetUser);
+              data = await this.dataManager.getRatingDistribution(this.context.targetUser, firstUploadDate);
+            } else if (tabName === 'status') {
+              data = await this.dataManager.getStatusDistribution(this.context.targetUser, firstUploadDate);
+              const statusColors = {
+                'active': '#2da44e', // Green
+                'deleted': '#d73a49', // Red (Danbooru deleted color)
+                'pending': '#0969da', // Blue
+                'flagged': '#cf222e', // Red
+                'banned': '#6e7781', // Grey
+                'appealed': '#bf3989' // Purple
+              };
+              data = data.map(d => ({
+                ...d,
+                color: statusColors[d.name] || '#888'
+              }));
             } else if (tabName === 'character') {
               data = await this.dataManager.getCharacterDistribution(this.context.targetUser);
             } else if (tabName === 'copyright') {
@@ -5144,18 +5178,22 @@
         topPostContainer.style.padding = '15px';
 
         // Use pre-fetched top posts
-        const topPostData = {
-          sfw: topPosts.sfw,
-          nsfw: topPosts.nsfw
+        // Structure: { most: {sfw, nsfw}, recent: {sfw, nsfw}, random: {sfw, nsfw} }
+        const topPostGroups = {
+          most: topPosts,
+          recent: recentPopularPosts,
+          random: randomPosts
         };
 
-        let currentTab = 'sfw'; // Default
+        let currentWidgetMode = 'most'; // 'most', 'recent', 'random'
+        let currentTab = 'sfw'; // 'sfw', 'nsfw'
 
         /**
          * Renders the content of the Top Post widget.
          */
         const renderTopPostContent = () => {
-          const data = topPostData[currentTab];
+          const group = topPostGroups[currentWidgetMode];
+          const data = group ? group[currentTab] : null;
           const contentDiv = topPostContainer.querySelector('.top-post-content');
 
           if (!data) {
@@ -5163,16 +5201,43 @@
             return;
           }
 
-          const thumbUrl = data.preview_file_url || data.large_file_url || data.file_url;
+          // Use file_url for better quality, fallback to large/preview
+          const thumbUrl = data.file_url || data.large_file_url || data.preview_file_url;
           const dateStr = data.created_at ? new Date(data.created_at).toISOString().split('T')[0] : 'N/A';
           const link = `/posts/${data.id}`;
           const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
           const ratingLabel = ratingMap[data.rating] || data.rating;
 
+          // Dynamic Label based on mode
+          let modeLabel = 'Most Popular';
+          let modeIcon = '🏆';
+          if (currentWidgetMode === 'recent') {
+            modeLabel = 'Recent Popular';
+            modeIcon = '🔥';
+          } else if (currentWidgetMode === 'random') {
+            modeLabel = 'Random Post';
+            modeIcon = '🎲';
+          }
+
+          // Helper to generate tag lines
+          const createTagLine = (label, icon, tags) => {
+            if (!tags) return '';
+            const tagList = tags.replace(/_/g, ' ');
+            const displayTags = (label === 'Char' && tags.split(' ').length > 5)
+              ? tagList.split(' ').slice(0, 5).join(', ') + '...'
+              : tagList;
+            return `<div>${icon} <strong>${label}:</strong> ${displayTags}</div>`;
+          };
+
+          const artistLine = createTagLine('Artist', '🎨', data.tag_string_artist);
+          const copyrightLine = createTagLine('Copy', '©️', data.tag_string_copyright);
+          const charLine = createTagLine('Char', '👤', data.tag_string_character);
+
           contentDiv.innerHTML = `
             <div style="display:flex; gap:15px; align-items:flex-start;">
-                <a href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden;">
+                <a href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden; position:relative;">
                     <img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;" alt="#${data.id}">
+                    <div style="position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.5); color:#fff; font-size:10px; padding:2px 4px; text-align:center;">${modeIcon} ${modeLabel}</div>
                 </a>
                 <div style="flex:1;">
                     <div style="font-weight:bold; font-size:1.1em; color:#0969da; margin-bottom:4px;">
@@ -5185,9 +5250,9 @@
                         🤔 Rating: <strong>${ratingLabel}</strong>
                         
                         <div style="margin-top:8px; border-top:1px solid #eee; padding-top:6px;">
-                            ${data.tag_string_artist ? `<div>🎨 <strong>Artist:</strong> ${data.tag_string_artist.replace(/_/g, ' ')}</div>` : ''}
-                            ${data.tag_string_copyright ? `<div>©️ <strong>Copy:</strong> ${data.tag_string_copyright.replace(/_/g, ' ')}</div>` : ''}
-                            ${data.tag_string_character ? `<div>👤 <strong>Char:</strong> ${data.tag_string_character.split(' ').slice(0, 5).join(', ').replace(/_/g, ' ')}${data.tag_string_character.split(' ').length > 5 ? '...' : ''}</div>` : ''}
+                            ${artistLine}
+                            ${copyrightLine}
+                            ${charLine}
                         </div>
                     </div>
                 </div>
@@ -5212,11 +5277,15 @@
           setStyle(btnNsfw, currentTab === 'nsfw');
         };
 
-
+        // Header with Dropdown
         topPostContainer.innerHTML = `
            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-              <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">
-                 🏆 Most Popular Post
+              <div style="font-size:0.85em; color:#666; letter-spacing:0.5px; display:flex; align-items:center; gap:5px;">
+                 <select id="analytics-top-post-select" style="border:none; background:transparent; font-weight:bold; color:#666; cursor:pointer; text-transform:uppercase; font-size:1em; outline:none;">
+                    <option value="most">🏆 Most Popular Post</option>
+                    <option value="recent">🔥 Recent Popular Post</option>
+                    <option value="random">🎲 Random Post</option>
+                 </select>
               </div>
               <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
                  <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
@@ -5228,7 +5297,16 @@
            </div>
       `;
 
-        // Event Delegation
+        // Dropdown Event Listener
+        const modeSelect = topPostContainer.querySelector('#analytics-top-post-select');
+        if (modeSelect) {
+          modeSelect.addEventListener('change', (e) => {
+            currentWidgetMode = e.target.value;
+            renderTopPostContent();
+          });
+        }
+
+        // Tab Event Delegation
         topPostContainer.addEventListener('click', (e) => {
           if (e.target.classList.contains('top-post-tab')) {
             currentTab = e.target.getAttribute('data-mode');
@@ -5241,6 +5319,7 @@
         topStatsRow.appendChild(topPostContainer);
         dashboardDiv.appendChild(topStatsRow);
 
+        updateTabs(); // Initialize tabs style (default: sfw)
         renderTopPostContent();
         content.appendChild(dashboardDiv);
 
@@ -6758,67 +6837,100 @@
      * @param {!Object} userInfo The user's information object.
      * @return {Promise<!Array<{rating: string, count: number, label: string}>>} Rating distribution array.
      */
-    async getRatingDistribution(userInfo) {
+    /**
+     * Fetches post counts for each status (active, deleted, etc.).
+     * @param {!Object} userInfo The user's information object.
+     * @param {?string|Date} startDate Optional start date to optimize query range.
+     * @return {Promise<!Array<{name: string, count: number, label: string}>>} Status distribution.
+     */
+    async getStatusDistribution(userInfo, startDate = null) {
       if (!userInfo.name) return [];
 
-      // Determine 'from' date (Join Date) and 'to' date (Tomorrow)
-      const fromDate = userInfo.joinDate ? userInfo.joinDate.toISOString().split('T')[0] : '2005-01-01';
+      const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
 
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const toDate = tomorrow.toISOString().split('T')[0];
+      const tasks = statuses.map(async (status) => {
+        try {
+          let tagQuery = `user:${userInfo.name} status:${status}`;
+          if (startDate) {
+            const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
+            tagQuery += ` date:>=${dateStr}`;
+          }
 
-      const params = new URLSearchParams({
-        'search[group]': 'rating',
-        'search[tags]': `user:${userInfo.name.replace(/ /g, '_')} `,
-        'search[from]': fromDate,
-        'search[to]': toDate
+          const params = new URLSearchParams({ tags: tagQuery });
+          const url = `/counts/posts.json?${params.toString()}`;
+
+          const resp = await fetch(url);
+          let count = 0;
+          if (resp.ok) {
+            const data = await resp.json();
+            count = (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
+          }
+
+          return {
+            name: status,
+            count: count,
+            label: status.charAt(0).toUpperCase() + status.slice(1)
+          };
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch count for status:${status}`, e);
+          return { name: status, count: 0, label: status.charAt(0).toUpperCase() + status.slice(1) };
+        }
       });
 
-      const url = `/reports/posts.json?${params.toString()}`;
+      return Promise.all(tasks);
+    }
+
+    /**
+     * Fetches rating distribution report from Danbooru's /counts/posts.json endpoint.
+     * Uses parallel requests for each rating to ensure accuracy (including 'general').
+     * @param {!Object} userInfo The user's information object.
+     * @param {?string|Date} startDate Optional start date to optimize query range.
+     * @return {Promise<!Array<{rating: string, count: number, label: string}>>} Rating distribution array.
+     */
+    async getRatingDistribution(userInfo, startDate = null) {
+      if (!userInfo.name) return [];
+
+      const ratings = ['g', 's', 'q', 'e'];
+      const labelMap = {
+        'g': 'General',
+        's': 'Sensitive',
+        'q': 'Questionable',
+        'e': 'Explicit'
+      };
+
+      const tasks = ratings.map(async (rating) => {
+        try {
+          let tagQuery = `user:${userInfo.name} rating:${rating}`;
+          if (startDate) {
+            const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
+            tagQuery += ` date:>=${dateStr}`;
+          }
+
+          const params = new URLSearchParams({
+            tags: tagQuery
+          });
+          const url = `/counts/posts.json?${params.toString()}`;
+
+          const resp = await fetch(url);
+          if (!resp.ok) return { rating, count: 0, label: labelMap[rating] };
+
+          const data = await resp.json();
+          const count = (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
+
+          return {
+            rating: rating,
+            count: count,
+            label: labelMap[rating]
+          };
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch count for rating:${rating}`, e);
+          return { rating, count: 0, label: labelMap[rating] };
+        }
+      });
 
       try {
-        // Expected API Response: HTML table or JSON?
-        // User reports usually return HTML unless .json is appended and supported.
-        // User said: "just use /reports/posts.json ... it returns specific values".
-        // Let's assume it returns JSON array like string '[[ "g", 123 ], [ "s", 456 ]]'.
-        // Or object? Danbooru reports often return an array of arrays.
-
-        const resp = await fetch(url);
-        const text = await resp.text();
-
-        // Danbooru Reports often return a visualization string or raw data.
-        // Let's parse JSON.
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch (e) {
-          console.warn('[Danbooru Grass] Report is not JSON. Falling back.', text.substring(0, 100));
-          return [];
-        }
-
-        // Typical format: [["g", 10], ["s", 5], ...]
-        // Check structure
-        if (!Array.isArray(data)) return [];
-
-        const map = {
-          'g': 'General',
-          's': 'Sensitive',
-          'q': 'Questionable',
-          'e': 'Explicit'
-        };
-
-        return data.map(item => {
-          // item is object { rating: "s", posts: 19654 }
-          const r = item.rating;
-          const c = item.posts;
-          return {
-            rating: r,
-            count: c,
-            label: map[r] || r
-          };
-        });
-
+        const results = await Promise.all(tasks);
+        return results;
       } catch (e) {
         console.error('[Danbooru Grass] Failed to fetch rating distribution', e);
         return [];
@@ -7163,18 +7275,18 @@
 
     /**
      * Fetches Top SFW and NSFW posts in parallel using API.
-     * @param {Object} userInfo The user's info object.
-     * @return {Promise<{sfw: Object|null, nsfw: Object|null}>}
+     * @param {!Object} userInfo The user's info object.
+     * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW top posts.
      */
     async getTopPostsByType(userInfo) {
       if (!userInfo.name) return { sfw: null, nsfw: null };
 
       // Helper for fetching 1 top post
-      const fetchTop = async (ratingTags) => {
+      const fetchTop = async (ratingTags, extraQuery = '') => {
         try {
           // Use tags=... order:score rating:x limit=1
           const normalizedName = userInfo.name.replace(/ /g, '_');
-          const query = `user:${normalizedName} order:score rating:${ratingTags} `;
+          const query = `user:${normalizedName} order:score rating:${ratingTags} ${extraQuery}`;
           const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
           const resp = await fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
@@ -7194,6 +7306,71 @@
       return { sfw, nsfw };
     }
 
+    /**
+     * Fetches Recent Popular (age < 1w) SFW and NSFW posts.
+     * @param {!Object} userInfo The user's info object.
+     * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW recent posts.
+     */
+    async getRecentPopularPosts(userInfo) {
+      if (!userInfo.name) return { sfw: null, nsfw: null };
+
+      // Reuse logic but add age:<1w
+      const fetchTop = async (ratingTags) => {
+        try {
+          const normalizedName = userInfo.name.replace(/ /g, '_');
+          const query = `user:${normalizedName} order:score rating:${ratingTags} age:<1w`;
+          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
+          const resp = await fetch(url).then(r => r.json());
+          if (Array.isArray(resp) && resp.length > 0) {
+            return resp[0];
+          }
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTags}`, e);
+        }
+        return null;
+      };
+
+      const [sfw, nsfw] = await Promise.all([
+        fetchTop('g,s'),
+        fetchTop('q,e')
+      ]);
+
+      return { sfw, nsfw };
+    }
+
+    /**
+     * Fetches Random SFW and NSFW posts.
+     * @param {!Object} userInfo The user's info object.
+     * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW random posts.
+     */
+    async getRandomPosts(userInfo) {
+      if (!userInfo.name) return { sfw: null, nsfw: null };
+
+      const fetchRandom = async (ratingTags) => {
+        try {
+          const normalizedName = userInfo.name.replace(/ /g, '_');
+          // Use /posts/random.json?tags=...
+          const query = `user:${normalizedName} rating:${ratingTags}`;
+          const url = `/posts/random.json?tags=${encodeURIComponent(query)}`;
+          const resp = await fetch(url).then(r => r.json());
+          // /posts/random.json returns a single object, not array (usually)
+          // But sometimes it might be empty object or error?
+          if (resp && resp.id) {
+            return resp;
+          }
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTags}`, e);
+        }
+        return null;
+      };
+
+      const [sfw, nsfw] = await Promise.all([
+        fetchRandom('g,s'),
+        fetchRandom('q,e')
+      ]);
+
+      return { sfw, nsfw };
+    }
     /**
      * Gets the post with the highest score and fetches its details.
      * @param {Object} userInfo The user's info object.
@@ -8589,7 +8766,7 @@
       console.log('[TagAnalytics] [Group 1] Queueing Quick Stats (Status, Rating, Latest, Trending, Related)...');
       const tGroup1Start = performance.now();
       const statusPromise = measure('Status Counts', this.fetchStatusCounts(tagName));
-      const ratingPromise = measure('Rating Counts', this.fetchRatingCounts(tagName));
+      // const ratingPromise = measure('Rating Counts', this.fetchRatingCounts(tagName)); // Removed from Phase 1
       const latestPromise = measure('Latest Post', this.fetchLatestPost(tagName));
       const newPostPromise = measure('New Post Count', this.fetchNewPostCount(tagName));
       const trendingPromise = measure('Trending Post (SFW)', this.fetchTrendingPost(tagName, false));
@@ -8616,7 +8793,7 @@
       // --- [PHASE 1] QUICK STATS EXECUTION ---
       const quickTasks = [
         { id: 'status', label: 'Analyzing post status...', promise: statusPromise },
-        { id: 'rating', label: 'Calculating rating distribution...', promise: ratingPromise },
+        // { id: 'rating', label: 'Calculating rating distribution...', promise: ratingPromise }, // Removed
         { id: 'latest', label: 'Fetching latest info...', promise: latestPromise },
         { id: 'new_count', label: 'Counting new posts...', promise: newPostPromise },
         { id: 'trending', label: 'Finding trending posts...', promise: trendingPromise },
@@ -8668,7 +8845,7 @@
       // Extract Phase 1 Results
       const [
         statusCounts,
-        ratingCounts,
+        // ratingCounts, // Removed
         latestPost,
         newPostCount,
         trendingPost,
@@ -8824,6 +9001,14 @@
       const {
         uploaderAll, approverAll, uploaderYear, approverYear
       } = resolvedRankings;
+
+      // --- [PHASE 3] DEFERRED COUNTS (Optimized with Date Range) ---
+      // Now we have `first100Stats.startDate` or derive from historyData
+      const minDate = (first100Stats && first100Stats.startDate) ? first100Stats.startDate : (historyData && historyData.length > 0 ? new Date(historyData[0].date) : new Date('2005-01-01'));
+      const minDateStr = minDate.toISOString().split('T')[0];
+
+      console.log(`[TagAnalytics] [Phase 3] Starting Deferred Counts (Rating) with startDate: ${minDateStr}`);
+      const ratingCounts = await measure('Rating Counts', this.fetchRatingCounts(tagName, minDateStr));
 
       // --- 6. Backward History Scan --- (MOVED TO historyPromise CHAIN ABOVE)
       // The historyData and milestones returned from Promise.all are already fully corrected.
@@ -9002,6 +9187,39 @@
       return this.rateLimiter.fetch(url).then(r => r.json()).then(d => d.counts.posts).catch(() => 0);
     }
 
+    async fetchCountWithRetry(url, retries = 1) {
+      for (let i = 0; i <= retries; i++) {
+        try {
+          const resp = await this.rateLimiter.fetch(url);
+          if (!resp.ok) {
+            // console.warn(`[TagAnalyticsApp] HTTP Error ${resp.status} for ${url}`);
+            throw new Error(`HTTP ${resp.status}`);
+          }
+
+          const data = await resp.json();
+          // Log raw data for debugging
+          // console.log(`[TagAnalyticsApp] Raw data for ${url}:`, data);
+
+          const count = (data && data.counts && typeof data.counts === 'object') ? data.counts.posts : (data ? data.posts : undefined);
+
+          if (count !== undefined && count !== null) {
+            return count;
+          }
+
+          // If undefined, it's a "bad" response for our purpose, treat as error to trigger retry
+          throw new Error('Invalid count data');
+        } catch (e) {
+          if (i === retries) {
+            console.warn(`[TagAnalyticsApp] Failed to fetch count after ${retries + 1} attempts: ${url}`, e);
+            return 0; // Default to 0 after all retries
+          }
+          // Wait a bit before retry (e.g., 500ms)
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+      return 0;
+    }
+
     /**
      * Fetches commentary-related counts for a tag (Total, Translated, Requested).
      * @param {string} tagName - The tag to analyze.
@@ -9015,16 +9233,22 @@
       };
 
       const results = {};
-      await Promise.all(Object.entries(queries).map(async ([key, query]) => {
+
+      const keys = Object.keys(queries);
+      await Promise.all(keys.map(async (key) => {
+        const query = queries[key];
         const url = `/counts/posts.json?${query}`;
-        try {
-          const data = await this.rateLimiter.fetch(url).then(r => r.json());
-          results[key] = (data.counts && typeof data.counts === 'object') ? (data.counts.posts || 0) : (data.counts || 0);
-        } catch (e) {
-          console.warn(`[TagAnalyticsApp] Failed to fetch commentary count for ${key}`, e);
+        results[key] = await this.fetchCountWithRetry(url);
+      }));
+
+      // [Integrity Check] Ensure all keys exist and are valid numbers
+      keys.forEach(key => {
+        if (results[key] == null) {
+          console.warn(`[TagAnalyticsApp] Missing commentary key: ${key}. Defaulting to 0.`);
           results[key] = 0;
         }
-      }));
+      });
+
       return results;
     }
     /**
@@ -9037,48 +9261,53 @@
       const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
       const results = {};
 
-      const tasks = statuses.map(status => {
+      const tasks = statuses.map(async (status) => {
         const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+status:${status}`;
-        return this.rateLimiter.fetch(url)
-          .then(r => r.json())
-          .then(data => {
-            // API returns { counts: { posts: count } }
-            results[status] = (data.counts && typeof data.counts === 'object') ? (data.counts.posts || 0) : (data.counts || 0);
-          })
-          .catch(e => {
-            console.warn(`[TagAnalyticsApp] Failed to fetch count for ${status}`, e);
-            results[status] = 0;
-          });
+        results[status] = await this.fetchCountWithRetry(url);
       });
 
       await Promise.all(tasks);
+
+      // [Integrity Check] Ensure all keys exist and are valid numbers
+      statuses.forEach(status => {
+        if (results[status] == null) {
+          console.warn(`[TagAnalyticsApp] Missing status key: ${status}. Defaulting to 0.`);
+          results[status] = 0;
+        }
+      });
+
       return results;
     }
 
     /**
      * Fetches post counts for all ratings (g, s, q, e) for a tag.
      * @param {string} tagName The tag name.
+     * @param {?string} startDate Optional start date (YYYY-MM-DD) to optimize query.
      * @return {Promise<!Object<string, number>>} Map of rating characters to counts.
      */
-    async fetchRatingCounts(tagName) {
+    async fetchRatingCounts(tagName, startDate = null) {
       const ratings = ['g', 's', 'q', 'e'];
       const results = {};
 
-      const tasks = ratings.map((rating) => {
-        const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+rating:${rating}`;
-        return this.rateLimiter.fetch(url)
-          .then((r) => r.json())
-          .then((data) => {
-            results[rating] = (data.counts && typeof data.counts === 'object') ?
-              (data.counts.posts || 0) : (data.counts || 0);
-          })
-          .catch((e) => {
-            console.warn(`[TagAnalyticsApp] Failed to fetch count for rating:${rating}`, e);
-            results[rating] = 0;
-          });
+      const tasks = ratings.map(async (rating) => {
+        let qs = `tags=${encodeURIComponent(tagName)}+rating:${rating}`;
+        if (startDate) {
+          qs += `+date:>=${startDate}`;
+        }
+        const url = `/counts/posts.json?${qs}`;
+        results[rating] = await this.fetchCountWithRetry(url);
       });
 
       await Promise.all(tasks);
+
+      // [Integrity Check] Ensure all keys exist and are valid numbers
+      ratings.forEach(rating => {
+        if (results[rating] == null) {
+          console.warn(`[TagAnalyticsApp] Missing rating key: ${rating}. Defaulting to 0.`);
+          results[rating] = 0;
+        }
+      });
+
       return results;
     }
 
