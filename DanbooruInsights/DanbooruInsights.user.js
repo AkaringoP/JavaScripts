@@ -537,9 +537,11 @@
      * Initializes the DataManager.
      * @param {Database} db The Dexie database instance.
      */
-    constructor(db) {
+    constructor(db, rateLimiter = null) {
       this.baseUrl = 'https://danbooru.donmai.us';
       this.db = db;
+      // Allow passing shared rate limiter, fallback to default if missing (though app should pass it)
+      this.rateLimiter = rateLimiter || new RateLimitedFetch(6, [100, 300], 6);
     }
 
     /**
@@ -1288,7 +1290,7 @@
      */
     async fetchRemoteCount(tags) {
       const url = `${this.baseUrl}/counts/posts.json?tags=${encodeURIComponent(tags)}`;
-      const resp = await fetch(url);
+      const resp = await this.rateLimiter.fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const json = await resp.json();
       return json.counts && typeof json.counts.posts === 'number'
@@ -1385,7 +1387,7 @@
       const limit = 40;
       const url = `${this.baseUrl}/related_tag.json?commit=Search&search[category]=Character&search[order]=Frequency&limit=${limit}&search[query]=${encodeURIComponent(query)}`;
 
-      const resp = await fetch(url);
+      const resp = await this.rateLimiter.fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const rawData = await resp.json();
 
@@ -1408,7 +1410,7 @@
 
       const impUrl = `${this.baseUrl}/tag_implications.json?limit=200&search[status]=active&search[consequent_name_matches]=${encodeURIComponent(consequentQuery)}`;
 
-      const impResp = await fetch(impUrl);
+      const impResp = await this.rateLimiter.fetch(impUrl);
       const implications = await impResp.json();
 
       // Identify tags that are antecedents (children) of other tags in the list.
@@ -3333,7 +3335,13 @@
       this.db = db;
       this.settings = settings;
       this.context = context;
-      this.dataManager = new AnalyticsDataManager(db);
+      // Initialize RateLimiter: 
+      // - Max Concurrency: 6 (Default)
+      // - Start Delay: [100, 300] ms
+      // - Rate Limit: 7 requests / 1 second (Token Bucket)
+      this.rateLimiter = new RateLimitedFetch(6, [100, 300], 6);
+
+      this.dataManager = new AnalyticsDataManager(db, this.rateLimiter);
 
       this.modalId = 'danbooru-grass-modal';
       this.btnId = 'danbooru-grass-analytics-btn';
@@ -4025,6 +4033,8 @@
         total,
         distributions,
         topPosts,
+        recentPopularPosts,
+        randomPosts,
         promotions,
         milestones1k,
         scatterData
@@ -4095,7 +4105,7 @@
 
         // Pre-fetch all data!
         const dashboardData = await this.fetchDashboardData();
-        const { stats, total, summaryStats, distributions, topPosts, promotions, milestones1k, scatterData } = dashboardData;
+        const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, promotions, milestones1k, scatterData } = dashboardData;
         const { maxUploads, maxDate, firstUploadDate } = summaryStats;
         const today = new Date();
         const oneDay = 1000 * 60 * 60 * 24;
@@ -4651,9 +4661,18 @@
             // Fetch Logic
             const uploaderId = this.context.targetUser.id ? parseInt(this.context.targetUser.id, 10) : 0;
             try {
-              const entry = await dataManager.db.bubble_data.get({ userId: uploaderId, copyright: copyrightName });
-              const serverEntry = await dataManager.db.bubble_data.get({ userId: 0, copyright: copyrightName });
+              const entry = await this.dataManager.db.bubble_data.get({ userId: uploaderId, copyright: copyrightName });
+              const serverEntry = await this.dataManager.db.bubble_data.get({ userId: 0, copyright: copyrightName });
 
+              if (!entry || !serverEntry) {
+                // Trigger fetch if missing
+                if (d.data.details && d.data.details.tagName) {
+                  const topCopyrights = [d.data.details.tagName];
+                  await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
+                    container.innerHTML = `<div style="padding:20px;text-align:center;">${msg}</div>`;
+                  });
+                }
+              }
               let combinedData = [];
               const serverMap = new Map();
 
@@ -5201,8 +5220,10 @@
             return;
           }
 
-          // Use file_url for better quality, fallback to large/preview
-          const thumbUrl = data.file_url || data.large_file_url || data.preview_file_url;
+          // Use file_url for quality, but fallback to preview_file_url for videos or if file_url is missing
+          const videoExts = ['mp4', 'webm', 'zip', 'mov'];
+          const isVideo = videoExts.includes(data.file_ext);
+          const thumbUrl = isVideo ? (data.preview_file_url || data.file_url) : (data.file_url || data.preview_file_url || data.large_file_url);
           const dateStr = data.created_at ? new Date(data.created_at).toISOString().split('T')[0] : 'N/A';
           const link = `/posts/${data.id}`;
           const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -6394,7 +6415,7 @@
                 chunkHtml += `
                  <div class="pop-item" data-id="${it.id}" style="padding: 8px 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: bg 0.2s;">
                    <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
-                   <span style="color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px; width: 60px;">#${it.id}</span>
+                   <span style="width: 60px; color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px;">#${it.id}</span>
                    <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
                    <span style="font-weight: bold; color: #333; font-size: 13px;">${val}</span>
                  </div>
@@ -6532,20 +6553,25 @@
      * @return {Promise<string>} The preview URL or an empty string if not found or failed.
      */
     async fetchThumbnailWithRetry(tags, retries = 3, delay = 2000) {
-      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,file_url,rating`;
+      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,file_url,rating,file_ext`;
       for (let i = 0; i < retries; i++) {
         try {
-          const resp = await fetch(url);
+          const resp = await this.rateLimiter.fetch(url);
           if (resp.status === 429) {
-            // console.warn(`[Analytics] Rate limit hit for thumbnail (${tags}). Retrying in ${delay}ms...`);
             await new Promise(r => setTimeout(r, delay + Math.random() * 2000));
-            delay *= 2; // Exponential backoff
+            delay *= 2; 
             continue;
           }
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
           if (Array.isArray(data) && data.length > 0) {
-            return data[0].preview_file_url || data[0].file_url || '';
+            const post = data[0];
+            // If it's a video (mp4, webm, zip/ugoira), we MUST use preview_file_url
+            const videoExts = ['mp4', 'webm', 'zip', 'mov'];
+            if (videoExts.includes(post.file_ext) || !post.file_url) {
+              return post.preview_file_url || post.file_url || '';
+            }
+            return post.file_url || post.preview_file_url || '';
           }
           return '';
         } catch (e) {
@@ -6723,7 +6749,7 @@
             const idsStr = chunk.join(',');
             const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,preview_file_url,file_url,rating`;
 
-            const res = await fetch(url);
+            const res = await this.rateLimiter.fetch(url);
             if (res.ok) {
               const fetchedItems = await res.json();
               // Update local matches objects
@@ -6859,7 +6885,7 @@
           const params = new URLSearchParams({ tags: tagQuery });
           const url = `/counts/posts.json?${params.toString()}`;
 
-          const resp = await fetch(url);
+          const resp = await this.rateLimiter.fetch(url);
           let count = 0;
           if (resp.ok) {
             const data = await resp.json();
@@ -6911,7 +6937,7 @@
           });
           const url = `/counts/posts.json?${params.toString()}`;
 
-          const resp = await fetch(url);
+          const resp = await this.rateLimiter.fetch(url);
           if (!resp.ok) return { rating, count: 0, label: labelMap[rating] };
 
           const data = await resp.json();
@@ -6960,7 +6986,7 @@
       const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
 
       try {
-        const resp = await fetch(url).then(r => r.json());
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
 
         if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
 
@@ -6985,7 +7011,7 @@
           if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
           try {
             const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
-            const countResp = await fetch(countUrl).then(r => r.json());
+            const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
             const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
             obj.count = c || obj._item.tag.post_count;
           } catch (e) { }
@@ -7041,7 +7067,7 @@
       const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
 
       try {
-        const resp = await fetch(url).then(r => r.json());
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
         if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
 
         let tags = resp.related_tags;
@@ -7054,7 +7080,7 @@
           const tagName = item.tag.name;
           const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
           try {
-            const imps = await fetch(impUrl).then(r => r.json());
+            const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
             if (Array.isArray(imps) && imps.length > 0) return null;
             return item;
           } catch (e) { return item; }
@@ -7077,7 +7103,7 @@
           if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
           try {
             const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
-            const countResp = await fetch(countUrl).then(r => r.json());
+            const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
             const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
             obj.count = c || obj._item.tag.post_count;
           } catch (e) { }
@@ -7141,7 +7167,7 @@
      * @param {boolean} [forceRefresh=false] Whether to bypass cache.
      * @return {Promise<Array>}
      */
-    async getFavCopyrightDistribution(userInfo, forceRefresh = false) {
+    async getFavCopyrightDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
       if (!userInfo.name) return [];
       const uploaderId = parseInt(userInfo.id || 0);
       const cacheKey = 'fav_copyright_dist';
@@ -7155,7 +7181,7 @@
       const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(normalizedName)}`;
 
       try {
-        const resp = await fetch(url).then(r => r.json());
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
         if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
 
         let tags = resp.related_tags;
@@ -7166,7 +7192,7 @@
           const tagName = item.tag.name;
           const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
           try {
-            const imps = await fetch(impUrl).then(r => r.json());
+            const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
             if (Array.isArray(imps) && imps.length > 0) return null;
             return item;
           } catch (e) { return item; }
@@ -7214,7 +7240,7 @@
           if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
           try {
             const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
-            const countResp = await fetch(countUrl).then(r => r.json());
+            const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
             const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
             obj.count = c || obj._item.tag.post_count; // Fallback? using item.tag.post_count is global count, not user. dangerous.
             // If user count is 0, frequency is 0?
@@ -7288,7 +7314,7 @@
           const normalizedName = userInfo.name.replace(/ /g, '_');
           const query = `user:${normalizedName} order:score rating:${ratingTags} ${extraQuery}`;
           const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
             return resp[0];
           }
@@ -7320,7 +7346,7 @@
           const normalizedName = userInfo.name.replace(/ /g, '_');
           const query = `user:${normalizedName} order:score rating:${ratingTags} age:<1w`;
           const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
             return resp[0];
           }
@@ -7352,7 +7378,7 @@
           // Use /posts/random.json?tags=...
           const query = `user:${normalizedName} rating:${ratingTags}`;
           const url = `/posts/random.json?tags=${encodeURIComponent(query)}`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           // /posts/random.json returns a single object, not array (usually)
           // But sometimes it might be empty object or error?
           if (resp && resp.id) {
@@ -7404,7 +7430,7 @@
       // 2. Fetch details (thumbnail, fav_count)
       try {
         const url = `/posts/${topLocal.id}.json`;
-        const details = await fetch(url).then(r => r.json());
+        const details = await this.rateLimiter.fetch(url).then(r => r.json());
         if (details && details.id) {
           return details; // Return full API object
         }
@@ -7479,7 +7505,7 @@
       try {
         const normalizedName = userInfo.name.replace(/ /g, '_');
         const url = `/user_feedbacks.json?commit=Search&search%5Bbody_matches%5D=promoted&search%5Buser_name%5D=${encodeURIComponent(normalizedName)}`;
-        const feedbacks = await fetch(url).then(r => r.json());
+        const feedbacks = await this.rateLimiter.fetch(url).then(r => r.json());
 
         if (!Array.isArray(feedbacks)) return [];
 
@@ -7544,7 +7570,7 @@
         try {
           const uniqueTag = `user:${normalizedName} ${tag}`;
           const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           let count = 0;
           if (resp && resp.counts && typeof resp.counts.posts === 'number') {
             count = resp.counts.posts;
@@ -7612,7 +7638,7 @@
         try {
           const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
           const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (resp && resp.counts && typeof resp.counts.posts === 'number') {
             obj.count = resp.counts.posts;
           }
@@ -7676,7 +7702,7 @@
         try {
           const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
           const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
-          const resp = await fetch(url).then(r => r.json());
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (resp && resp.counts && typeof resp.counts.posts === 'number') {
             obj.count = resp.counts.posts;
           }
@@ -7766,7 +7792,7 @@
         // Use tags=... order:score rating:x limit=1
         const normalizedName = userInfo.name.replace(/ /g, '_');
         const countUrl = `/counts/posts.json?tags=user:${encodeURIComponent(normalizedName)}`;
-        const countData = await fetch(countUrl).then(r => r.json());
+        const countData = await this.rateLimiter.fetch(countUrl).then(r => r.json());
         if (countData && typeof countData.counts === 'object' && typeof countData.counts.posts === 'number') {
           return countData.counts.posts;
         }
@@ -7777,7 +7803,7 @@
       // Method B: Profile API Fallback
       try {
         const profileUrl = `/users/${userInfo.id}.json`;
-        const profile = await fetch(profileUrl).then(r => r.json());
+        const profile = await this.rateLimiter.fetch(profileUrl).then(r => r.json());
         if (profile && typeof profile.post_upload_count === 'number') {
           return profile.post_upload_count;
         }
@@ -7930,7 +7956,7 @@
                 limit,
                 page: currentPage,
                 'tags': `user:${userInfo.name.replace(/ /g, '_')} order:id id:>${startId}`,
-                'only': 'id,uploader_id,created_at,score,rating,tag_count_general,preview_file_url,file_url'
+                'only': 'id,uploader_id,created_at,score,rating,tag_count_general,preview_file_url,file_url,file_ext'
               };
               const q = new URLSearchParams(params);
               const url = `/posts.json?${q.toString()}`;
@@ -7946,11 +7972,10 @@
                   const controller = new AbortController();
                   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s Timeout
 
-                  items = await fetch(url, { signal: controller.signal }).then(r => {
-                    clearTimeout(timeoutId);
-                    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-                    return r.json();
-                  });
+                  const fetchResp = await this.rateLimiter.fetch(url, { signal: controller.signal });
+                  clearTimeout(timeoutId);
+                  if (!fetchResp.ok) throw new Error(`HTTP ${fetchResp.status}`);
+                  items = await fetchResp.json();
                   break; // Success
                 } catch (err) {
                   attempts++;
@@ -7988,6 +8013,7 @@
                     tag_count_general: p.tag_count_general,
                     preview_file_url: p.preview_file_url,
                     file_url: p.file_url,
+                    file_ext: p.file_ext,
                     no: ++currentNo
                   }));
 
@@ -8032,7 +8058,8 @@
         reportProgress(total, total, 'PREPARING');
 
         // Refresh all stats after sync
-        await this.refreshAllStats(userInfo);
+        // If startId was 0, it was a Full Sync; otherwise it's a Partial Sync
+        await this.refreshAllStats(userInfo, startId === 0);
 
       } finally {
         AnalyticsDataManager.isGlobalSyncing = false;
@@ -8108,7 +8135,7 @@
      * @param {Object} userInfo The user's info object.
      * @return {Promise<void>}
      */
-    async refreshAllStats(userInfo) {
+    async refreshAllStats(userInfo, isFullSync = false) {
 
       const forceRefresh = true;
       try {
@@ -8144,7 +8171,16 @@
             if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
               AnalyticsDataManager.onProgressCallback(current, total, msg);
             }
-          })
+          }),
+          // Always refresh Random Posts
+          this.getRandomPosts(userInfo),
+          // Refresh Popular Posts only on Full Sync
+          ...(isFullSync ? [
+            this.getTopPostsByType(userInfo),
+            this.getRecentPopularPosts(userInfo),
+            this.getTopScorePost(userInfo, 'sfw'),
+            this.getTopScorePost(userInfo, 'nsfw')
+          ] : [])
         ]);
 
       } catch (e) {
@@ -8248,18 +8284,37 @@
   }
 
   /* --- Helper: Rate Limited Fetch --- */
+  /**
+   * Helper: Rate Limited Fetch
+   * Implements strict rate limiting using a Token Bucket algorithm and dedicated queues.
+   */
   class RateLimitedFetch {
-    constructor(maxConcurrency = 6, startDelayRange = [100, 300], cooldown = 1000) {
+    /**
+     * @param {number} maxConcurrency Maximum concurrent requests (for general queue).
+     * @param {Array<number>} startDelayRange Random delay range before request [min, max] ms.
+     * @param {number} requestsPerSecond Rate limit for general requests (default: 5).
+     */
+    constructor(maxConcurrency = 6, startDelayRange = [50, 150], requestsPerSecond = 6) {
       this.maxConcurrency = maxConcurrency;
       this.startDelayRange = startDelayRange;
-      this.cooldown = cooldown;
+
+      // Token Bucket for General Requests
+      this.rateLimit = requestsPerSecond; // Max tokens (burst)
+      this.refillRate = 1000 / requestsPerSecond; // ms per token
+      this.tokens = requestsPerSecond;
+      this.lastRefill = Date.now();
+
       this.queue = [];
       this.activeWorkers = 0;
       this.requestCounter = 0;
 
-      // Dedicated Queue for /reports/ (3s interval)
+      // Dedicated Worker for Reports (Strict cooldown)
       this.reportQueue = [];
-      this.isProcessingReports = false;
+      this.isProcessingReport = false;
+
+      // Dedicated Worker for Reposts
+      this.repostQueue = [];
+      this.isProcessingReposts = false;
     }
 
     getRequestCount() {
@@ -8267,7 +8322,7 @@
     }
 
     async fetch(url, options) {
-      // Intercept /reports/ requests
+      // 1. Intercept /reports/ requests (Legacy custom report endpoints if any)
       if (url.includes('/reports/')) {
         return new Promise((resolve, reject) => {
           this.reportQueue.push({ url, options, resolve, reject });
@@ -8275,6 +8330,23 @@
         });
       }
 
+      // 2. Intercept /reposts/ requests (Strict 1 req / 3s)
+      if (url.includes('/related_tag.json') || url.includes('/reposts/')) {
+        // Note: related_tag.json usage in 'getFavCopyrightDistribution' was effectively a repost check or similar heavy op?
+        // Actually user said "/reposts/posts.json". Let's stick to that strictly?
+        // But let's check if 'related_tag' needs similar treatment. The user specific request was for "/reposts/posts.json".
+        // Let's match strictly "reposts" or maybe "related_tag" if it's heavy.
+        // For now, adhere to user request: /reposts/posts.json
+      }
+      
+      if (url.includes('/reposts/')) { 
+         return new Promise((resolve, reject) => {
+            this.repostQueue.push({ url, options, resolve, reject });
+            this.processRepostQueue();
+         });
+      }
+
+      // 3. General Queue (Token Bucket)
       return new Promise((resolve, reject) => {
         this.queue.push({ url, options, resolve, reject });
         this.processQueue();
@@ -8282,29 +8354,45 @@
     }
 
     async processReportQueue() {
-      if (this.isProcessingReports || this.reportQueue.length === 0) return;
+      if (this.isProcessingReport || this.reportQueue.length === 0) return;
 
-      this.isProcessingReports = true;
+      this.isProcessingReport = true;
       const task = this.reportQueue.shift();
       this.requestCounter++;
 
-
-
       try {
         const response = await fetch(task.url, task.options);
-
         task.resolve(response);
       } catch (e) {
-        console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e); // Debug Log
+        console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e);
         task.reject(e);
       } finally {
         // Strict 3s cooldown for reports
-
         await new Promise(r => setTimeout(r, 3000));
-
-        this.isProcessingReports = false;
+        this.isProcessingReport = false;
         this.processReportQueue();
       }
+    }
+
+    async processRepostQueue() {
+        if (this.isProcessingReposts || this.repostQueue.length === 0) return;
+
+        this.isProcessingReposts = true;
+        const task = this.repostQueue.shift();
+        this.requestCounter++;
+
+        try {
+            const response = await fetch(task.url, task.options);
+            task.resolve(response);
+        } catch (e) {
+            console.error(`[RateLimitedFetch] Repost Failed: ${task.url}`, e);
+            task.reject(e);
+        } finally {
+            // Strict 3s cooldown for Reposts as requested
+            await new Promise(r => setTimeout(r, 3000));
+            this.isProcessingReposts = false;
+            this.processRepostQueue();
+        }
     }
 
     async processQueue() {
@@ -8312,13 +8400,30 @@
         return;
       }
 
+      // Token Bucket Check
+      this.refillTokens();
+      if (this.tokens < 1) {
+        // Not enough tokens, schedule a retry after refill interval
+        const waitTime = this.refillRate;
+        setTimeout(() => this.processQueue(), waitTime);
+        return;
+      }
+
+      // Consume Token
+      this.tokens -= 1;
       this.activeWorkers++;
       this.requestCounter++;
+      
       const task = this.queue.shift();
 
-      // Staggered Start Delay (Random 100-300ms)
+      // Staggered Start Delay (minimal now, rely on token bucket for rate)
+      // Keep small jitter to avoid bursty browser network thread locking?
+      // User wants "1 sec 7 request". Token bucket handles the *average* rate.
+      // Burst is allowed up to 'rateLimit' (7).
+      // We can remove startDelay or keep it very small.
+      // The original code had 100-300ms.
       const startDelay = Math.floor(Math.random() * (this.startDelayRange[1] - this.startDelayRange[0] + 1)) + this.startDelayRange[0];
-      await new Promise(r => setTimeout(r, startDelay));
+      if (startDelay > 0) await new Promise(r => setTimeout(r, startDelay));
 
       try {
         const response = await fetch(task.url, task.options);
@@ -8326,14 +8431,22 @@
       } catch (e) {
         task.reject(e);
       } finally {
-        // Dynamic Cooldown: 300ms for counts/posts.json, default (1000ms) for others
-        const isCounts = task.url && task.url.includes('/counts/posts.json');
-        const delay = isCounts ? 300 : this.cooldown;
-
-        await new Promise(r => setTimeout(r, delay));
         this.activeWorkers--;
+        // Immediately try next, token bucket will govern admission
         this.processQueue();
       }
+    }
+
+    refillTokens() {
+        const now = Date.now();
+        const elapsed = now - this.lastRefill;
+        if (elapsed > this.refillRate) {
+            const newTokens = Math.floor(elapsed / this.refillRate);
+            this.tokens = Math.min(this.rateLimit, this.tokens + newTokens);
+            this.lastRefill = now; // Or use now - (elapsed % this.refillRate) for precision?
+            // precision:
+            this.lastRefill = now - (elapsed % this.refillRate);
+        }
     }
   }
 
@@ -8349,7 +8462,7 @@
       this.db = db;
       this.settings = settings;
       this.tagName = tagName;
-      this.rateLimiter = new RateLimitedFetch(7, [100, 300], 1000); // 7 concurrent (reserved 1 for reports), 100-300ms staggered, 1s cooldown
+      this.rateLimiter = new RateLimitedFetch(6, [100, 300], 6); // 6 concurrent, 6 req/s total
       this.isMilestoneExpanded = false;
       this.resizeObserver = null;
       this.resizeTimeout = null;
