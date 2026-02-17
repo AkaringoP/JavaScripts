@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.3
+// @version      6.4
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -390,6 +390,11 @@
         tag_analytics: 'tagName, updatedAt',
         grass_settings: 'userId' // PK: userId
       });
+
+      // [v8] Remove Bubble Chart Data
+      this.version(8).stores({
+        bubble_data: null
+      });
     }
   }
 
@@ -502,6 +507,7 @@
 
         return {
           name,
+          normalizedName: name.replace(/ /g, '_'),
           id,
           created_at: joinDate,
           joinDate: new Date(joinDate)
@@ -1298,157 +1304,7 @@
         : 0;
     }
 
-    /**
-     * Fetches and filters Bubble Chart data for top copyrights.
-     * @param {string} userId The Target User ID.
-     * @param {Array<string>} copyrights List of copyright tags.
-     * @param {Function} onProgress Callback (current, total, message).
-     */
-    async fetchBubbleData(userInfo, copyrights, onProgress) {
-      const SERVER_USER_ID = 0; // Fixed ID for Server Data
-      const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 Days
-      const now = Date.now();
-      const totalSteps = copyrights.length * 2; // User + Server per copyright
-      let currentStep = 0;
 
-      const targetUserId = userInfo.id ? parseInt(userInfo.id, 10) : 0;
-
-
-
-      for (const copyright of copyrights) {
-        // ... (Server Data - Unchanged) ...
-        // --- 1. Server Data (Global) ---
-        currentStep++;
-        if (onProgress) onProgress(currentStep, totalSteps, `Fetching Server Data: ${copyright}`);
-
-        // Check Cache
-        let serverEntry = await this.db.bubble_data.get({ userId: SERVER_USER_ID, copyright: copyright });
-        let needServerFetch = true;
-
-        if (serverEntry && serverEntry.updated_at) {
-          const age = now - new Date(serverEntry.updated_at).getTime();
-          // Fix: Also check if data is actually present. If previous fetch failed (empty), retry.
-          if (age < CACHE_TTL && serverEntry.data && serverEntry.data.length > 0) {
-            needServerFetch = false;
-          }
-        }
-
-        if (needServerFetch) {
-          try {
-            // Fetch Related Tags (Server)
-            const serverData = await this._fetchAndFilterRelatedTags(copyright, null);
-            await this.db.bubble_data.put({
-              userId: SERVER_USER_ID,
-              copyright: copyright,
-              data: serverData,
-              updated_at: new Date().toISOString()
-            });
-          } catch (e) {
-            console.error(`[BubbleData] Server Fetch Error for ${copyright}:`, e);
-          }
-        }
-
-        // --- 2. User Data (Target User) ---
-        currentStep++;
-        if (onProgress) onProgress(currentStep, totalSteps, `Fetching User Data: ${copyright}`);
-
-        try {
-          // Pass userInfo object (contains name) to helper
-          const userData = await this._fetchAndFilterRelatedTags(copyright, userInfo);
-          await this.db.bubble_data.put({
-            userId: targetUserId,
-            copyright: copyright,
-            data: userData,
-            updated_at: new Date().toISOString()
-          });
-        } catch (e) {
-          console.error(`[BubbleData] User Fetch Error for ${copyright}:`, e);
-        }
-      }
-    }
-
-    /**
-     * Helper: Fetch related tags and filter based on implications.
-     * @param {string} copyright The copyright tag to fetch related tags for.
-     * @param {Object|null} userInfo User info to scope the search (optional).
-     * @return {Promise<Array<Object>>} List of filtered related tag data.
-     * @private
-     */
-    async _fetchAndFilterRelatedTags(copyright, userInfo) {
-      let query = copyright;
-      if (userInfo && userInfo.name) {
-        query += ` user:${userInfo.name.replace(/ /g, '_')}`;
-      } else if (userInfo) {
-        // Fallback if just ID passed (though we should avoid this based on tests)
-        query += ` user_id:${userInfo}`;
-      }
-
-      // 1. Fetch Candidates (Top 40 to filter down to 20)
-      const limit = 40;
-      const url = `${this.baseUrl}/related_tag.json?commit=Search&search[category]=Character&search[order]=Frequency&limit=${limit}&search[query]=${encodeURIComponent(query)}`;
-
-      const resp = await this.rateLimiter.fetch(url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const rawData = await resp.json();
-
-      let relatedList = [];
-      if (Array.isArray(rawData)) {
-        relatedList = rawData; // Fallback or direct array
-      } else if (rawData.related_tags && Array.isArray(rawData.related_tags)) {
-        relatedList = rawData.related_tags;
-      } else {
-        console.warn('[BubbleData] Unexpected API response structure:', rawData);
-        return [];
-      }
-
-      if (relatedList.length === 0) return [];
-
-      // 2. Filter Implications
-      // 2. Filter Implications
-      const candidates = relatedList.map(item => item.tag ? item.tag.name : item.name);
-      const consequentQuery = candidates.join(',');
-
-      const impUrl = `${this.baseUrl}/tag_implications.json?limit=200&search[status]=active&search[consequent_name_matches]=${encodeURIComponent(consequentQuery)}`;
-
-      const impResp = await this.rateLimiter.fetch(impUrl);
-      const implications = await impResp.json();
-
-      // Identify tags that are antecedents (children) of other tags in the list.
-      const childTagsData = new Set();
-      if (Array.isArray(implications)) {
-        implications.forEach(imp => {
-          if (candidates.includes(imp.consequent_name) && candidates.includes(imp.antecedent_name)) {
-            childTagsData.add(imp.antecedent_name);
-          }
-        });
-      }
-
-      // 3. Construct Final List
-      const finalList = [];
-      let count = 0;
-
-      for (const item of relatedList) {
-        if (count >= 20) break;
-
-        const tagObj = item.tag ? item.tag : item;
-
-        if (childTagsData.has(tagObj.name)) {
-          continue;
-        }
-
-        finalList.push({
-          name: tagObj.name,
-          count: tagObj.post_count,
-          // Use real stats from API
-          frequency: item.frequency || 0,
-          cosine: item.cosine_similarity || 0,
-          jaccard: item.jaccard_similarity || 0,
-          overlap: item.overlap_coefficient || 0
-        });
-        count++;
-      }
-      return finalList;
-    }
   }
 
 
@@ -1532,7 +1388,16 @@
         const wrapperWidth = wrapper.offsetWidth;
         const statsWidth = stats.offsetWidth;
         const gap = 20;
-        const maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+
+        // Check if wrapped (Graph is below Stats)
+        const isWrapped = container.offsetTop > (stats.offsetTop + 10);
+
+        let maxAvailableWidth;
+        if (isWrapped) {
+          maxAvailableWidth = wrapperWidth;
+        } else {
+          maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+        }
 
         if (savedWidth) {
           const numericWidth = parseFloat(savedWidth);
@@ -1592,10 +1457,20 @@
             const delta = mE.clientX - startX;
 
             // Constraints
+            // Constraints
             const wrapperWidth = wrapper.offsetWidth;
             const statsWidth = stats.offsetWidth;
             const gap = 20;
-            const maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+
+            // Check if wrapped (Graph is below Stats)
+            const isWrapped = container.offsetTop > (stats.offsetTop + 10);
+
+            let maxAvailableWidth;
+            if (isWrapped) {
+              maxAvailableWidth = wrapperWidth;
+            } else {
+              maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+            }
 
             if (type === 'move') {
               let newX = startXOffset + delta;
@@ -2039,7 +1914,8 @@
         date: k,
         value: v
       }));
-      const sanitizedName = userName.replace(/ /g, '_');
+
+      const sanitizedName = userInfo.normalizedName || userName.replace(/ /g, '_');
       const userIdVal = userInfo.id || userInfo.name;
 
       const getUrl = (date, count) => {
@@ -3636,25 +3512,7 @@
 
         if (animInterval) clearInterval(animInterval);
 
-        // --- Bubble Chart Data Collection ---
-        // Fetch distributions to identify Top 10 Copyrights
-        // We do this after sync to ensure we have the latest top copyrights.
-        try {
-          const dist = await this.dataManager.getCopyrightDistribution(this.context.targetUser);
-          const topCopyrights = dist.slice(0, 10).map(d => d.tagName).filter(n => n && n !== 'Other');
-
-          if (topCopyrights.length > 0) {
-            await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
-              const percent = Math.floor((c / t) * 100);
-              const headerHtml = `<div style="font-weight:bold;">Fetching Analytics: ${c} / ${t} (${percent}%)</div>`;
-              const subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">${msg}</div>`;
-              this.updateHeaderStatus(headerHtml + subHtml, '#ff4444');
-            });
-          }
-        } catch (err) {
-          console.error('[Danbooru Grass] Bubble Data Fetch Failed:', err);
-          // Non-critical, continue
-        }
+        // (Bubble Chart Data Collection removed)
 
         // Final Status (Green)
         if (shouldRender) {
@@ -4091,13 +3949,21 @@
         // Show Loading State Immediately
         content.innerHTML = `
           <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
-             <div style="font-size:48px; margin-bottom:20px; animation: danbooru-spin 2s linear infinite;">⌛</div>
-             <div style="font-size:1.2em; font-weight:600;">Generating Report...</div>
+             <div class="danbooru-spinner"></div>
+             <div style="font-size:1.2em; font-weight:600; margin-top: 20px;">Generating Report...</div>
              <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
              <style>
+                .danbooru-spinner {
+                   width: 50px;
+                   height: 50px;
+                   border: 5px solid #f3f3f3;
+                   border-top: 5px solid #0969da;
+                   border-radius: 50%;
+                   animation: danbooru-spin 1s linear infinite;
+                }
                 @keyframes danbooru-spin {
-                   from { transform: rotate(0deg); }
-                   to { transform: rotate(360deg); }
+                   0% { transform: rotate(0deg); }
+                   100% { transform: rotate(360deg); }
                 }
              </style>
           </div>
@@ -4106,7 +3972,7 @@
         // Pre-fetch all data!
         const dashboardData = await this.fetchDashboardData();
         const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, promotions, milestones1k, scatterData } = dashboardData;
-        const { maxUploads, maxDate, firstUploadDate } = summaryStats;
+        const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
         const today = new Date();
         const oneDay = 1000 * 60 * 60 * 24;
 
@@ -4432,7 +4298,7 @@
         summaryWrapper.innerHTML += makeCard('Total Uploads', stats.count.toLocaleString(), '🖼️', uploadDetails);
 
         // Calculations for Card 2 (Latest Post & Days)
-        const lastDate = stats.lastSync ? new Date(stats.lastSync).toISOString().split('T')[0] : 'N/A';
+        const lastDate = lastUploadDate ? lastUploadDate.toISOString().split('T')[0] : 'N/A';
 
         let daysSinceJoin = 0;
         let joinDateStr = '';
@@ -4590,196 +4456,45 @@
 
         let currentPieTab = 'copyright'; // Default to Copy as requested
 
-        const openBubbleChart = (d) => {
-          if (currentPieTab === 'copyright' && d.data.details.isOther) return;
+        /**
+         * Handles click events on pie chart slices.
+         * Opens a search query in a new tab based on the selected slice.
+         * @param {Object} d The data object from D3.
+         */
+        const handlePieClick = (d) => {
+          const targetName = this.context.targetUser.normalizedName || this.context.targetUser.name.replace(/ /g, '_') || '';
+          if (!targetName) return;
+          let query = '';
+          const details = d.data.details;
 
-          // 1. Non-Copyright Tabs: Open Search
-          if (currentPieTab !== 'copyright') {
-            const targetName = this.context.targetUser.name || '';
-            if (!targetName) return;
-            let query = '';
-            const details = d.data.details;
-
-            if (currentPieTab === 'rating') {
-              if (details && details.rating) query = `rating:${details.rating}`;
-            } else if (currentPieTab === 'character' || currentPieTab === 'fav_copyright') {
-              query = details.tagName || d.data.label;
-            } else if (currentPieTab === 'breasts' || currentPieTab === 'hair_length' || currentPieTab === 'hair_color') {
-              if (details.originalTag) query = details.originalTag;
-              else query = d.data.label.toLowerCase().replace(/ /g, '_');
-            }
-
-            if (query) {
-              window.open(`/posts?tags=user:${targetName}+${encodeURIComponent(query)}`, '_blank');
-            }
+          // Search Logic
+          if (currentPieTab === 'rating') {
+            if (details && details.rating) query = `rating:${details.rating}`;
+          } else if (currentPieTab === 'fav_copyright') {
+            // Fav Copy uses ordfav
+            query = `ordfav:${this.context.targetUser.normalizedName} ${details.tagName || d.data.label}`;
+            window.open(`/posts?tags=${encodeURIComponent(query)}`, '_blank');
             return;
+          } else if (currentPieTab === 'status') {
+            query = `status:${details.name}`;
+          } else if (currentPieTab === 'breasts' || currentPieTab === 'hair_length' || currentPieTab === 'hair_color') {
+            if (details.originalTag) query = details.originalTag;
+            else query = d.data.label.toLowerCase().replace(/ /g, '_');
+          } else {
+            // Standard (Character, Copyright, etc.)
+            query = details.tagName || d.data.label;
           }
 
-          // 2. Copyright Tab: Open Bubble Modal
-          const label = d.data.label;
-          const copyrightName = d.data.details.tagName;
-          const title = `${label} Details`;
-
-          const helpContent = `
-                <div style="font-size:10px; line-height:1.4; background:#000; color:#fff; padding:12px; border-radius:6px;">
-                    <h4 style="margin:0 0 10px 0; border-bottom:1px solid #444; padding-bottom:6px; color:#ddd; font-size:1.2em;">📊 Chart Interpretation Guide</h4>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom:12px;">
-                        <div>
-                            <div style="color:#aaa; font-weight:bold; margin-bottom:4px; border-bottom:1px solid #333;">Data Sources</div>
-                            <div style="margin-bottom:6px;"><span style="color:#4caf50;">●</span> <strong>User Data</strong></div>
-                            <div><span style="color:#aaa;">●</span> <strong>Server Data</strong></div>
-                        </div>
-                    </div>
-                    <div style="background:#1a1a1a; padding:10px; border-radius:4px; border:1px solid #333;">
-                        <div><strong style="color:#4285f4;">Cosine</strong> (Color): Connectedness</div>
-                        <div><strong style="color:#ddd;">Jaccard</strong> (X-Axis): Exclusivity</div>
-                        <div><strong style="color:#ddd;">Frequency</strong> (Y-Axis): Popularity</div>
-                        <div><strong style="color:#ddd;">Overlap</strong> (Size): Volume</div>
-                    </div>
-                </div>`;
-
-          const modalContent = `
-                <div style="display:flex; justify-content:center; gap:15px; margin-bottom:15px; align-items:center;">
-                   <label style="display:flex; align-items:center; cursor:pointer; font-size:13px; color:#333; user-select:none;">
-                       <input type="checkbox" id="toggle-user-bubbles" checked style="margin-right:6px; accent-color:#4caf50;">
-                       <span style="font-weight:bold; color:#4caf50;">● User Data</span>
-                   </label>
-                   <label style="display:flex; align-items:center; cursor:pointer; font-size:13px; color:#333; user-select:none;">
-                       <input type="checkbox" id="toggle-server-bubbles" checked style="margin-right:6px; accent-color:#666;">
-                       <span style="font-weight:bold; color:#666;">● Server Data</span>
-                   </label>
-                </div>
-                <div id="analytics-bubble-chart-container" style="width:100%; height:400px; display:flex; justify-content:center; align-items:center;">Loading...</div>
-            `;
-
-          this.showSubModal(title, modalContent, helpContent);
-
-          setTimeout(async () => {
-            const container = document.getElementById('analytics-bubble-chart-container');
-            if (!container) return;
-
-            // Fetch Logic
-            const uploaderId = this.context.targetUser.id ? parseInt(this.context.targetUser.id, 10) : 0;
-            try {
-              const entry = await this.dataManager.db.bubble_data.get({ userId: uploaderId, copyright: copyrightName });
-              const serverEntry = await this.dataManager.db.bubble_data.get({ userId: 0, copyright: copyrightName });
-
-              if (!entry || !serverEntry) {
-                // Trigger fetch if missing
-                if (d.data.details && d.data.details.tagName) {
-                  const topCopyrights = [d.data.details.tagName];
-                  await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
-                    container.innerHTML = `<div style="padding:20px;text-align:center;">${msg}</div>`;
-                  });
-                }
-              }
-              let combinedData = [];
-              const serverMap = new Map();
-
-              if (serverEntry && serverEntry.data) {
-                serverEntry.data.forEach(d => {
-                  const mapped = { ...d, isServer: true };
-                  combinedData.push(mapped);
-                  serverMap.set(d.name, mapped);
-                });
-              }
-
-              if (entry && entry.data) {
-                entry.data.forEach(d => {
-                  const mapped = { ...d, isServer: false };
-                  const serverCounterpart = serverMap.get(d.name);
-                  if (serverCounterpart) {
-                    mapped.serverData = serverCounterpart;
-                    serverCounterpart.userData = mapped;
-                  }
-                  combinedData.push(mapped);
-                });
-              }
-
-              if (combinedData.length === 0) {
-                container.innerHTML = '<div style="color:#888;">No data available.</div>';
-                return;
-              }
-
-              combinedData.sort((a, b) => {
-                if (a.isServer !== b.isServer) return a.isServer ? -1 : 1;
-                return b.overlap - a.overlap;
-              });
-
-              // Render
-              container.innerHTML = '';
-              const margin = { top: 20, right: 30, bottom: 40, left: 50 };
-              const width = container.clientWidth - margin.left - margin.right;
-              const height = 400 - margin.top - margin.bottom;
-
-              const svg = d3.select(container).append("svg")
-                .attr("width", width + margin.left + margin.right)
-                .attr("height", height + margin.top + margin.bottom)
-                .append("g")
-                .attr("transform", `translate(${margin.left},${margin.top})`);
-
-              // Scales
-              const x = d3.scaleLinear().domain([0, d3.max(combinedData, d => d.jaccard) * 1.1]).range([0, width]);
-              const y = d3.scaleLinear().domain([0, d3.max(combinedData, d => d.frequency) * 1.1]).range([height, 0]);
-              const z = d3.scaleSqrt().domain([0, d3.max(combinedData, d => d.overlap)]).range([2, 16]);
-
-              const userData = combinedData.filter(d => !d.isServer);
-              const minCos = d3.min(userData, d => d.cosine) || 0;
-              const maxCos = d3.max(userData, d => d.cosine) || 1;
-              const color = d3.scaleLinear().domain([minCos, (minCos + maxCos) / 2, maxCos]).range(["#ff5722", "#4caf50", "#03a9f4"]).interpolate(d3.interpolateHcl);
-
-              // Axes
-              svg.append("g").attr("transform", `translate(0,${height})`).call(d3.axisBottom(x));
-              svg.append("g").call(d3.axisLeft(y));
-
-              // Tooltip
-              const tooltip = d3.select("body").selectAll(".danbooru-bubble-tooltip").data([0]).join("div")
-                .attr("class", "danbooru-bubble-tooltip")
-                .style("position", "absolute")
-                .style("background", "#000").style("color", "#fff").style("padding", "10px").style("border-radius", "4px")
-                .style("pointer-events", "none").style("opacity", 0).style("z-index", "2147483647");
-
-              const safeClass = (str) => `bubble-tag-${(str || '').replace(/[^a-zA-Z0-9-_]/g, '-')}`;
-
-              svg.append('g').selectAll("circle")
-                .data(combinedData)
-                .join("circle")
-                .attr("class", d => safeClass(d.name))
-                .attr("cx", d => x(d.jaccard))
-                .attr("cy", d => y(d.frequency))
-                .attr("r", d => d.isServer ? 3 : z(d.overlap))
-                .style("fill", d => d.isServer ? '#cccccc' : color(d.cosine))
-                .style("opacity", d => d.isServer ? "0.5" : "0.75")
-                .on("mouseover", (event, d) => {
-                  tooltip.style("opacity", 1).html(`<div>${d.name}</div><div>J: ${d.jaccard.toFixed(2)}</div>`);
-                  // Simplified tooltip for brevity in this replace, user can expand if needed or I can copy full logic?
-                  // I should probably copy full logic later or now? 
-                  // Let's stick to simple logic for now to save tokens and avoid errors.
-                })
-                .on("mousemove", e => tooltip.style("left", (e.pageX + 15) + "px").style("top", (e.pageY + 15) + "px"))
-                .on("mouseout", () => tooltip.style("opacity", 0))
-                .on("click", (e, d) => window.open(`https://danbooru.donmai.us/posts?tags=${encodeURIComponent(d.name)}`, '_blank'));
-
-              // Toggle Logic
-              const updateVisibility = () => {
-                const showUser = document.getElementById('toggle-user-bubbles').checked;
-                const showServer = document.getElementById('toggle-server-bubbles').checked;
-                svg.selectAll("circle").style("opacity", d => (d.isServer ? (showServer ? 0.5 : 0) : (showUser ? 0.75 : 0)))
-                  .style("pointer-events", d => (d.isServer ? (showServer ? "all" : "none") : (showUser ? "all" : "none")));
-              };
-              document.getElementById('toggle-user-bubbles').onclick = updateVisibility;
-              document.getElementById('toggle-server-bubbles').onclick = updateVisibility;
-
-            } catch (e) {
-              console.error(e);
-              container.innerHTML = "Error";
-            }
-          }, 10);
+          if (query) {
+            const urlPrefix = `user:${targetName}`;
+            window.open(`/posts?tags=${encodeURIComponent(`${urlPrefix} ${query}`)}`, '_blank');
+          }
         };
 
         /**
          * Renders the Pie Chart content based on the current tab.
          * Handles data visualization and interaction.
+         * @return {void}
          */
         const renderPieContent = () => {
           const contextUser = this.context.targetUser;
@@ -4794,6 +4509,10 @@
           if (data.length === 0) {
             container.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available</div>';
             return;
+          }
+
+          if (!contextUser.normalizedName && contextUser.name) {
+            contextUser.normalizedName = contextUser.name.replace(/ /g, '_');
           }
 
           // Sort: Hair Length has a specific order (custom sort)
@@ -4846,7 +4565,14 @@
             }
           });
 
-          const totalValue = processedData.reduce((acc, curr) => acc + curr.value, 0);
+          // Filter out invalid/zero values to prevent D3 errors
+          const validData = processedData.filter(d => Number.isFinite(d.value) && d.value > 0);
+          const totalValue = validData.reduce((acc, curr) => acc + curr.value, 0);
+
+          if (validData.length === 0 || totalValue === 0) {
+            container.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available (Total count is 0)</div>';
+            return;
+          }
 
           // --- D3 Chart (Join Pattern) ---
           let chartWrapper = container.querySelector('.pie-chart-wrapper');
@@ -4869,7 +4595,7 @@
             shadow.style.position = 'absolute';
             shadow.style.top = '50%';
             shadow.style.left = '50%';
-            shadow.style.width = '140px'; // radius * 2 (180/2 - 20 = 70 => 140)
+            shadow.style.width = '140px';
             shadow.style.height = '140px';
             shadow.style.transform = 'translate(-50%, -50%) translateZ(-10px)';
             shadow.style.borderRadius = '50%';
@@ -4892,6 +4618,17 @@
             container.appendChild(chartWrapper);
 
             // Create SVG
+            // CSS for Pie Chart Hover Performance (Solution A)
+            const style = document.createElement('style');
+            style.innerHTML = `
+                .danbooru-grass-pie-path {
+                    opacity: 0.9;
+                    transition: opacity 0.1s ease-out;
+                    cursor: pointer;
+                }
+            `;
+            document.head.appendChild(style);
+
             d3.select(chartWrapper)
               .append("svg")
               .attr("width", 180)
@@ -4946,23 +4683,25 @@
 
           // PATHS (Join Pattern)
           svg.selectAll('path')
-            .data(pie(processedData))
+            .data(pie(validData), d => d.data.label)
             .join(
               enter => enter.append('path')
+                .attr('class', 'danbooru-grass-pie-path')
                 .attr('d', arc)
                 .attr('fill', d => d.data.color)
                 .style('opacity', '0')
                 .call(enter => enter.transition().duration(500).style('opacity', '0.9')),
               update => update
+                .attr('class', 'danbooru-grass-pie-path')
+                .attr('d', arc)
                 .call(update => update.transition().duration(500)
-                  .attr('fill', d => d.data.color)
-                  .attr('d', arc))
+                  .attr('fill', d => d.data.color))
             )
             .attr('stroke', '#fff')
             .style('stroke-width', '1px')
-            .style('cursor', 'pointer') // Ensure cursor
             .on('mouseover', function (event, d) {
-              d3.select(this).transition().duration(200).attr('d', arcHover).style('opacity', '1')
+              d3.select(this).transition().duration(200).attr('d', arcHover)
+                .style('opacity', '1')
                 .style('filter', 'drop-shadow(0px 0px 8px rgba(255,255,255,0.4))');
 
               let html = '';
@@ -5007,16 +4746,20 @@
               d3.select(this).transition().duration(200).attr('d', arc).style('opacity', '0.9').style('filter', 'none');
               tooltip.style("opacity", 0);
             })
-            .on('click', (event, d) => openBubbleChart(d));
+            .on('click', (event, d) => handlePieClick(d));
 
           // Update Legend
           const legendDiv = container.querySelector('.danbooru-grass-legend-scroll');
           if (legendDiv) { // Should exist
             let legendTitle = 'DIST.';
-            if (currentPieTab === 'rating') legendTitle = 'RATING DIST.';
-            else if (currentPieTab === 'character') legendTitle = 'CHAR. DIST.';
-            else if (currentPieTab === 'copyright') legendTitle = 'COPY. DIST.';
-            else if (currentPieTab === 'fav_copyright') legendTitle = 'FAV. COPY.';
+            if (currentPieTab === 'copyright') legendTitle = 'COPYRIGHTS';
+            else if (currentPieTab === 'character') legendTitle = 'CHARACTERS';
+            else if (currentPieTab === 'fav_copyright') legendTitle = 'FAVORITE COPYRIGHTS';
+            else if (currentPieTab === 'status') legendTitle = 'STATUS';
+            else if (currentPieTab === 'rating') legendTitle = 'RATINGS';
+            else if (currentPieTab === 'hair_length') legendTitle = 'HAIR LENGTH'
+            else if (currentPieTab === 'hair_color') legendTitle = 'HAIR COLOR';
+            else if (currentPieTab === 'breasts') legendTitle = 'BREASTS';
 
             // Rebuild legend content (simplest for text updates)
             // Preserve style tag
@@ -5031,19 +4774,19 @@
               if (!d.details.isOther) {
                 if (currentPieTab === 'rating') {
                   query = `rating:${d.details.rating}`;
-                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${query}`)}`;
+                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
                 } else if (currentPieTab === 'breasts') {
                   const tag = d.label.toLowerCase().replace(/ /g, '_');
-                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${tag}`)}`;
+                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${tag}`)}`;
                 } else if (currentPieTab === 'fav_copyright') {
-                  query = `ordfav:${contextUser.name.replace(/ /g, '_')} ${d.details.tagName || d.label}`;
+                  query = `ordfav:${contextUser.normalizedName} ${d.details.tagName || d.label}`;
                   targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
                 } else if (currentPieTab === 'status') {
                   query = `status:${d.details.name}`;
-                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${query}`)}`;
+                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
                 } else {
                   query = d.details.tagName || d.label;
-                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.name.replace(/ /g, '_')} ${query}`)}`;
+                  targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
                 }
               }
 
@@ -5204,7 +4947,7 @@
           random: randomPosts
         };
 
-        let currentWidgetMode = 'most'; // 'most', 'recent', 'random'
+        let currentWidgetMode = 'recent'; // 'recent', 'most', 'random'
         let currentTab = 'sfw'; // 'sfw', 'nsfw'
 
         /**
@@ -5220,24 +4963,16 @@
             return;
           }
 
-          // Use file_url for quality, but fallback to preview_file_url for videos or if file_url is missing
-          const videoExts = ['mp4', 'webm', 'zip', 'mov'];
-          const isVideo = videoExts.includes(data.file_ext);
-          const thumbUrl = isVideo ? (data.preview_file_url || data.file_url) : (data.file_url || data.preview_file_url || data.large_file_url);
+          const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(data);
           const dateStr = data.created_at ? new Date(data.created_at).toISOString().split('T')[0] : 'N/A';
           const link = `/posts/${data.id}`;
           const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
           const ratingLabel = ratingMap[data.rating] || data.rating;
 
-          // Dynamic Label based on mode
-          let modeLabel = 'Most Popular';
-          let modeIcon = '🏆';
-          if (currentWidgetMode === 'recent') {
-            modeLabel = 'Recent Popular';
-            modeIcon = '🔥';
-          } else if (currentWidgetMode === 'random') {
-            modeLabel = 'Random Post';
-            modeIcon = '🎲';
+          // Refresh Button Visibility
+          const refreshBtn = topPostContainer.querySelector('#analytics-random-refresh');
+          if (refreshBtn) {
+            refreshBtn.style.display = (currentWidgetMode === 'random') ? 'inline-block' : 'none';
           }
 
           // Helper to generate tag lines
@@ -5258,7 +4993,6 @@
             <div style="display:flex; gap:15px; align-items:flex-start;">
                 <a href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden; position:relative;">
                     <img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;" alt="#${data.id}">
-                    <div style="position:absolute; bottom:0; left:0; right:0; background:rgba(0,0,0,0.5); color:#fff; font-size:10px; padding:2px 4px; text-align:center;">${modeIcon} ${modeLabel}</div>
                 </a>
                 <div style="flex:1;">
                     <div style="font-weight:bold; font-size:1.1em; color:#0969da; margin-bottom:4px;">
@@ -5303,10 +5037,13 @@
            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
               <div style="font-size:0.85em; color:#666; letter-spacing:0.5px; display:flex; align-items:center; gap:5px;">
                  <select id="analytics-top-post-select" style="border:none; background:transparent; font-weight:bold; color:#666; cursor:pointer; text-transform:uppercase; font-size:1em; outline:none;">
-                    <option value="most">🏆 Most Popular Post</option>
                     <option value="recent">🔥 Recent Popular Post</option>
+                    <option value="most">🏆 Most Popular Post</option>
                     <option value="random">🎲 Random Post</option>
                  </select>
+                 <button id="analytics-random-refresh" style="display:none; border:none; background:transparent; cursor:pointer; font-size:1.2em; padding:0 4px; margin-left:5px; filter: grayscale(100%); opacity: 0.6;" title="Load New Random Post">
+                       🔄
+                   </button>
               </div>
               <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
                  <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
@@ -5325,6 +5062,31 @@
             currentWidgetMode = e.target.value;
             renderTopPostContent();
           });
+        }
+
+        // Random Refresh Logic
+        const refreshBtn = topPostContainer.querySelector('#analytics-random-refresh');
+        if (refreshBtn) {
+          refreshBtn.onclick = async (e) => {
+            e.stopPropagation();
+            // Rotate animation
+            refreshBtn.style.transform = 'rotate(360deg)';
+            setTimeout(() => refreshBtn.style.transform = 'rotate(0deg)', 400);
+
+            // Show loading state in content
+            const contentDiv = topPostContainer.querySelector('.top-post-content');
+            contentDiv.style.opacity = '0.5';
+
+            try {
+              const newRandoms = await (new AnalyticsDataManager(this.db)).getRandomPosts(this.context.targetUser);
+              topPostGroups.random = newRandoms;
+              renderTopPostContent();
+            } catch (err) {
+              console.error('Failed to refresh random post:', err);
+            } finally {
+              contentDiv.style.opacity = '1';
+            }
+          };
         }
 
         // Tab Event Delegation
@@ -5395,7 +5157,7 @@
           milestones.forEach(m => {
             const p = m.post;
             const isSafe = (p.rating === 's' || p.rating === 'g');
-            const thumbUrl = (p.preview_file_url || p.file_url);
+            const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(p);
             const showThumb = isNsfwEnabled || isSafe;
 
             msHtml += `
@@ -5586,10 +5348,13 @@
               dateFilter = `date:${m.date}-01...${nextDate}-01`;
             } else {
               const [yy, mm] = m.date.split('-').map(Number);
-              const lastDay = new Date(yy, mm, 0).getDate();
-              dateFilter = `date:${m.date}-01...${m.date}-${lastDay}`;
+              // Calculate next month
+              const nextMonth = new Date(yy, mm, 1); // mm is 1-indexed from map(Number), so new Date(yy, mm, 1) is actually month+1
+              const nextY = nextMonth.getFullYear();
+              const nextM = String(nextMonth.getMonth() + 1).padStart(2, '0');
+              dateFilter = `date:${m.date}-01...${nextY}-${nextM}-01`;
             }
-            const searchUrl = `/posts?tags=user:${encodeURIComponent(this.context.targetUser.name)}+${dateFilter}`;
+            const searchUrl = `/posts?tags=user:${encodeURIComponent(this.context.targetUser.normalizedName)}+${dateFilter}`;
 
             svg += `
               <g class="month-column" style="cursor: pointer;" onclick="window.open('${searchUrl}', '_blank')">
@@ -6545,6 +6310,36 @@
     }
 
     /**
+     * Centrally selects the most appropriate thumbnail URL for a post.
+     * Prioritizes high-quality WebP variants (720x720 or 360x360) for performance.
+     * @param {Object} post The post data object from Danbooru API.
+     * @return {string} The selected thumbnail URL.
+     */
+    static getBestThumbnailUrl(post) {
+      if (!post) return '';
+
+      // 1. Try modern variants
+      if (post.variants && Array.isArray(post.variants) && post.variants.length > 0) {
+        const preferredTypes = ['720x720', '360x360'];
+        // 1a. Try preferred variants in WebP
+        for (const type of preferredTypes) {
+          const variant = post.variants.find(v => v.type === type && v.file_ext === 'webp');
+          if (variant) return variant.url;
+        }
+        // 1b. Try preferred variants in any format
+        for (const type of preferredTypes) {
+          const variant = post.variants.find(v => v.type === type);
+          if (variant) return variant.url;
+        }
+        // 1c. Last resort: any variant
+        if (post.variants[0] && post.variants[0].url) return post.variants[0].url;
+      }
+
+      // 2. Fallback to legacy fields (if still present in object or for non-variant posts)
+      return post.preview_file_url || post.file_url || post.large_file_url || '';
+    }
+
+    /**
      * Fetches a thumbnail URL with built-in retry logic for handling rate limits.
      * Implements exponential backoff on 429 status codes.
      * @param {string} tags The tag string to search for.
@@ -6553,25 +6348,19 @@
      * @return {Promise<string>} The preview URL or an empty string if not found or failed.
      */
     async fetchThumbnailWithRetry(tags, retries = 3, delay = 2000) {
-      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,file_url,rating,file_ext`;
+      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,variants,rating`;
       for (let i = 0; i < retries; i++) {
         try {
           const resp = await this.rateLimiter.fetch(url);
           if (resp.status === 429) {
             await new Promise(r => setTimeout(r, delay + Math.random() * 2000));
-            delay *= 2; 
+            delay *= 2;
             continue;
           }
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
           if (Array.isArray(data) && data.length > 0) {
-            const post = data[0];
-            // If it's a video (mp4, webm, zip/ugoira), we MUST use preview_file_url
-            const videoExts = ['mp4', 'webm', 'zip', 'mov'];
-            if (videoExts.includes(post.file_ext) || !post.file_url) {
-              return post.preview_file_url || post.file_url || '';
-            }
-            return post.file_url || post.preview_file_url || '';
+            return AnalyticsDataManager.getBestThumbnailUrl(data[0]);
           }
           return '';
         } catch (e) {
@@ -6604,22 +6393,23 @@
     }
 
     /**
-     * Calculates summary statistics including max uploads and first upload date.
+     * Calculates summary statistics including max uploads, first, and last upload dates.
      * Iterates through all synced posts for the user to determine the most active day.
      * @param {!Object} userInfo The user's information object.
-     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date}>} Summary stats.
+     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date, lastUploadDate: ?Date}>} Summary stats.
      */
     async getSummaryStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
-      if (!uploaderId) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null };
+      if (!uploaderId) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null };
 
       // efficiently fetch just created_at
       const posts = await this.db.posts.where('uploader_id').equals(uploaderId).toArray();
 
-      if (posts.length === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null };
+      if (posts.length === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null };
 
       const history = {};
       let firstUploadDate = null;
+      let lastUploadDate = null;
 
       posts.forEach(p => {
         const dStr = p.created_at.split('T')[0];
@@ -6628,6 +6418,9 @@
         const d = new Date(p.created_at);
         if (!firstUploadDate || d < firstUploadDate) {
           firstUploadDate = d;
+        }
+        if (!lastUploadDate || d > lastUploadDate) {
+          lastUploadDate = d;
         }
       });
 
@@ -6644,7 +6437,8 @@
       return {
         maxUploads,
         maxDate,
-        firstUploadDate
+        firstUploadDate,
+        lastUploadDate
       };
     }
 
@@ -6735,7 +6529,7 @@
       matches.forEach(p => {
         const isSafe = (p.rating === 's' || p.rating === 'g');
         const shouldFetch = isNsfwEnabled || isSafe;
-        if (shouldFetch && !p.preview_file_url && !p.file_url) {
+        if (shouldFetch && (!p.variants || p.variants.length === 0)) {
           missingIds.push(p.id);
         }
       });
@@ -6747,7 +6541,7 @@
           for (let i = 0; i < missingIds.length; i += chunkSize) {
             const chunk = missingIds.slice(i, i + chunkSize);
             const idsStr = chunk.join(',');
-            const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,preview_file_url,file_url,rating`;
+            const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,variants,rating,preview_file_url`;
 
             const res = await this.rateLimiter.fetch(url);
             if (res.ok) {
@@ -6756,10 +6550,17 @@
               fetchedItems.forEach(item => {
                 const local = matches.find(m => m.id === item.id);
                 if (local) {
+                  local.variants = item.variants;
                   local.preview_file_url = item.preview_file_url;
-                  local.file_url = item.file_url;
                   // Ensure rating matches just in case
                   local.rating = item.rating;
+
+                  // Update DB for persistence (no need for bulkPut if we do it here)
+                  this.db.posts.update(local.id, {
+                    variants: item.variants,
+                    preview_file_url: item.preview_file_url,
+                    rating: item.rating
+                  }).catch(e => console.error("Failed to update post", local.id, e));
                 }
               });
             }
@@ -6872,11 +6673,12 @@
     async getStatusDistribution(userInfo, startDate = null) {
       if (!userInfo.name) return [];
 
+      const normalizedName = userInfo.name.replace(/ /g, '_');
       const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
 
       const tasks = statuses.map(async (status) => {
         try {
-          let tagQuery = `user:${userInfo.name} status:${status}`;
+          let tagQuery = `user:${normalizedName} status:${status}`;
           if (startDate) {
             const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
             tagQuery += ` date:>=${dateStr}`;
@@ -6916,6 +6718,7 @@
     async getRatingDistribution(userInfo, startDate = null) {
       if (!userInfo.name) return [];
 
+      const normalizedName = userInfo.name.replace(/ /g, '_');
       const ratings = ['g', 's', 'q', 'e'];
       const labelMap = {
         'g': 'General',
@@ -6926,7 +6729,7 @@
 
       const tasks = ratings.map(async (rating) => {
         try {
-          let tagQuery = `user:${userInfo.name} rating:${rating}`;
+          let tagQuery = `user:${normalizedName} rating:${rating}`;
           if (startDate) {
             const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
             tagQuery += ` date:>=${dateStr}`;
@@ -7239,14 +7042,15 @@
           const tagName = obj.tagName;
           if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
           try {
-            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
+            // Use fav: for counting (more standard), ordfav: for sorting/linking
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`fav:${normalizedName} ${tagName}`)}`;
             const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
             const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
-            obj.count = c || obj._item.tag.post_count; // Fallback? using item.tag.post_count is global count, not user. dangerous.
-            // If user count is 0, frequency is 0?
-            // The original code used `userCount || item.tag.post_count`.
-            // If `userCount` failed, it used global.
-          } catch (e) { }
+            // console.log(`[Danbooru Grass] Fav Count for ${tagName}: ${c} (URL: ${countUrl})`); // Debug
+            obj.count = c;
+          } catch (e) {
+            console.warn('[Danbooru Grass] Count fetch failed', e);
+          }
           delete obj._item;
         });
 
@@ -7313,7 +7117,7 @@
           // Use tags=... order:score rating:x limit=1
           const normalizedName = userInfo.name.replace(/ /g, '_');
           const query = `user:${normalizedName} order:score rating:${ratingTags} ${extraQuery}`;
-          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
+          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
           const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
             return resp[0];
@@ -7345,7 +7149,7 @@
         try {
           const normalizedName = userInfo.name.replace(/ /g, '_');
           const query = `user:${normalizedName} order:score rating:${ratingTags} age:<1w`;
-          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1`;
+          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
           const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           if (Array.isArray(resp) && resp.length > 0) {
             return resp[0];
@@ -7377,7 +7181,7 @@
           const normalizedName = userInfo.name.replace(/ /g, '_');
           // Use /posts/random.json?tags=...
           const query = `user:${normalizedName} rating:${ratingTags}`;
-          const url = `/posts/random.json?tags=${encodeURIComponent(query)}`;
+          const url = `/posts/random.json?tags=${encodeURIComponent(query)}&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
           const resp = await this.rateLimiter.fetch(url).then(r => r.json());
           // /posts/random.json returns a single object, not array (usually)
           // But sometimes it might be empty object or error?
@@ -7956,7 +7760,7 @@
                 limit,
                 page: currentPage,
                 'tags': `user:${userInfo.name.replace(/ /g, '_')} order:id id:>${startId}`,
-                'only': 'id,uploader_id,created_at,score,rating,tag_count_general,preview_file_url,file_url,file_ext'
+                'only': 'id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url'
               };
               const q = new URLSearchParams(params);
               const url = `/posts.json?${q.toString()}`;
@@ -8011,9 +7815,8 @@
                     score: p.score,
                     rating: p.rating,
                     tag_count_general: p.tag_count_general,
+                    variants: p.variants,
                     preview_file_url: p.preview_file_url,
-                    file_url: p.file_url,
-                    file_ext: p.file_ext,
                     no: ++currentNo
                   }));
 
@@ -8105,26 +7908,12 @@
 
             await this.db.posts.where('uploader_id').equals(uid).delete();
             await this.db.piestats.where('userId').equals(uid).delete();
-            await this.db.bubble_data.where('userId').equals(uid).delete(); // Also clear bubble data
+
             localStorage.removeItem(syncKey);
           }
         }
 
-        // 2. Cleanup Stale Server Bubble Data (userId: 0)
-        // Since userId:0 isn't in 'posts', we check bubble_data directly.
-        const serverData = await this.db.bubble_data.where('userId').equals(0).toArray();
-        for (const entry of serverData) {
-          if (entry.updated_at) {
-            const age = now - new Date(entry.updated_at).getTime();
-            if (age > THRESHOLD) {
-
-              await this.db.bubble_data.delete([entry.userId, entry.copyright]);
-            }
-          } else {
-            // No timestamp? Delete.
-            await this.db.bubble_data.delete([entry.userId, entry.copyright]);
-          }
-        }
+        // Server bubble data cleanup removed
       } catch (e) {
         console.warn('[Danbooru Grass] Cleanup failed', e);
       }
@@ -8207,7 +7996,7 @@
       await this.db.piestats.where('userId').equals(uploaderId).delete();
 
       // 3. Delete Bubble Data (User Specific only, preserve Server cache)
-      await this.db.bubble_data.where('userId').equals(uploaderId).delete();
+
 
       // Clear metadata (Last Sync Time)
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
@@ -8338,12 +8127,12 @@
         // Let's match strictly "reposts" or maybe "related_tag" if it's heavy.
         // For now, adhere to user request: /reposts/posts.json
       }
-      
-      if (url.includes('/reposts/')) { 
-         return new Promise((resolve, reject) => {
-            this.repostQueue.push({ url, options, resolve, reject });
-            this.processRepostQueue();
-         });
+
+      if (url.includes('/reposts/')) {
+        return new Promise((resolve, reject) => {
+          this.repostQueue.push({ url, options, resolve, reject });
+          this.processRepostQueue();
+        });
       }
 
       // 3. General Queue (Token Bucket)
@@ -8375,24 +8164,24 @@
     }
 
     async processRepostQueue() {
-        if (this.isProcessingReposts || this.repostQueue.length === 0) return;
+      if (this.isProcessingReposts || this.repostQueue.length === 0) return;
 
-        this.isProcessingReposts = true;
-        const task = this.repostQueue.shift();
-        this.requestCounter++;
+      this.isProcessingReposts = true;
+      const task = this.repostQueue.shift();
+      this.requestCounter++;
 
-        try {
-            const response = await fetch(task.url, task.options);
-            task.resolve(response);
-        } catch (e) {
-            console.error(`[RateLimitedFetch] Repost Failed: ${task.url}`, e);
-            task.reject(e);
-        } finally {
-            // Strict 3s cooldown for Reposts as requested
-            await new Promise(r => setTimeout(r, 3000));
-            this.isProcessingReposts = false;
-            this.processRepostQueue();
-        }
+      try {
+        const response = await fetch(task.url, task.options);
+        task.resolve(response);
+      } catch (e) {
+        console.error(`[RateLimitedFetch] Repost Failed: ${task.url}`, e);
+        task.reject(e);
+      } finally {
+        // Strict 3s cooldown for Reposts as requested
+        await new Promise(r => setTimeout(r, 3000));
+        this.isProcessingReposts = false;
+        this.processRepostQueue();
+      }
     }
 
     async processQueue() {
@@ -8413,7 +8202,7 @@
       this.tokens -= 1;
       this.activeWorkers++;
       this.requestCounter++;
-      
+
       const task = this.queue.shift();
 
       // Staggered Start Delay (minimal now, rely on token bucket for rate)
@@ -8438,15 +8227,15 @@
     }
 
     refillTokens() {
-        const now = Date.now();
-        const elapsed = now - this.lastRefill;
-        if (elapsed > this.refillRate) {
-            const newTokens = Math.floor(elapsed / this.refillRate);
-            this.tokens = Math.min(this.rateLimit, this.tokens + newTokens);
-            this.lastRefill = now; // Or use now - (elapsed % this.refillRate) for precision?
-            // precision:
-            this.lastRefill = now - (elapsed % this.refillRate);
-        }
+      const now = Date.now();
+      const elapsed = now - this.lastRefill;
+      if (elapsed > this.refillRate) {
+        const newTokens = Math.floor(elapsed / this.refillRate);
+        this.tokens = Math.min(this.rateLimit, this.tokens + newTokens);
+        this.lastRefill = now; // Or use now - (elapsed % this.refillRate) for precision?
+        // precision:
+        this.lastRefill = now - (elapsed % this.refillRate);
+      }
     }
   }
 
@@ -9218,7 +9007,7 @@
         tags: `${tagName} date:>=${tagCreatedAt}`,
         limit: limit,
         page: 'a0',
-        only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
+        only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
       });
       let url = `/posts.json?${params.toString()}`;
 
@@ -9250,7 +9039,7 @@
             tags: `${tagName}`,
             limit: 100,
             page: 'a0',
-            only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,rating,score,tag_string_copyright,tag_string_character'
+            only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
           });
           const fbPosts = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then(r => r.json());
           if (Array.isArray(fbPosts) && fbPosts.length > 0) {
@@ -9656,7 +9445,7 @@
 
     async fetchLatestPost(tagName) {
       // Query for the single latest post
-      const url = `/posts.json?tags=${encodeURIComponent(tagName)}&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext`;
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}&limit=1&only=id,created_at,variants,uploader_id,rating,preview_file_url`;
       try {
         const posts = await this.rateLimiter.fetch(url).then(r => r.json());
         return (posts && posts.length > 0) ? posts[0] : null;
@@ -9682,7 +9471,7 @@
       // Query for the most popular SFW (or NSFW) post in the last 3 days
       // age:..3d, order:score, rating:g (or is:nsfw)
       const ratingQuery = isNSFW ? 'is:nsfw' : 'is:sfw';
-      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+${ratingQuery}&limit=1&only=id,created_at,preview_file_url,large_file_url,uploader_id,rating,file_ext,score`;
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+${ratingQuery}&limit=1&only=id,created_at,variants,uploader_id,rating,score,preview_file_url`;
       try {
         const posts = await this.rateLimiter.fetch(url).then(r => r.json());
         return (posts && posts.length > 0) ? posts[0] : null;
@@ -9949,7 +9738,7 @@
             tags: `${tagName} date:>${prevDateStr} order:id`,
             limit: limit,
             page: page,
-            only: 'id,created_at,uploader_id,uploader_name,preview_file_url,file_url,rating'
+            only: 'id,created_at,uploader_id,uploader_name,variants,rating,preview_file_url'
           });
 
           const url = `/posts.json?${params.toString()}`;
@@ -10647,7 +10436,7 @@
                  <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                     <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                        <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                          <img src="${tagData.latestPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                           <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.latestPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                        </a>
                     </div>
                     <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
@@ -10660,7 +10449,7 @@
                      <div id="trending-post-sfw" class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                                <img src="${tagData.trendingPost.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                                 <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                            </a>
                         </div>
                         <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
@@ -10673,7 +10462,7 @@
                      <div id="trending-post-nsfw" class="nsfw-monitor" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
                         <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                                <img src="${tagData.trendingPostNSFW.preview_file_url}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                                 <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPostNSFW)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                            </a>
                         </div>
                         <div style="font-size: 0.75em; font-weight: bold; color: #cc0000; margin-top: 5px;">Trending(NSFW)</div>
@@ -11286,7 +11075,7 @@
         }
 
         const dateStr = new Date(p.created_at).toISOString().slice(0, 10);
-        const thumbUrl = p.preview_file_url || p.large_file_url || p.file_url;
+        const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(p);
         const uploaderName = p.uploader_name || `User ${p.uploader_id}`;
 
         const card = document.createElement('div');
