@@ -4975,6 +4975,21 @@
             refreshBtn.style.display = (currentWidgetMode === 'random') ? 'inline-block' : 'none';
           }
 
+          // Search Link logic
+          const searchLinkBtn = topPostContainer.querySelector('#analytics-more-post-link');
+          if (searchLinkBtn) {
+            // Only show for Recent Popular mode
+            searchLinkBtn.style.display = (currentWidgetMode === 'recent') ? 'inline-block' : 'none';
+
+            const normalizedName = this.context.targetUser.normalizedName;
+            const ratingTag = currentTab === 'sfw' ? 'is:sfw' : 'is:nsfw';
+            const searchQuery = `user:${normalizedName} order:score age:<1w ${ratingTag}`;
+
+            searchLinkBtn.onclick = () => {
+              window.open(`/posts?tags=${encodeURIComponent(searchQuery)}`, '_blank');
+            };
+          }
+
           // Helper to generate tag lines
           const createTagLine = (label, icon, tags) => {
             if (!tags) return '';
@@ -5041,10 +5056,13 @@
                     <option value="most">🏆 Most Popular Post</option>
                     <option value="random">🎲 Random Post</option>
                  </select>
-                 <button id="analytics-random-refresh" style="display:none; border:none; background:transparent; cursor:pointer; font-size:1.2em; padding:0 4px; margin-left:5px; filter: grayscale(100%); opacity: 0.6;" title="Load New Random Post">
+                  <button id="analytics-random-refresh" style="display:none; border:none; background:transparent; cursor:pointer; font-size:1.2em; padding:0 4px; margin-left:5px; filter: grayscale(100%); opacity: 0.6;" title="Load New Random Post">
                        🔄
                    </button>
-              </div>
+                  <button id="analytics-more-post-link" style="border:none; background:transparent; cursor:pointer; font-size:1.1em; padding:0 4px; margin-left:2px; filter: grayscale(100%); opacity: 0.6;" title="See more posts">
+                       ↗️
+                   </button>
+               </div>
               <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
                  <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
                  <button class="top-post-tab" id="analytics-top-nsfw-btn" data-mode="nsfw" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">NSFW</button>
