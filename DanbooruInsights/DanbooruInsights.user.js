@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.4
+// @version      6.5
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://danbooru.donmai.us/users/*
@@ -101,6 +101,204 @@
       },
     },
   };
+
+  /**
+   * Centralized CSS styles for Danbooru Insights to prevent duplicate injection
+   * and improve performance by utilizing CSS classes and pseudo-classes.
+   */
+  const GLOBAL_CSS = `
+    /* -- Animations & Base -- */
+    @keyframes di-slide-in-out-a {
+        0%, 28% { transform: translateX(0); opacity: 1; }
+        33% { transform: translateX(-20px); opacity: 0; }
+        35%, 95% { transform: translateX(20px); opacity: 0; }
+        100% { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes di-slide-in-out-b {
+        0%, 28% { transform: translateX(20px); opacity: 0; }
+        33%, 61% { transform: translateX(0); opacity: 1; }
+        66% { transform: translateX(-20px); opacity: 0; }
+        68%, 100% { transform: translateX(20px); opacity: 0; }
+    }
+    @keyframes di-slide-in-out-c {
+        0%, 61% { transform: translateX(20px); opacity: 0; }
+        66%, 95% { transform: translateX(0); opacity: 1; }
+        100% { transform: translateX(-20px); opacity: 0; }
+    }
+    
+    /* -- UserAnalyticsApp Modal & Button -- */
+    #danbooru-grass-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 10000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    #danbooru-grass-modal-overlay.visible {
+      display: flex;
+      opacity: 1;
+    }
+    #danbooru-grass-modal-window {
+      width: 80%;
+      max-width: 1000px;
+      height: 80%;
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      color: #333;
+      font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    }
+    #danbooru-grass-modal-close {
+      position: absolute;
+      top: 15px;
+      right: 20px;
+      font-size: 24px;
+      cursor: pointer;
+      color: #666;
+      z-index: 10;
+      line-height: 1;
+    }
+    #danbooru-grass-modal-close:hover {
+      color: #000;
+    }
+    #danbooru-grass-modal-content {
+      padding: 40px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .di-analytics-entry-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 10px;
+      vertical-align: middle;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      padding: 4px;
+      border-radius: 50%;
+      transition: background 0.2s;
+      font-size: 1.2em;
+    }
+    .di-analytics-entry-btn:hover {
+      background: rgba(128,128,128,0.2);
+    }
+
+    /* -- Spinner -- */
+    .di-spinner {
+        width: 50px;
+        height: 50px;
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #0969da;
+        border-radius: 50%;
+        animation: di-spin 1s linear infinite;
+    }
+    @keyframes di-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    /* -- Animated Summary Card -- */
+    .di-upload-card-pane {
+        animation-duration: 15s;
+        animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        animation-iteration-count: infinite;
+    }
+    #danbooru-insights-upload-card.paused .di-upload-card-pane {
+        animation-play-state: paused;
+    }
+    .di-play-pause-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        opacity: 0.5;
+        transition: opacity 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        border-radius: 4px;
+    }
+    .di-play-pause-btn:hover {
+        opacity: 1;
+        background-color: #f0f0f0;
+    }
+
+    /* -- Pie Chart Tabs -- */
+    .di-pie-tab {
+        background: #eee;
+        color: #555;
+        border: none;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .di-pie-tab:hover { background: #ddd; }
+    .di-pie-tab.active { background: #555; color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+    .di-pie-tab:not(.active):hover { background: #ddd; }
+
+    /* -- User Rankings (Tag Analytics) -- */
+    .di-ranking-username:hover { font-weight: bold; }
+    .user-admin { color: #ed2426; } .user-admin:hover { color: #ff5a5b; }
+    .user-moderator { color: #00ab2c; } .user-moderator:hover { color: #35c64a; }
+    .user-builder { color: #a800aa; } .user-builder:hover { color: #d700d9; }
+    .user-platinum { color: #777892; } .user-platinum:hover { color: #9192a7; }
+    .user-gold { color: #fd9200; } .user-gold:hover { color: #ffc5a5; }
+    .user-member { color: #0075f8; } .user-member:hover { color: #5091fa; }
+
+    /* -- Hover Utilities -- */
+    .di-hover-translate-up { transition: transform 0.2s; }
+    .di-hover-translate-up:hover { transform: translateY(-3px) !important; }
+    
+    .di-hover-scale { transition: transform 0.2s; }
+    .di-hover-scale:hover { transform: scale(1.02) !important; }
+    
+    .di-hover-underline { text-decoration: none; }
+    .di-hover-underline:hover { text-decoration: underline !important; }
+    
+    .di-hover-text-primary { transition: color 0.2s; }
+    .di-hover-text-primary:hover { color: #007bff !important; }
+
+    /* -- Layout Utilities -- */
+    .di-card { background: #f9f9f9; padding: 15px; border-radius: 8px; }
+    .di-card-sm { background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eee; }
+    .di-flex-col-between { display: flex; flex-direction: column; justify-content: space-between; }
+    .di-flex-row-between { display: flex; justify-content: space-between; align-items: center; }
+    .di-flex-center { display: flex; justify-content: center; align-items: center; }
+  `;
+
+  /**
+   * Injects the global stylesheet into the document head exactly once.
+   */
+  function injectGlobalStyles() {
+    if (document.getElementById('danbooru-insights-global-css')) return;
+    const style = document.createElement('style');
+    style.id = 'danbooru-insights-global-css';
+    style.textContent = GLOBAL_CSS;
+    document.head.appendChild(style);
+  }
+
+  // Inject exactly once on script execution
+  injectGlobalStyles();
+
+
 
   /**
    * Manages user settings and persistence using localStorage.
@@ -500,6 +698,16 @@
           }
         }
 
+        // --- 4. Extract Level ---
+        let level_string = null;
+        const levelHeader = cells.find((el) => el.textContent.trim() === 'Level');
+        if (levelHeader) {
+          const valEl = levelHeader.nextElementSibling;
+          if (valEl) {
+            level_string = valEl.textContent.trim();
+          }
+        }
+
         if (!name) return null;
         if (!id) {
           console.warn('[Danbooru Grass] User ID not found. Functionality may be limited (Notes).');
@@ -510,7 +718,8 @@
           normalizedName: name.replace(/ /g, '_'),
           id,
           created_at: joinDate,
-          joinDate: new Date(joinDate)
+          joinDate: new Date(joinDate),
+          level_string
         };
 
       } catch (e) {
@@ -3230,100 +3439,8 @@
      */
     run() {
 
-      this.injectStyles();
       this.createModal(); // Create hidden modal
       this.injectButton(); // Add entry button
-    }
-
-    /**
-     * Injects CSS styles for the modal and button.
-     */
-    injectStyles() {
-      const styleId = 'danbooru-grass-analytics-style';
-      if (document.getElementById(styleId)) return;
-
-      const style = document.createElement('style');
-      style.id = styleId;
-      style.textContent = `
-        /* Modal Overlay */
-        #${this.modalId}-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          width: 100vw;
-          height: 100vh;
-          background: rgba(0, 0, 0, 0.4);
-          z-index: 10000;
-          display: none;
-          justify-content: center;
-          align-items: center;
-          backdrop-filter: blur(2px);
-          opacity: 0;
-          transition: opacity 0.2s ease;
-        }
-        #${this.modalId}-overlay.visible {
-          display: flex;
-          opacity: 1;
-        }
-
-        /* Modal Window */
-        #${this.modalId}-window {
-          width: 80%;
-          max-width: 1000px;
-          height: 80%;
-          background: rgba(255, 255, 255, 0.9);
-          border-radius: 12px;
-          box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-          backdrop-filter: blur(10px);
-          display: flex;
-          flex-direction: column;
-          position: relative;
-          color: #333;
-          font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
-        }
-
-        /* Close Button */
-        #${this.modalId}-close {
-          position: absolute;
-          top: 15px;
-          right: 20px;
-          font-size: 24px;
-          cursor: pointer;
-          color: #666;
-          z-index: 10;
-          line-height: 1;
-        }
-        #${this.modalId}-close:hover {
-          color: #000;
-        }
-
-        /* Content Area */
-        #${this.modalId}-content {
-          padding: 40px;
-          overflow-y: auto;
-          flex: 1;
-        }
-
-        /* Entry Button */
-        .analytics-entry-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          margin-left: 10px;
-          vertical-align: middle;
-          cursor: pointer;
-          background: transparent;
-          border: none;
-          padding: 4px;
-          border-radius: 50%;
-          transition: background 0.2s;
-          font-size: 1.2em;
-        }
-        .analytics-entry-btn:hover {
-          background: rgba(128,128,128,0.2);
-        }
-      `;
-      document.head.appendChild(style);
     }
 
     /**
@@ -3400,7 +3517,7 @@
 
         // Button
         const btn = document.createElement('span');
-        btn.className = 'analytics-entry-btn';
+        btn.className = 'di-analytics-entry-btn';
         btn.title = 'Open Analytics Report';
         btn.innerHTML = '📊';
         btn.style.margin = '0'; // Reset margin since container has it
@@ -3874,6 +3991,18 @@
       });
     }
 
+    getLevelClass(level) {
+      if (!level) return 'user-member';
+      const l = level.toLowerCase();
+      if (l.includes('admin') || l.includes('owner')) return 'user-admin';
+      if (l.includes('moderator')) return 'user-moderator';
+      if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
+      if (l.includes('platinum')) return 'user-platinum';
+      if (l.includes('gold')) return 'user-gold';
+      if (l.includes('member')) return 'user-member';
+      return 'user-member';
+    }
+
     async fetchDashboardData() {
       const dataManager = new AnalyticsDataManager(this.db);
       const user = this.context.targetUser;
@@ -3949,23 +4078,9 @@
         // Show Loading State Immediately
         content.innerHTML = `
           <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
-             <div class="danbooru-spinner"></div>
+             <div class="di-spinner"></div>
              <div style="font-size:1.2em; font-weight:600; margin-top: 20px;">Generating Report...</div>
              <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
-             <style>
-                .danbooru-spinner {
-                   width: 50px;
-                   height: 50px;
-                   border: 5px solid #f3f3f3;
-                   border-top: 5px solid #0969da;
-                   border-radius: 50%;
-                   animation: danbooru-spin 1s linear infinite;
-                }
-                @keyframes danbooru-spin {
-                   0% { transform: rotate(0deg); }
-                   100% { transform: rotate(360deg); }
-                }
-             </style>
           </div>
         `;
 
@@ -3992,7 +4107,7 @@
         header.innerHTML = `
         <div>
            <h2 style="margin-top:0; color:#333; margin-bottom:4px;">Analytics Dashboard</h2>
-           <p style="color:#555; margin:0;">Detailed statistics and history for ${this.context.targetUser.name}</p>
+           <p style="color:#555; margin:0;">Detailed statistics and history for <span class="${this.getLevelClass(this.context.targetUser.level_string)}">${this.context.targetUser.name}</span></p>
         </div>
          <div id="analytics-header-controls" style="display:none; align-items:center;">
            <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
@@ -4022,7 +4137,7 @@
               localStorage.setItem(nsfwKey, isNsfwEnabled);
 
               // Efficient UI Update (No full re-render)
-              const boobsBtn = document.querySelector('.pie-tab[data-mode="breasts"]');
+              const boobsBtn = document.querySelector('.di-pie-tab[data-mode="breasts"]');
               if (boobsBtn) {
                 boobsBtn.style.display = isNsfwEnabled ? 'block' : 'none';
               }
@@ -4276,10 +4391,9 @@
             </div>
          `;
 
-        // Calculations for Card 1 (Uploads)
+        // Calculations for Card 1 (Uploads) All-Time
         let avgUploads = 0;
         let daysSinceFirst = 0;
-
         if (firstUploadDate) {
           daysSinceFirst = Math.floor((today - firstUploadDate) / oneDay);
           if (daysSinceFirst > 0) {
@@ -4287,15 +4401,94 @@
           }
         }
 
-        // Details for Card 1
-        const uploadDetails = `
+        const uploadDetailsAll = `
          <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
              <div>📈 <strong>Average:</strong> ${avgUploads} posts / day</div>
              <div>🔥 <strong>Max:</strong> ${maxUploads} posts <span style="color:#888;">(${maxDate})</span></div>
          </div>
       `;
 
-        summaryWrapper.innerHTML += makeCard('Total Uploads', stats.count.toLocaleString(), '🖼️', uploadDetails);
+        // Calculations for Card 1 (Uploads) 1-Year
+        const { count1Year, maxUploads1Year, maxDate1Year } = summaryStats;
+        let avgUploads1Year = 0;
+        const daysSinceFirst1Year = Math.min(daysSinceFirst, 365);
+        if (daysSinceFirst1Year > 0) {
+          avgUploads1Year = ((count1Year || 0) / daysSinceFirst1Year).toFixed(2);
+        }
+
+        const uploadDetails1Year = `
+         <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
+             <div>📈 <strong>Average:</strong> ${avgUploads1Year} posts / day</div>
+             <div>🔥 <strong>Max:</strong> ${maxUploads1Year || 0} posts <span style="color:#888;">(${maxDate1Year || 'N/A'})</span></div>
+         </div>
+      `;
+
+        // Calculations for Card 1 (Uploads) 3rd Pane (Consistency)
+        const { maxStreak, maxStreakStart, maxStreakEnd, activeDays } = summaryStats;
+        let activeRatio = "0.0";
+        if (daysSinceFirst > 0) {
+          activeRatio = ((activeDays / daysSinceFirst) * 100).toFixed(1);
+        } else if (activeDays > 0) {
+          activeRatio = "100.0";
+        }
+
+        let activeAvg = "0.0";
+        if (activeDays > 0) {
+          activeAvg = (stats.count / activeDays).toFixed(1);
+        }
+
+        const streakPeriod = maxStreakStart && maxStreakEnd ? ` <span style="color:#888;">(${maxStreakStart} ~ ${maxStreakEnd})</span>` : '';
+
+        const consistencyDetails = `
+         <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
+             <div>🏃‍♂️ <strong>Max Streak:</strong> ${maxStreak} days${streakPeriod}</div>
+             <div>🌟 <strong>Active Ratio:</strong> ${activeRatio}% <span style="color:#888;">(${activeDays}/${daysSinceFirst.toLocaleString()} days)</span></div>
+             <div>🎯 <strong>Active Avg:</strong> ${activeAvg} posts/day</div>
+         </div>
+      `;
+
+        // Animated Slide Card for Uploads (Static Icon, Slide Out Left, Slide In Right, 3 Panes)
+        const uploadCardHtml = `
+            <div id="danbooru-insights-upload-card" style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start; overflow:hidden; position:relative; min-height:106px;">
+                   <div style="font-size:2em; margin-right:15px; margin-top:5px; flex-shrink:0;">🖼️</div>
+                   
+                   <div style="position:relative; flex-grow:1; display:grid; height:100%;">
+                       <!-- All Time Pane -->
+                       <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-a;">
+                          <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">TOTAL UPLOADS</div>
+                          <div style="display:flex; align-items:center; gap:12px;">
+                              <div style="font-size:1.5em; font-weight:bold; color:#333;">${stats.count.toLocaleString()}</div>
+                              <div style="font-size:0.85em; color:#555;">${uploadDetailsAll}</div>
+                          </div>
+                       </div>
+
+                       <!-- Last 1 Year Pane -->
+                       <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-b;">
+                          <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">LAST 1 YEAR</div>
+                          <div style="display:flex; align-items:center; gap:12px;">
+                              <div style="font-size:1.5em; font-weight:bold; color:#333;">${(count1Year || 0).toLocaleString()}</div>
+                              <div style="font-size:0.85em; color:#555;">${uploadDetails1Year}</div>
+                          </div>
+                       </div>
+                       
+                       <!-- Consistency Pane -->
+                       <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-c;">
+                          <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">UPLOAD HABITS</div>
+                          <div style="display:flex; align-items:center; gap:12px;">
+                              <div style="font-size:0.85em; color:#555; margin-left: -12px;">${consistencyDetails}</div>
+                          </div>
+                       </div>
+                   </div>
+
+                   <button id="analytics-upload-btn-play-pause" class="di-play-pause-btn" title="Pause Animation">
+                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                           <rect x="5" y="4" width="4" height="16"></rect>
+                           <rect x="15" y="4" width="4" height="16"></rect>
+                       </svg>
+                   </button>
+            </div>
+        `;
+        summaryWrapper.innerHTML += uploadCardHtml;
 
         // Calculations for Card 2 (Latest Post & Days)
         const lastDate = lastUploadDate ? lastUploadDate.toISOString().split('T')[0] : 'N/A';
@@ -4321,6 +4514,34 @@
         summaryWrapper.innerHTML += makeCard('Latest Post', lastDate, '📅', dateDetails);
 
         dashboardDiv.appendChild(summaryWrapper);
+
+        // Bind Play/Pause Button Logic
+        const btnPlayPause = dashboardDiv.querySelector('#analytics-upload-btn-play-pause');
+        const uploadCard = dashboardDiv.querySelector('#danbooru-insights-upload-card');
+        if (btnPlayPause && uploadCard) {
+          let isPaused = false;
+          btnPlayPause.addEventListener('click', () => {
+            isPaused = !isPaused;
+            if (isPaused) {
+              uploadCard.classList.add('paused');
+              btnPlayPause.title = 'Play Animation';
+              btnPlayPause.innerHTML = `
+                       <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                           <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                       </svg>
+                    `;
+            } else {
+              uploadCard.classList.remove('paused');
+              btnPlayPause.title = 'Pause Animation';
+              btnPlayPause.innerHTML = `
+                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                           <rect x="5" y="4" width="4" height="16"></rect>
+                           <rect x="15" y="4" width="4" height="16"></rect>
+                       </svg>
+                    `;
+            }
+          });
+        }
 
         // --- ROW 2: Top Stats (Pie + Top Post) ---
         const topStatsRow = document.createElement('div');
@@ -4618,16 +4839,6 @@
             container.appendChild(chartWrapper);
 
             // Create SVG
-            // CSS for Pie Chart Hover Performance (Solution A)
-            const style = document.createElement('style');
-            style.innerHTML = `
-                .danbooru-grass-pie-path {
-                    opacity: 0.9;
-                    transition: opacity 0.1s ease-out;
-                    cursor: pointer;
-                }
-            `;
-            document.head.appendChild(style);
 
             d3.select(chartWrapper)
               .append("svg")
@@ -4689,8 +4900,8 @@
                 .attr('class', 'danbooru-grass-pie-path')
                 .attr('d', arc)
                 .attr('fill', d => d.data.color)
-                .style('opacity', '0')
-                .call(enter => enter.transition().duration(500).style('opacity', '0.9')),
+                .style('opacity', '0.9')
+                .style('cursor', 'pointer'),
               update => update
                 .attr('class', 'danbooru-grass-pie-path')
                 .attr('d', arc)
@@ -4795,7 +5006,7 @@
                         <div style="width:12px; height:12px; background:${d.color}; border-radius:2px; margin-right:8px; border:1px solid rgba(0,0,0,0.1); flex-shrink:0;"></div>
                         ${d.details.isOther
                   ? `<div style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.label}">${d.label}</div>`
-                  : `<a href="${targetUrl}" target="_blank" style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:none;" title="${d.label}" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${d.label}</a>`
+                  : `<a href="${targetUrl}" target="_blank" class="di-hover-underline" style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:none;" title="${d.label}">${d.label}</a>`
                 }
                         <div style="font-weight:bold; color:#333; margin-left:auto;" title="${d.details.count ? d.details.count.toLocaleString() : ''}">${pct}</div>
                      </div>`;
@@ -4809,7 +5020,7 @@
         };
 
         const updatePieTabs = () => {
-          const btns = pieContainer.querySelectorAll('.pie-tab');
+          const btns = pieContainer.querySelectorAll('.di-pie-tab');
           btns.forEach(btn => {
             const mode = btn.getAttribute('data-mode');
             if (mode === currentPieTab) {
@@ -4832,18 +5043,14 @@
                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; width:100%;">
                    <!-- Tabs Container: Flex Wrap, Gap -->
                    <div style="display:flex; flex-wrap:wrap; gap:4px; max-width:100%;">
-                       <style>
-                         .pie-tab:hover { background: #ddd !important; }
-                         .pie-tab[data-mode="${currentPieTab}"]:hover { background: #555 !important; }
-                       </style>
-                       <button class="pie-tab" data-mode="copyright" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Copy</button>
-                       <button class="pie-tab" data-mode="character" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Char</button>
-                       <button class="pie-tab" data-mode="fav_copyright" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Fav_Copy</button>
-                       <button class="pie-tab" data-mode="status" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Status</button>
-                       <button class="pie-tab" data-mode="rating" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Rate</button>
-                       <button class="pie-tab" data-mode="hair_length" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Hair_L</button>
-                       <button class="pie-tab" data-mode="hair_color" style="border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Hair_C</button>
-                       <button class="pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'}; border:none; padding:2px 10px; font-size:11px; cursor:pointer; border-radius:12px; transition: all 0.2s;">Boobs</button>
+                       <button class="di-pie-tab" data-mode="copyright">Copy</button>
+                       <button class="di-pie-tab" data-mode="character">Char</button>
+                       <button class="di-pie-tab" data-mode="fav_copyright">Fav_Copy</button>
+                       <button class="di-pie-tab" data-mode="status">Status</button>
+                       <button class="di-pie-tab" data-mode="rating">Rate</button>
+                       <button class="di-pie-tab" data-mode="hair_length">Hair_L</button>
+                       <button class="di-pie-tab" data-mode="hair_color">Hair_C</button>
+                       <button class="di-pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'};">Boobs</button>
                    </div>
                </div>
                <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
@@ -4921,7 +5128,7 @@
 
         // Event Delegation
         pieContainer.addEventListener('click', (e) => {
-          if (e.target.classList.contains('pie-tab')) {
+          if (e.target.classList.contains('di-pie-tab')) {
             const mode = e.target.getAttribute('data-mode');
             if (currentPieTab !== mode) {
               currentPieTab = mode;
@@ -5179,11 +5386,10 @@
             const showThumb = isNsfwEnabled || isSafe;
 
             msHtml += `
-            <a href="/posts/${p.id}" target="_blank" style="
+            <a href="/posts/${p.id}" target="_blank" class="di-hover-scale" style="
                display:flex; justify-content:space-between; align-items:center; text-decoration:none; color:inherit;
                background:#fff; border:1px solid #e1e4e8; border-radius:6px; padding:10px;
-               transition: transform 0.1s;
-            " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+            ">
                <div>
                    <div style="font-size:0.8em; color:#888; letter-spacing:0.5px;">#${p.id}</div>
                    <div style="font-size:1.1em; font-weight:bold; color:#0969da; margin-top:4px;">${m.type}</div>
@@ -6411,10 +6617,10 @@
     }
 
     /**
-     * Calculates summary statistics including max uploads, first, and last upload dates.
-     * Iterates through all synced posts for the user to determine the most active day.
+     * Calculates summary statistics including max uploads, streaks, and active days.
+     * Iterates through all synced posts for the user to determine the most active day and longest upload streak.
      * @param {!Object} userInfo The user's information object.
-     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date, lastUploadDate: ?Date}>} Summary stats.
+     * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date, lastUploadDate: ?Date, count1Year: number, maxUploads1Year: number, maxDate1Year: string, maxStreak: number, maxStreakStart: ?string, maxStreakEnd: ?string, activeDays: number}>} Summary stats.
      */
     async getSummaryStats(userInfo) {
       const uploaderId = parseInt(userInfo.id);
@@ -6425,13 +6631,19 @@
 
       if (posts.length === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null };
 
-      const history = {};
+      const historyAll = {};
+      const history1Year = {};
       let firstUploadDate = null;
       let lastUploadDate = null;
 
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+      let count1Year = 0;
+
       posts.forEach(p => {
         const dStr = p.created_at.split('T')[0];
-        history[dStr] = (history[dStr] || 0) + 1;
+        historyAll[dStr] = (historyAll[dStr] || 0) + 1;
 
         const d = new Date(p.created_at);
         if (!firstUploadDate || d < firstUploadDate) {
@@ -6440,15 +6652,64 @@
         if (!lastUploadDate || d > lastUploadDate) {
           lastUploadDate = d;
         }
+
+        if (d >= oneYearAgo) {
+          history1Year[dStr] = (history1Year[dStr] || 0) + 1;
+          count1Year++;
+        }
       });
 
       let maxUploads = 0;
       let maxDate = 'N/A';
 
-      for (const [date, count] of Object.entries(history)) {
+      const sortedDates = Object.keys(historyAll).sort();
+      const activeDays = sortedDates.length;
+
+      for (const [date, count] of Object.entries(historyAll)) {
         if (count > maxUploads) {
           maxUploads = count;
           maxDate = date;
+        }
+      }
+
+      let maxStreak = 0;
+      let maxStreakStart = null;
+      let maxStreakEnd = null;
+
+      let currentStreak = 0;
+      let currentStreakStart = null;
+      let lastDateObj = null;
+
+      for (const dateStr of sortedDates) {
+        const d = new Date(dateStr);
+        d.setHours(0, 0, 0, 0);
+        if (!lastDateObj) {
+          currentStreak = 1;
+          currentStreakStart = dateStr;
+        } else {
+          const diffTime = d - lastDateObj;
+          const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+          if (diffDays === 1) {
+            currentStreak++;
+          } else if (diffDays > 1) {
+            currentStreak = 1;
+            currentStreakStart = dateStr;
+          }
+        }
+        if (currentStreak > maxStreak) {
+          maxStreak = currentStreak;
+          maxStreakStart = currentStreakStart;
+          maxStreakEnd = dateStr;
+        }
+        lastDateObj = d;
+      }
+
+      let maxUploads1Year = 0;
+      let maxDate1Year = 'N/A';
+      for (const [date, count] of Object.entries(history1Year)) {
+        if (count > maxUploads1Year) {
+          maxUploads1Year = count;
+          maxDate1Year = date;
         }
       }
 
@@ -6456,7 +6717,14 @@
         maxUploads,
         maxDate,
         firstUploadDate,
-        lastUploadDate
+        lastUploadDate,
+        count1Year,
+        maxUploads1Year,
+        maxDate1Year,
+        maxStreak,
+        maxStreakStart,
+        maxStreakEnd,
+        activeDays
       };
     }
 
@@ -8540,8 +8808,9 @@
 
 
 
-      // OPTIMIZATION: Small Tag Handling (<= 100 posts)
-      if (initialPosts && totalCount <= 100 && initialPosts.length >= totalCount) {
+      // OPTIMIZATION: Small Tag Handling (<= 1200 posts)
+      const MAX_OPTIMIZED_POSTS = 1200;
+      if (initialPosts && totalCount <= MAX_OPTIMIZED_POSTS && initialPosts.length >= totalCount) {
 
 
         // 2. Calculate History Locally
@@ -8558,7 +8827,14 @@
         });
 
         // 4. Calculate Ratings & Rankings Locally
-        const localStats = this.calculateLocalStats(initialPosts);
+        const localStatsAllTime = this.calculateLocalStats(initialPosts);
+
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        const yearPosts = initialPosts.filter(p => p.created_at && new Date(p.created_at) >= oneYearAgo);
+        const localStatsYear = this.calculateLocalStats(yearPosts);
+
+        const localStatsFirst100 = this.calculateLocalStats(initialPosts.slice(0, 100));
 
         // 5. Parallel Data Fetching (Volatile & Status)
         // Note: backfillUploaderNames is CRITICAL for showing names instead of IDs
@@ -8579,7 +8855,7 @@
         meta.timeToHundred = timeToHundred;
         meta.statusCounts = statusCounts;
         meta.commentaryCounts = commentaryCounts;
-        meta.ratingCounts = localStats.ratingCounts;
+        meta.ratingCounts = localStatsAllTime.ratingCounts;
         meta.precalculatedMilestones = milestones;
         meta.latestPost = latestPost;
         meta.newPostCount = newPostCount;
@@ -8600,14 +8876,14 @@
 
         meta.rankings = {
           uploader: {
-            allTime: mapNames(localStats.uploaderRanking),
-            year: mapNames(localStats.uploaderRanking),
-            first100: mapNames(localStats.uploaderRanking)
+            allTime: mapNames(localStatsAllTime.uploaderRanking),
+            year: mapNames(localStatsYear.uploaderRanking),
+            first100: mapNames(localStatsFirst100.uploaderRanking)
           },
           approver: {
-            allTime: mapNames(localStats.approverRanking),
-            year: mapNames(localStats.approverRanking),
-            first100: mapNames(localStats.approverRanking)
+            allTime: mapNames(localStatsAllTime.approverRanking),
+            year: mapNames(localStatsYear.approverRanking),
+            first100: mapNames(localStatsFirst100.approverRanking)
           }
         };
 
@@ -8646,6 +8922,10 @@
 
         this.injectAnalyticsButton(meta, 100, ""); // Clear status
         this.saveToCache(meta); // Save Small Tag Data
+
+        const finalTime = performance.now();
+        console.log(`[TagAnalytics] [Small Tag Optimization] Finished analysis for tag: ${tagName} (Category: ${meta.category}, Count: ${totalCount}) in ${(finalTime - t0).toFixed(2)}ms`);
+
         return;
       }
 
@@ -9004,9 +9284,6 @@
         };
       }
 
-      // Get First 100 Posts (Always Ascending to find actual first posts)
-      const limit = 100;
-
       // Extract created_at from tagData
       // If absoluteOldest is true, we ignore created_at to find history hidden by renames
       // If foundEarliestDate is provided (from Reverse Scan), use it as a strong hint!
@@ -9019,50 +9296,80 @@
       }
 
       let posts = [];
-      // Use page=a0 (After ID 0) to get oldest posts efficiently.
-      // Use date filter to avoid full table scan on large tags that started recently.
-      let params = new URLSearchParams({
-        tags: `${tagName} date:>=${tagCreatedAt}`,
-        limit: limit,
-        page: 'a0',
-        only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
-      });
-      let url = `/posts.json?${params.toString()}`;
+      const MAX_OPTIMIZED_POSTS = 1200;
+      const isSmallTag = tagData.post_count <= MAX_OPTIMIZED_POSTS;
+      const targetFetchCount = Math.min(tagData.post_count, MAX_OPTIMIZED_POSTS);
+      const limit = isSmallTag ? 200 : 100; // Small tag = batch up to 200, Large tag = only need first 100
+      let currentPage = 'a0'; // After ID 0 (ascending)
+      let hasMore = true;
 
       try {
+        // Fetch up to targetCount (max 1200) posts sequentially.
+        while (hasMore && posts.length < targetFetchCount) {
+          const fetchLimit = Math.min(limit, targetFetchCount - posts.length);
+          let params = new URLSearchParams({
+            tags: `${tagName} date:>=${tagCreatedAt}`,
+            limit: fetchLimit,
+            page: currentPage,
+            only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
+          });
+          let url = `/posts.json?${params.toString()}`;
 
-        posts = await this.rateLimiter.fetch(url).then(r => r.json());
+          let batch = await this.rateLimiter.fetch(url).then(r => r.json());
 
-        if (!Array.isArray(posts)) {
-          console.warn("[TagAnalyticsApp] Initial stats fetch returned non-array:", posts);
-          posts = [];
-        }
+          if (!Array.isArray(batch) || batch.length === 0) {
+            break;
+          }
 
-        if (posts && posts.length > 1) {
-          // Check order. We want Ascending (Oldest First).
-          const firstId = posts[0].id;
-          const lastId = posts[posts.length - 1].id;
-          if (firstId > lastId) {
-            // It came in Descending. Reverse it.
-            posts.reverse();
+          if (batch.length > 1) {
+            // Check order. We want Ascending (Oldest First).
+            if (batch[0].id > batch[batch.length - 1].id) {
+              batch.reverse();
+            }
+          }
+
+          posts = posts.concat(batch);
+
+          if (batch.length < fetchLimit || posts.length >= targetFetchCount || !isSmallTag) {
+            hasMore = false; // Stop fetching
+          } else {
+            // Setup for next page
+            currentPage = `a${batch[batch.length - 1].id}`;
           }
         }
 
-        // Fix for Small Tags: If optimization failed to get all posts (due to renames/merges),
-        // and it's a small tag (<=100), re-fetch absolute oldest to trigger optimization correctly.
-        const expectedCountForSmallTag = Math.min(100, tagData.post_count);
-        if (tagData.post_count <= 100 && posts.length < expectedCountForSmallTag) {
+        // Fix for Small Tags: If optimization failed to get all posts (due to renames/merges filtering by date),
+        // and it's a small tag (<=1200), re-fetch absolute oldest without date filter.
+        if (isSmallTag && posts.length < targetFetchCount) {
+          posts = [];
+          currentPage = 'a0';
+          hasMore = true;
 
-          const fbParams = new URLSearchParams({
-            tags: `${tagName}`,
-            limit: 100,
-            page: 'a0',
-            only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
-          });
-          const fbPosts = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then(r => r.json());
-          if (Array.isArray(fbPosts) && fbPosts.length > 0) {
-            fbPosts.reverse();
-            posts = fbPosts;
+          while (hasMore && posts.length < targetFetchCount) {
+            const fetchLimit = Math.min(limit, targetFetchCount - posts.length);
+            const fbParams = new URLSearchParams({
+              tags: `${tagName}`,
+              limit: fetchLimit,
+              page: currentPage,
+              only: 'id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character'
+            });
+            let fbBatch = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then(r => r.json());
+
+            if (!Array.isArray(fbBatch) || fbBatch.length === 0) {
+              break;
+            }
+
+            if (fbBatch.length > 1 && fbBatch[0].id > fbBatch[fbBatch.length - 1].id) {
+              fbBatch.reverse();
+            }
+
+            posts = posts.concat(fbBatch);
+
+            if (fbBatch.length < fetchLimit || posts.length >= targetFetchCount) {
+              hasMore = false;
+            } else {
+              currentPage = `a${fbBatch[fbBatch.length - 1].id}`;
+            }
           }
         }
       } catch (e) {
@@ -10312,7 +10619,7 @@
      */
     updateNsfwVisibility() {
       const isNsfwEnabled = localStorage.getItem('tag_analytics_nsfw_enabled') === 'true';
-      const items = document.querySelectorAll('.nsfw-monitor');
+      const items = document.querySelectorAll('.di-nsfw-monitor');
 
       items.forEach(item => {
         const rating = item.getAttribute('data-rating');
@@ -10398,16 +10705,7 @@
       const titleColor = colorMap[tagData.category] || '#333';
 
       content.innerHTML = `
-            <style>
-                .ranking-username:hover { font-weight: bold; }
-                .user-admin { color: #ed2426; } .user-admin:hover { color: #ff5a5b; }
-                .user-moderator { color: #00ab2c; } .user-moderator:hover { color: #35c64a; }
-                .user-builder { color: #a800aa; } .user-builder:hover { color: #d700d9; }
-                .user-platinum { color: #777892; } .user-platinum:hover { color: #9192a7; }
-                .user-gold { color: #fd9200; } .user-gold:hover { color: #ffc5a5; }
-                .user-member { color: #0075f8; } .user-member:hover { color: #5091fa; }
-            </style>
-            <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
+        <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
             <div>
                 <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -10433,7 +10731,7 @@
 
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px;">
              <!-- Summary Card -->
-             <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; min-height: 180px; position: relative; display: flex; flex-direction: column; justify-content: space-between;">
+             <div class="di-card di-flex-col-between" style="min-height: 180px; position: relative;">
                 <!-- ... (Summary content) ... -->
                 <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                     <div>
@@ -10451,7 +10749,7 @@
                 <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
                      <!-- Latest Post -->
                      ${tagData.latestPost ? `
-                 <div class="nsfw-monitor" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                 <div class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                     <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                        <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                            <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.latestPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
@@ -10464,7 +10762,7 @@
 
                          <!-- Trending Post (SFW) -->
                          ${tagData.trendingPost ? `
-                     <div id="trending-post-sfw" class="nsfw-monitor" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                     <div id="trending-post-sfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                                  <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
@@ -10477,7 +10775,7 @@
 
                          <!-- Trending Post (NSFW) -->
                          ${tagData.trendingPostNSFW ? `
-                     <div id="trending-post-nsfw" class="nsfw-monitor" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0; transition: transform 0.2s;" onmouseenter="this.style.transform='translateY(-3px)'" onmouseleave="this.style.transform='translateY(0)'">
+                     <div id="trending-post-nsfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                         <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
                            <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
                                  <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPostNSFW)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
@@ -10503,11 +10801,11 @@
                         - Active tab styling is handled via CSS classes (.active) to prevent layout shifts.
                    -->
                    <div class="pie-tabs" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
-                      <button class="pie-tab active" data-type="status" style="padding: 2px 10px; border: none; background: #555; color: #fff; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Status</button>
-                      <button class="pie-tab" data-type="rating" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Rating</button>
-                      ${tagData.copyrightCounts ? `<button class="pie-tab" data-type="copyright" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Copyright</button>` : ''}
-                      ${tagData.characterCounts ? `<button class="pie-tab" data-type="character" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Character</button>` : ''}
-                      ${tagData.commentaryCounts ? `<button class="pie-tab" data-type="commentary" style="padding: 2px 10px; border: none; background: #eee; color: #555; border-radius: 12px; font-size: 0.75em; cursor: pointer; transition: all 0.2s;">Commentary</button>` : ''}
+                      <button class="di-pie-tab active" data-type="status">Status</button>
+                      <button class="di-pie-tab" data-type="rating">Rating</button>
+                      ${tagData.copyrightCounts ? `<button class="di-pie-tab" data-type="copyright">Copyright</button>` : ''}
+                      ${tagData.characterCounts ? `<button class="di-pie-tab" data-type="character">Character</button>` : ''}
+                      ${tagData.commentaryCounts ? `<button class="di-pie-tab" data-type="commentary">Commentary</button>` : ''}
                    </div>
                 </div>
                 <div id="status-pie-chart-wrapper" style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; opacity: 0; transition: opacity 0.5s;">
@@ -10516,13 +10814,6 @@
                 </div>
                 <div id="status-pie-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; font-size: 0.8em;">Loading data...</div>
              </div>
-        </div>
-
-        <style>
-          .pie-tab.active { background: #555 !important; color: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-          .pie-tab:not(.active):hover { background: #ddd !important; }
-        </style>
-
         <!-- User Rankings Section -->
         ${tagData.rankings ? `
         <div style="margin-bottom: 30px;">
@@ -10612,7 +10903,7 @@
           const type = 'status'; // Initial type
           this.renderPieChart(type, tagData);
 
-          const tabs = document.querySelectorAll('.pie-tab');
+          const tabs = document.querySelectorAll('.di-pie-tab');
           tabs.forEach(tab => {
             tab.onclick = () => {
               const newType = tab.getAttribute('data-type');
@@ -10918,8 +11209,7 @@
             label.href = `/posts?tags=${encodeURIComponent(query)}`;
             label.target = '_blank';
             label.style.cursor = 'pointer';
-            label.onmouseover = () => label.style.color = '#007bff';
-            label.onmouseout = () => label.style.color = '#555';
+            label.classList.add('di-hover-text-primary');
           } else {
             label.style.cursor = 'default';
           }
@@ -11097,7 +11387,7 @@
         const uploaderName = p.uploader_name || `User ${p.uploader_id}`;
 
         const card = document.createElement('div');
-        card.className = 'milestone-card nsfw-monitor';
+        card.className = 'di-milestone-card di-nsfw-monitor';
         card.setAttribute('data-rating', p.rating);
         card.style.background = '#fff';
         card.style.border = '1px solid #ddd';
@@ -11106,15 +11396,13 @@
         card.style.display = 'flex';
         card.style.flexDirection = 'column';
         card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)';
-        card.style.transition = 'transform 0.2s';
-        card.onmouseenter = () => card.style.transform = 'translateY(-3px)';
-        card.onmouseleave = () => card.style.transform = 'translateY(0)';
+        card.classList.add('di-hover-translate-up');
 
         card.innerHTML = `
               <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
                   <div>
                       <div style="font-size: 0.8em; color: #888; margin-bottom: 3px; text-transform: uppercase;">#${p.id}</div>
-                      <a href="/posts/${p.id}" target="_blank" class="milestone-link" style="font-weight: bold; font-size: 1.2em; color: #007bff; text-decoration: none; display: block; margin-bottom: 3px;">${label}</a>
+                      <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.2em; color: #007bff; text-decoration: none; display: block; margin-bottom: 3px;">${label}</a>
                       <div style="font-size: 0.85em; color: #555;">${dateStr}</div>
                   </div>
                   <a href="/posts/${p.id}" target="_blank" style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; flex-shrink: 0; background: #eee; margin-left: 10px;">
@@ -11126,9 +11414,8 @@
               </div>
           `;
 
-        const link = card.querySelector('.milestone-link');
-        link.onmouseenter = () => link.style.textDecoration = 'underline';
-        link.onmouseleave = () => link.style.textDecoration = 'none';
+        const link = card.querySelector('.di-milestone-link');
+        link.classList.add('di-hover-underline');
 
         grid.appendChild(card);
       });
@@ -11384,7 +11671,7 @@
           milestonesByMonth[mKey].push(m);
         });
 
-        const starGroups = svg.append("g").attr("class", "milestone-stars");
+        const starGroups = svg.append("g").attr("class", "di-milestone-stars");
 
         data.forEach((d) => {
           // Use local date methods for consistent matching
@@ -11667,7 +11954,7 @@
     renderRankingColumn(title, data, role, tagName, limitId = null) {
       if (!data || data.length === 0) {
         return `
-            <div style="background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eee;">
+            <div class="di-card-sm">
                 <h4 style="margin: 0 0 10px 0; font-size: 0.9em; color: #555; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${title}</h4>
                 <div style="text-align: center; color: #999; font-size: 0.8em; padding: 20px 0;">No Data</div>
             </div>`;
@@ -11698,12 +11985,12 @@
         }
 
         if (query) {
-          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
         } else if (u.id) {
           // Fallback
-          nameHtml = `<a href="/users/${u.id}" target="_blank" class="ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+          nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
         } else {
-          nameHtml = `<span class="ranking-username ${userClass}" style="cursor: default;">${name}</span>`;
+          nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${name}</span>`;
         }
 
         const count = u.count || u.post_count || 0;
@@ -11717,7 +12004,7 @@
       }).join('');
 
       return `
-        <div style="background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eee;">
+        <div class="di-card-sm">
             <h4 style="margin: 0 0 10px 0; font-size: 0.9em; color: #555; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${title}</h4>
             <div>${list}</div>
         </div>`;
