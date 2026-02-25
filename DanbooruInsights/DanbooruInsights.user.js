@@ -4,10 +4,10 @@
 // @version      6.5.1
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
-// @match        https://danbooru.donmai.us/users/*
-// @match        https://danbooru.donmai.us/profile
-// @match        https://danbooru.donmai.us/wiki_pages*
-// @match        https://danbooru.donmai.us/artists/*
+// @match        https://*.donmai.us/users/*
+// @match        https://*.donmai.us/profile
+// @match        https://*.donmai.us/wiki_pages*
+// @match        https://*.donmai.us/artists/*
 // @icon         https://danbooru.donmai.us/favicon.ico
 // @grant        none
 // @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruInsights
@@ -753,7 +753,7 @@
      * @param {Database} db The Dexie database instance.
      */
     constructor(db, rateLimiter = null) {
-      this.baseUrl = 'https://danbooru.donmai.us';
+      this.baseUrl = window.location.origin;
       this.db = db;
       // Allow passing shared rate limiter, fallback to default if missing (though app should pass it)
       this.rateLimiter = rateLimiter || new RateLimitedFetch(6, [100, 300], 6);
@@ -11702,7 +11702,7 @@
               }
 
               const star = starGroups.append("a")
-                .attr("href", `https://danbooru.donmai.us/posts/${m.post.id}`)
+                .attr("href", `${window.location.origin}/posts/${m.post.id}`)
                 .attr("target", "_blank")
                 .style("text-decoration", "none")
                 .append("text")
