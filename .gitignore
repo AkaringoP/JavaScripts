@@ -16,3 +16,15 @@ yarn-error.log
 *.tmp
 *.bak
 *.swp
+
+# Claude local instructions (Korean)
+CLAUDE.ko.md
+
+# Claude session files (generated during AI-assisted work sessions)
+PLAN.md
+context.md
+checklist.md
+
+# Claude local settings (machine-specific)
+.claude/settings.local.json
+.claude/worktrees/

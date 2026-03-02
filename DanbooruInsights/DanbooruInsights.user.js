@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      6.5.2
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
-// @author       AkaringoP with Antigravity
+// @author       AkaringoP with Claude Code
 // @match        https://*.donmai.us/users/*
 // @match        https://*.donmai.us/profile
 // @match        https://*.donmai.us/wiki_pages*
