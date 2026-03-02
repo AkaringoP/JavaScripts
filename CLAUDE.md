@@ -29,6 +29,13 @@ GitHub repository: `AkaringoP/JavaScripts`
 - **One task at a time**: Do not mix multiple tasks in a single session
 - **Preserve UserScript headers**: Do not arbitrarily modify metadata blocks such as `@version`, `@match`, `@grant`
 
+## Git Branching Strategy (Simplified GitFlow)
+- `main` — Stable releases only. Always deployable.
+- `develop` — Integration branch. All feature branches merge here first.
+- `feature/*` — New features and bug fixes. Branch off from `develop`, merge back to `develop`.
+- Direct commits to `main` are not allowed. Merge via `develop → main` only.
+- Branch naming: `feature/<short-description>` (e.g., `feature/artist-memo`)
+
 ## Notes
 - Projects with `@grant none` cannot use GM_* APIs
 - External libraries must be loaded via `@require` only (no import/require, except for TS build projects)
