@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Insights
 // @namespace    http://tampermonkey.net/
-// @version      6.5.1
+// @version      6.5.2
 // @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
 // @author       AkaringoP with Antigravity
 // @match        https://*.donmai.us/users/*
@@ -7164,16 +7164,10 @@
         // Limit to Top 20 Candidates for filtering performance
         const candidates = tags.slice(0, 20);
 
-        // Concurrent Filter checks - Limit 5
-        const filteredResults = await this.mapConcurrent(candidates, 2, async (item) => {
-          const tagName = item.tag.name;
-          const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
-          try {
-            const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
-            if (Array.isArray(imps) && imps.length > 0) return null;
-            return item;
-          } catch (e) { return item; }
-        });
+        // Concurrent Filter checks - Limit 2
+        const filteredResults = await this.mapConcurrent(candidates, 2, async (item) =>
+          await isTopLevelTag(this.rateLimiter, item.tag.name) ? item : null
+        );
         const filtered = filteredResults.filter(item => item !== null);
 
         // Concurrent Fetch Data for Top 10 - Limit 5
@@ -8347,14 +8341,30 @@
         return;
       }
 
-
-
       const grass = new GrassApp(db, settings, context);
       const userAnalytics = new UserAnalyticsApp(db, settings, context);
 
       // Execution
       grass.run();
       userAnalytics.run();
+    }
+  }
+
+  /* --- Helper: Tag Utility --- */
+  /**
+   * Checks whether a tag is top-level (not a sub-tag) by querying its implications.
+   * A tag that has antecedent implications (i.e., it implies something else) is a sub-tag.
+   * @param {RateLimitedFetch} rateLimiter
+   * @param {string} tagName Exact tag name (underscored).
+   * @return {Promise<boolean>} True if top-level, false if sub-tag.
+   */
+  async function isTopLevelTag(rateLimiter, tagName) {
+    const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
+    try {
+      const imps = await rateLimiter.fetch(impUrl).then(r => r.json());
+      return !(Array.isArray(imps) && imps.length > 0);
+    } catch (e) {
+      return true; // default to include on error
     }
   }
 
@@ -8905,19 +8915,30 @@
             }
           });
 
-          const getObjectDistribution = (map) => {
-            const res = {};
-            Object.entries(map)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 20)
-              .forEach(([name, count]) => {
-                res[name] = count;
-              });
-            return res;
-          };
+          // Copyright: filter sub-copyrights out via isTopLevelTag
+          const copyrightCandidates = Object.entries(copyrightMap)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 20);
 
-          meta.copyrightCounts = getObjectDistribution(copyrightMap);
-          meta.characterCounts = getObjectDistribution(characterMap);
+          const filteredCopyright = (await Promise.all(
+            copyrightCandidates.map(async ([tag, count]) =>
+              await isTopLevelTag(this.rateLimiter, tag) ? [tag, count] : null
+            )
+          )).filter(e => e !== null);
+
+          meta.copyrightCounts = {};
+          filteredCopyright.slice(0, 10).forEach(([name, count]) => {
+            meta.copyrightCounts[name] = count;
+          });
+
+          // Character: take top 10 directly (no implication filtering needed)
+          meta.characterCounts = {};
+          Object.entries(characterMap)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .forEach(([name, count]) => {
+              meta.characterCounts[name] = count;
+            });
         }
 
         this.injectAnalyticsButton(meta, 100, ""); // Clear status
@@ -9555,20 +9576,9 @@
         const candidates = tags.slice(0, 20);
 
         // 2. Filter Top-Level (Check Implications)
-        const checks = await Promise.all(candidates.map(async (item) => {
-          const tName = item.tag.name;
-          // Check if this tag implies anything (has consequents)
-          // antecedents match tName -> tName implies X.
-          const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tName)}`;
-          try {
-            const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
-            // User Logic: "if result values are visible... NOT top tag". Empty = Top Tag.
-            if (Array.isArray(imps) && imps.length > 0) return null;
-            return item;
-          } catch (e) {
-            return item;
-          }
-        }));
+        const checks = await Promise.all(candidates.map(async (item) =>
+          await isTopLevelTag(this.rateLimiter, item.tag.name) ? item : null
+        ));
 
         const filtered = checks.filter(item => item !== null);
 
