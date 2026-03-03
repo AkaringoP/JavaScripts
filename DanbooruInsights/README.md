@@ -75,7 +75,7 @@ The script consists of three main components:
 ## Credits
 
 - **Author**: AkaringoP
-- **Co-Author**: Antigravity (AI)
+- **Co-Author**: Claude Code with VS Code (AI)
 
 ## Compatibility
 
