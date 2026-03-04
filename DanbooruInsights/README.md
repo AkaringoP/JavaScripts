@@ -66,7 +66,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 ## Installation
 
 1. Install a UserScript manager like **[Tampermonkey](https://www.tampermonkey.net/)**.
-2. **[Click Here to Install](https://github.com/AkaringoP/JavaScripts/raw/main/DanbooruInsights/DanbooruInsights.user.js)**
+2. **[Click Here to Install](https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js)**
 3. Confirm the installation in Tampermonkey.
 
 ## Usage

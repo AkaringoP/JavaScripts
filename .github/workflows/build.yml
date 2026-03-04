@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-groupingtags:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -32,7 +32,7 @@ jobs:
 
       - name: Run Lint
         run: npm run lint
-        continue-on-error: true # Allow build to proceed for now since we have some relaxed rules
+        continue-on-error: true
 
       - name: Run Tests
         run: npm run test
@@ -43,14 +43,66 @@ jobs:
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: groupingtags-userscript
+          name: groupingtags-dist
           path: GroupingTags/dist/
 
+  build-danbooruinsights:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: DanbooruInsights
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: DanbooruInsights/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Run Tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: danbooruinsights-dist
+          path: DanbooruInsights/dist/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [ build-groupingtags, build-danbooruinsights ]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Download GroupingTags dist
+        uses: actions/download-artifact@v4
+        with:
+          name: groupingtags-dist
+          path: deploy/
+
+      - name: Download DanbooruInsights dist
+        uses: actions/download-artifact@v4
+        with:
+          name: danbooruinsights-dist
+          path: deploy/
+
       - name: Deploy to Build Branch
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: GroupingTags/dist
+          publish_dir: deploy
           publish_branch: build
-          force_orphan: true # Keep only the latest build for efficiency
+          force_orphan: true
