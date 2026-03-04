@@ -1,0 +1,1809 @@
+import {DataManager} from './data-manager';
+import {isTopLevelTag} from '../utils';
+import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint} from '../types';
+
+/** Summary statistics for a user's upload history. */
+export interface SummaryStats {
+  maxUploads: number;
+  maxDate: string;
+  firstUploadDate: Date | null;
+  lastUploadDate: Date | null;
+  count1Year: number;
+  maxUploads1Year: number;
+  maxDate1Year: string;
+  maxStreak: number;
+  maxStreakStart: string | null;
+  maxStreakEnd: string | null;
+  activeDays: number;
+}
+
+/** A milestone post entry. */
+export interface MilestoneEntry {
+  type: string;
+  post: any;
+  index: number;
+}
+
+/** Monthly upload count entry. */
+export interface MonthlyStatEntry {
+  date: string;
+  count: number;
+  label: string;
+}
+
+/** A user promotion event parsed from feedbacks. */
+export interface PromotionEvent {
+  date: Date;
+  role: string;
+  rawBody: string;
+}
+
+/**
+ * AnalyticsDataManager: Handles heavy data fetching for full history.
+ */
+export class AnalyticsDataManager extends DataManager {
+  static isGlobalSyncing: boolean = false;
+  static syncProgress: SyncProgress = { current: 0, total: 0, message: '' };
+  static onProgressCallback: ((current: number, total: number, message?: string) => void) | null = null;
+
+  /**
+   * @param {Database} db The Dexie database instance.
+   */
+  constructor(db: any) {
+    super(db);
+  }
+
+  /**
+   * Centrally selects the most appropriate thumbnail URL for a post.
+   * Prioritizes high-quality WebP variants (720x720 or 360x360) for performance.
+   * @param {Object} post The post data object from Danbooru API.
+   * @return {string} The selected thumbnail URL.
+   */
+  static getBestThumbnailUrl(post: any): string {
+    if (!post) return '';
+
+    // 1. Try modern variants
+    if (post.variants && Array.isArray(post.variants) && post.variants.length > 0) {
+      const preferredTypes = ['720x720', '360x360'];
+      // 1a. Try preferred variants in WebP
+      for (const type of preferredTypes) {
+        const variant = post.variants.find(v => v.type === type && v.file_ext === 'webp');
+        if (variant) return variant.url;
+      }
+      // 1b. Try preferred variants in any format
+      for (const type of preferredTypes) {
+        const variant = post.variants.find(v => v.type === type);
+        if (variant) return variant.url;
+      }
+      // 1c. Last resort: any variant
+      if (post.variants[0] && post.variants[0].url) return post.variants[0].url;
+    }
+
+    // 2. Fallback to legacy fields (if still present in object or for non-variant posts)
+    return post.preview_file_url || post.file_url || post.large_file_url || '';
+  }
+
+  /**
+   * Fetches a thumbnail URL with built-in retry logic for handling rate limits.
+   * Implements exponential backoff on 429 status codes.
+   * @param {string} tags The tag string to search for.
+   * @param {number=} retries Number of allowed retries (default: 3).
+   * @param {number=} delay Initial delay in ms before retry (default: 2000).
+   * @return {Promise<string>} The preview URL or an empty string if not found or failed.
+   */
+  async fetchThumbnailWithRetry(tags: string, retries: number = 3, delay: number = 2000): Promise<string> {
+    const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,variants,rating`;
+    for (let i = 0; i < retries; i++) {
+      try {
+        const resp = await this.rateLimiter.fetch(url);
+        if (resp.status === 429) {
+          await new Promise(r => setTimeout(r, delay + Math.random() * 2000));
+          delay *= 2;
+          continue;
+        }
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (Array.isArray(data) && data.length > 0) {
+          return AnalyticsDataManager.getBestThumbnailUrl(data[0]);
+        }
+        return '';
+      } catch (e) {
+        if (i === retries - 1) {
+          console.warn(`[Analytics] Failed thumb fetch after ${retries} tries: ${tags}`, e);
+          return '';
+        }
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Retrieves synchronization statistics for a specific user from the local database.
+   * @param {!Object} userInfo The user's information object.
+   * @return {Promise<{count: number, lastSync: ?string}>} Object containing post count and last sync date.
+   */
+  async getSyncStats(userInfo: TargetUser): Promise<{count: number; lastSync: string | null}> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return { count: 0, lastSync: null };
+
+    const count = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+    const lastEntry = await this.db.posts.orderBy('created_at').last();
+
+    return {
+      count,
+      lastSync: lastEntry ? lastEntry.created_at : null // Approximate
+    };
+  }
+
+  /**
+   * Calculates summary statistics including max uploads, streaks, and active days.
+   * Iterates through all synced posts for the user to determine the most active day and longest upload streak.
+   * @param {!Object} userInfo The user's information object.
+   * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date, lastUploadDate: ?Date, count1Year: number, maxUploads1Year: number, maxDate1Year: string, maxStreak: number, maxStreakStart: ?string, maxStreakEnd: ?string, activeDays: number}>} Summary stats.
+   */
+  async getSummaryStats(userInfo: TargetUser): Promise<SummaryStats> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
+
+    // efficiently fetch just created_at
+    const posts = await this.db.posts.where('uploader_id').equals(uploaderId).toArray();
+
+    if (posts.length === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
+
+    const historyAll: Record<string, number> = {};
+    const history1Year: Record<string, number> = {};
+    let firstUploadDate: Date | null = null;
+    let lastUploadDate: Date | null = null;
+
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    let count1Year = 0;
+
+    posts.forEach(p => {
+      const dStr = p.created_at.split('T')[0];
+      historyAll[dStr] = (historyAll[dStr] || 0) + 1;
+
+      const d = new Date(p.created_at);
+      if (!firstUploadDate || d < firstUploadDate) {
+        firstUploadDate = d;
+      }
+      if (!lastUploadDate || d > lastUploadDate) {
+        lastUploadDate = d;
+      }
+
+      if (d >= oneYearAgo) {
+        history1Year[dStr] = (history1Year[dStr] || 0) + 1;
+        count1Year++;
+      }
+    });
+
+    let maxUploads = 0;
+    let maxDate = 'N/A';
+
+    const sortedDates = Object.keys(historyAll).sort();
+    const activeDays = sortedDates.length;
+
+    for (const [date, count] of Object.entries(historyAll)) {
+      if ((count as number) > maxUploads) {
+        maxUploads = count as number;
+        maxDate = date;
+      }
+    }
+
+    let maxStreak = 0;
+    let maxStreakStart: string | null = null;
+    let maxStreakEnd: string | null = null;
+
+    let currentStreak = 0;
+    let currentStreakStart: string | null = null;
+    let lastDateObj: Date | null = null;
+
+    for (const dateStr of sortedDates) {
+      const d = new Date(dateStr);
+      d.setHours(0, 0, 0, 0);
+      if (!lastDateObj) {
+        currentStreak = 1;
+        currentStreakStart = dateStr;
+      } else {
+        const diffTime = (d as any) - (lastDateObj as any);
+        const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays === 1) {
+          currentStreak++;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+          currentStreakStart = dateStr;
+        }
+      }
+      if (currentStreak > maxStreak) {
+        maxStreak = currentStreak;
+        maxStreakStart = currentStreakStart;
+        maxStreakEnd = dateStr;
+      }
+      lastDateObj = d;
+    }
+
+    let maxUploads1Year = 0;
+    let maxDate1Year = 'N/A';
+    for (const [date, count] of Object.entries(history1Year)) {
+      if ((count as number) > maxUploads1Year) {
+        maxUploads1Year = count as number;
+        maxDate1Year = date;
+      }
+    }
+
+    return {
+      maxUploads,
+      maxDate,
+      firstUploadDate,
+      lastUploadDate,
+      count1Year,
+      maxUploads1Year,
+      maxDate1Year,
+      maxStreak,
+      maxStreakStart,
+      maxStreakEnd,
+      activeDays
+    };
+  }
+
+  /**
+   * Retrieves milestone posts (e.g., 1st, 100th, 1000th) based on local sequence.
+   * Automatically adjusts step size based on total post count if 'auto' is selected.
+   * @param {!Object} userInfo The user's information object.
+   * @param {boolean=} isNsfwEnabled Whether to fetch thumbnails for all posts regardless of rating.
+   * @param {(string|number)=} customStep Step interval ('auto' or a number).
+   * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
+   */
+  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | number = 'auto'): Promise<MilestoneEntry[]> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return [];
+
+    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+    if (total === 0) return [];
+
+    // Define Milestones based on Total Count logic
+    let targets: number[] = [];
+
+    if (customStep !== 'auto' && typeof customStep === 'number') {
+      const step = customStep as number;
+      targets.push(1);
+      for (let i = step; i <= total; i += step) {
+        targets.push(i);
+      }
+    } else {
+      // Case 1: Small (< 1,500) -> 1, 100, 200...
+      if (total < 1500) {
+        targets.push(1);
+        for (let i = 100; i <= total; i += 100) {
+          targets.push(i);
+        }
+      }
+      // Case 2: Medium (1,500 ~ 10,000) -> 1, 100, 500, 1000, 1500, 2000...
+      else if (total <= 10000) {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        // Step 500 starting from 500
+        for (let i = 500; i <= total; i += 500) {
+          targets.push(i);
+        }
+      }
+      // Case 4: Huge (> 100,000) -> 1, 100, 1000, 5000, 10000, ... (Step 5000)
+      else if (total > 100000) {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        if (total >= 1000) targets.push(1000);
+
+        for (let i = 5000; i <= total; i += 5000) {
+          targets.push(i);
+        }
+      }
+      // Case 3: Very Large (> 50,000) -> 1, 100, 1000, 2500, 5000, ... (Step 2500)
+      else if (total > 50000) {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        if (total >= 1000) targets.push(1000);
+
+        for (let i = 2500; i <= total; i += 2500) {
+          targets.push(i);
+        }
+      }
+      // Case 2: Large (> 10,000) -> 1, 100, 1000, 2000...
+      else {
+        targets.push(1);
+        if (total >= 100) targets.push(100);
+        for (let i = 1000; i <= total; i += 1000) {
+          targets.push(i);
+        }
+      }
+    }
+
+    // Ensure unique and sort ASC
+    targets = [...new Set(targets)].sort((a, b) => a - b);
+
+    const milestones = [];
+    const matches = await this.db.posts
+      .where('no').anyOf(targets)
+      .filter(p => p.uploader_id === uploaderId)
+      .toArray();
+
+    // NEW: Fetch missing thumbnails for Safety logic
+    // We want to show thumbnails for Safe(s) or General(g) posts.
+    // OR if NSFW is enabled, show all.
+    // If we don't have 'preview_file_url' locally (old sync), we fetch it now.
+    const missingIds: number[] = [];
+    matches.forEach(p => {
+      const isSafe = (p.rating === 's' || p.rating === 'g');
+      const shouldFetch = isNsfwEnabled || isSafe;
+      if (shouldFetch && (!p.variants || p.variants.length === 0)) {
+        missingIds.push(p.id);
+      }
+    });
+
+    if (missingIds.length > 0) {
+      try {
+        // Chunk requests if too many
+        const chunkSize = 100;
+        for (let i = 0; i < missingIds.length; i += chunkSize) {
+          const chunk = missingIds.slice(i, i + chunkSize);
+          const idsStr = chunk.join(',');
+          const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,variants,rating,preview_file_url`;
+
+          const res = await this.rateLimiter.fetch(url);
+          if (res.ok) {
+            const fetchedItems = await res.json();
+            // Update local matches objects
+            fetchedItems.forEach(item => {
+              const local = matches.find(m => m.id === item.id);
+              if (local) {
+                local.variants = item.variants;
+                local.preview_file_url = item.preview_file_url;
+                // Ensure rating matches just in case
+                local.rating = item.rating;
+
+                // Update DB for persistence (no need for bulkPut if we do it here)
+                this.db.posts.update(local.id, {
+                  variants: item.variants,
+                  preview_file_url: item.preview_file_url,
+                  rating: item.rating
+                }).catch(e => console.error("Failed to update post", local.id, e));
+              }
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch missing milestone thumbnails", e);
+      }
+    }
+
+    // Map back to result structure
+    // Create lookup
+    const map = new Map(matches.map(p => [p.no, p]));
+
+    const results: MilestoneEntry[] = [];
+
+    targets.forEach(t => {
+      // Just push specific targets
+      const p = map.get(t);
+      if (p) {
+        // Label logic
+        let label = `#${t} `;
+        if (t >= 1000 && t % 1000 === 0) label = `${t / 1000} k`;
+        if (t === 1) label = 'First';
+
+        results.push({ type: label, post: p, index: t });
+      }
+    });
+
+    // Let's sort strictly by Index ASC.
+    results.sort((a, b) => a.index - b.index);
+
+    return results;
+  }
+
+
+  /**
+   * Aggregates post counts by month from the local IndexedDB.
+   * Handles linear timeline generation by filling gaps with 0-count months.
+   * @param {!Object} userInfo The user's information object.
+   * @param {?Date=} minDate Optional start date to ensure the timeline begins at a specific point.
+   * @return {Promise<!Array<{date: string, count: number, label: string}>>} Array of monthly stats.
+   */
+  async getMonthlyStats(userInfo: TargetUser, minDate: Date | null = null): Promise<MonthlyStatEntry[]> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return [];
+
+    const counts: Record<string, number> = {}; // "2023-01": 5
+
+    // Streaming iteration to avoid memory spikes
+    await this.db.posts.where('uploader_id').equals(uploaderId).each(post => {
+      if (!post.created_at) return;
+      // created_at is likely ISO string "2023-01-01T..."
+      const month = post.created_at.substring(0, 7); // "YYYY-MM"
+      counts[month] = (counts[month] || 0) + 1;
+    });
+
+    // Convert to array and Fill Gaps for Linear timeline
+    let results: MonthlyStatEntry[] = [];
+    const keys = Object.keys(counts).sort();
+
+    if (keys.length > 0) {
+      let startKey = keys[0];
+      const endKey = keys[keys.length - 1];
+
+      // Extend start date if minDate is provided and earlier
+      if (minDate) {
+        const mY = minDate.getFullYear();
+        const mM = minDate.getMonth() + 1;
+        const mKey = `${mY}-${String(mM).padStart(2, '0')}`;
+        if (mKey < startKey) startKey = mKey;
+      }
+
+      let [y, m] = startKey.split('-').map(Number);
+      const [endY, endM] = endKey.split('-').map(Number);
+
+      // Loop until we pass endYear/endMonth
+      while (y < endY || (y === endY && m <= endM)) {
+        const k = `${y}-${String(m).padStart(2, '0')}`;
+        results.push({
+          date: k,
+          count: counts[k] || 0,
+          label: k
+        });
+
+        m++;
+        if (m > 12) {
+          m = 1;
+          y++;
+        }
+      }
+    } else {
+      // No data
+      results = [];
+    }
+
+    return results;
+  }
+
+  /**
+   * Fetches rating distribution report from Danbooru's /reports/posts.json endpoint.
+   * @param {!Object} userInfo The user's information object.
+   * @return {Promise<!Array<{rating: string, count: number, label: string}>>} Rating distribution array.
+   */
+  /**
+   * Fetches post counts for each status (active, deleted, etc.).
+   * @param {!Object} userInfo The user's information object.
+   * @param {?string|Date} startDate Optional start date to optimize query range.
+   * @return {Promise<!Array<{name: string, count: number, label: string}>>} Status distribution.
+   */
+  async getStatusDistribution(userInfo: TargetUser, startDate: string | Date | null = null): Promise<{name: string; count: number; label: string}[]> {
+    if (!userInfo.name) return [];
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const statuses = ['active', 'appealed', 'banned', 'deleted', 'flagged', 'pending'];
+
+    const tasks = statuses.map(async (status) => {
+      try {
+        let tagQuery = `user:${normalizedName} status:${status}`;
+        if (startDate) {
+          const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
+          tagQuery += ` date:>=${dateStr}`;
+        }
+
+        const params = new URLSearchParams({ tags: tagQuery });
+        const url = `/counts/posts.json?${params.toString()}`;
+
+        const resp = await this.rateLimiter.fetch(url);
+        let count = 0;
+        if (resp.ok) {
+          const data = await resp.json();
+          count = (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
+        }
+
+        return {
+          name: status,
+          count: count,
+          label: status.charAt(0).toUpperCase() + status.slice(1)
+        };
+      } catch (e) {
+        console.warn(`[Danbooru Grass] Failed to fetch count for status:${status}`, e);
+        return { name: status, count: 0, label: status.charAt(0).toUpperCase() + status.slice(1) };
+      }
+    });
+
+    return Promise.all(tasks);
+  }
+
+  /**
+   * Fetches rating distribution report from Danbooru's /counts/posts.json endpoint.
+   * Uses parallel requests for each rating to ensure accuracy (including 'general').
+   * @param {!Object} userInfo The user's information object.
+   * @param {?string|Date} startDate Optional start date to optimize query range.
+   * @return {Promise<!Array<{rating: string, count: number, label: string}>>} Rating distribution array.
+   */
+  async getRatingDistribution(userInfo: TargetUser, startDate: string | Date | null = null): Promise<{rating: string; count: number; label: string}[]> {
+    if (!userInfo.name) return [];
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const ratings = ['g', 's', 'q', 'e'];
+    const labelMap = {
+      'g': 'General',
+      's': 'Sensitive',
+      'q': 'Questionable',
+      'e': 'Explicit'
+    };
+
+    const tasks = ratings.map(async (rating) => {
+      try {
+        let tagQuery = `user:${normalizedName} rating:${rating}`;
+        if (startDate) {
+          const dateStr = (startDate instanceof Date) ? startDate.toISOString().split('T')[0] : startDate;
+          tagQuery += ` date:>=${dateStr}`;
+        }
+
+        const params = new URLSearchParams({
+          tags: tagQuery
+        });
+        const url = `/counts/posts.json?${params.toString()}`;
+
+        const resp = await this.rateLimiter.fetch(url);
+        if (!resp.ok) return { rating, count: 0, label: labelMap[rating] };
+
+        const data = await resp.json();
+        const count = (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
+
+        return {
+          rating: rating,
+          count: count,
+          label: labelMap[rating]
+        };
+      } catch (e) {
+        console.warn(`[Danbooru Grass] Failed to fetch count for rating:${rating}`, e);
+        return { rating, count: 0, label: labelMap[rating] };
+      }
+    });
+
+    try {
+      const results = await Promise.all(tasks);
+      return results;
+    } catch (e) {
+      console.error('[Danbooru Grass] Failed to fetch rating distribution', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches character distribution using Danbooru's related tags API.
+   * Processes top 10 characters and fetches their specific uploader counts concurrently.
+   * @param {!Object} userInfo The user's information object.
+   * @param {boolean=} forceRefresh Whether to skip cache and force a new fetch.
+   * @param {?function(string)=} reportSubStatus Optional callback for progress updates.
+   * @return {Promise<!Array<{name: string, count: number, frequency: number, isOther: boolean}>>} Character distribution.
+   */
+  async getCharacterDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Character Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0'); // Need ID for cache key
+    const cacheKey = 'character_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
+
+    try {
+      const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+
+      if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+
+      const tags = resp.related_tags;
+
+      // Limit to Top 10
+      const itemsToProcess = tags.slice(0, 10);
+
+      const top10 = itemsToProcess.map(item => ({
+        name: item.tag.name.replace(/_/g, ' '),
+        tagName: item.tag.name,
+        count: 0,
+        frequency: item.frequency,
+        thumb: null,
+        isOther: false,
+        _item: item
+      }));
+
+      // Fetch Counts Concurrent
+      await this.mapConcurrent(top10, 3, async (obj) => {
+        const tagName = obj.tagName;
+        if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+        try {
+          const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
+          const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
+          const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+          obj.count = c || obj._item.tag.post_count;
+        } catch (e) { }
+        delete obj._item;
+      });
+
+      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const otherFreq = 1.0 - sumFreq;
+
+      if (otherFreq > 0.001) {
+        top10.push({
+          name: 'Others',
+          tagName: '',
+          count: 0,
+          frequency: otherFreq,
+          thumb: '',
+          isOther: true
+        });
+      }
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+
+      // Lazy Load Thumbnails
+      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+
+      return top10;
+
+    } catch (e) {
+      console.warn('[Danbooru Grass] Failed to fetch character distribution', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches Copyright distribution from related_tag.json.
+   * Filters out sub-copyrights by checking tag_implications.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array<{name: string, count: number, frequency: number, isOther: boolean}>>}
+   */
+  async getCopyrightDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Copyright Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'copyright_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
+
+    try {
+      const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+
+      let tags = resp.related_tags;
+
+      // Limit to Top 20 Candidates for filtering performance
+      const candidates = tags.slice(0, 20);
+
+      // Concurrent Filter checks - Limit 2
+      const filteredResults = await this.mapConcurrent(candidates, 2, async (item) =>
+        await isTopLevelTag(this.rateLimiter, item.tag.name) ? item : null
+      );
+      const filtered = filteredResults.filter(item => item !== null);
+
+      // Concurrent Fetch Data for Top 10 - Limit 5
+      const top10: any[] = filtered.slice(0, 10).map(item => ({
+        name: item.tag.name.replace(/_/g, ' '),
+        tagName: item.tag.name,
+        count: 0,
+        frequency: item.frequency,
+        thumb: null,
+        isOther: false,
+        _item: item
+      }));
+
+      await this.mapConcurrent(top10, 3, async (obj) => {
+        const tagName = obj.tagName;
+        if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+        try {
+          const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
+          const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
+          const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+          obj.count = c || obj._item.tag.post_count;
+        } catch (e) { }
+        delete obj._item;
+      });
+
+      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const otherFreq = 1.0 - sumFreq;
+
+      if (otherFreq > 0.001) {
+        top10.push({
+          name: 'Others',
+          tagName: '',
+          count: 0,
+          frequency: otherFreq,
+          thumb: '',
+          isOther: true
+        });
+      }
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+
+      // Lazy Load
+      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+
+      return top10;
+
+    } catch (e) {
+      console.warn('[Danbooru Grass] Failed to fetch copyright distribution', e);
+      return [];
+    }
+  }
+
+  /**
+   * Helper for concurrent processing with limit.
+   * @param {Array} items Items to process.
+   * @param {number} concurrency Max concurrent tasks.
+   * @param {Function} fn Async function to run on each item.
+   * @param {number} [delayMs=250] Delay between iterations per worker.
+   * @return {Promise<Array>} Results array.
+   */
+  async mapConcurrent(items: any[], concurrency: number, fn: (item: any) => Promise<any>, delayMs: number = 250): Promise<any[]> {
+    const results = new Array(items.length);
+    let index = 0;
+    const next = async () => {
+      while (index < items.length) {
+        const i = index++;
+        results[i] = await fn(items[i]);
+        // Rate limit protection
+        await new Promise(r => setTimeout(r, delayMs));
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, next));
+    return results;
+  }
+
+  /**
+   * Fetches Favorite Copyright distribution.
+   * Uses ordfav:{user} to find favorites.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getFavCopyrightDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'fav_copyright_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(normalizedName)}`;
+
+    try {
+      const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+
+      let tags = resp.related_tags;
+      const candidates = tags.slice(0, 20);
+
+      // Concurrent Filter checks (Sub-copyright) - Limit 5
+      const filteredResults = await this.mapConcurrent(candidates, 2, async (item) => {
+        const tagName = item.tag.name;
+        const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
+        try {
+          const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
+          if (Array.isArray(imps) && imps.length > 0) return null;
+          return item;
+        } catch (e) { return item; }
+      });
+
+      const filtered = filteredResults.filter(item => item !== null);
+
+      // 1. Return basic stats immediately (with null thumbs)
+      // We still need to calculate frequencies and filter "Others"
+      // But we skip the heavy "fetchThumbnailWithRetry" part in the initial critical path.
+
+      // Concurrent Fetch Data for Top 10 - Limit 5
+      // Modification: Do NOT await valid thumbs. Just structural data.
+      const top10: any[] = filtered.slice(0, 10).map(item => {
+        const tagName = item.tag.name;
+        const displayName = tagName.replace(/_/g, ' ');
+
+        // We still probably want the "User Count" if possible, but that requires a fetch too?
+        // The original code did `fetch countUrl`. That is also a bottleneck?
+        // Providing "approximate" counts (global post_count) might be misleading.
+        // BUT replacing 10 sequential/parallel fetches is good.
+        // Let's Keep the count fetching if it's fast enough or necessary?
+        // User's plan said: "Load Chart (Shapes) first".
+        // Pie chart NEEDS counts/frequencies for shapes.
+        // User Count is needed for "Frequency" (User Count / Total User Posts).
+        // So we MUST wait for counts.
+        // But THUMBNAILS are only for tooltips/visuals. We can skip those.
+
+        // So we will keep the 'mapConcurrent' for Counts, but remove Thumb fetch.
+        return {
+          name: displayName,
+          tagName: tagName,
+          count: 0, // Placeholder, will fill in mapConcurrent
+          frequency: item.frequency,
+          thumb: null, // Lazy Load
+          isOther: false,
+          _item: item // Temp storage
+        };
+      });
+
+      // Fill Counts Concurrently
+      // We can re-use mapConcurrent to fill counts.
+      await this.mapConcurrent(top10, 3, async (obj) => {
+        const tagName = obj.tagName;
+        if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+        try {
+          // Use fav: for counting (more standard), ordfav: for sorting/linking
+          const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`fav:${normalizedName} ${tagName}`)}`;
+          const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
+          const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+          // console.log(`[Danbooru Grass] Fav Count for ${tagName}: ${c} (URL: ${countUrl})`); // Debug
+          obj.count = c;
+        } catch (e) {
+          console.warn('[Danbooru Grass] Count fetch failed', e);
+        }
+        delete obj._item;
+      });
+
+      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const otherFreq = 1.0 - sumFreq;
+
+      if (otherFreq > 0.001) {
+        top10.push({
+          name: 'Others',
+          tagName: '',
+          count: 0,
+          frequency: otherFreq,
+          thumb: '',
+          isOther: true
+        });
+      }
+
+      // Save Stats (Initial - without thumbs)
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+
+      // TRIGGER LAZY LOADING FOR THUMBNAILS
+      // We assume `reportSubStatus` can act as the "Update Callback" if we pass a special flag or function?
+      // Actually, the caller (refreshAllStats) typically provides a status callback.
+      // We need a way to tell the caller "Hey, data updated!".
+      // The current structure doesn't support a "Data Updated" callback easily down here without changing signature.
+      // UserAnalyticsApp passes `(msg) => ...`. That's just for status text.
+      // We need a new callback or we piggyback.
+      // Let's add a 4th argument `onDataUpdate` to the signature?
+      // Or just leverage the fact that we return the object reference.
+      // If we modify `top10` (objects) in place, the caller holds the reference.
+      // But the caller needs to know WHEN to re-render.
+
+      // For now, let's trigger the background fetch and let it save to DB.
+      // The UI might need a "Listener" or we accept we need to pass a callback.
+      // Let's modify the signature in the next step or assume generic event?
+      // Let's simply fire-and-forget the enricher, and assume the UI will re-render if we tell it to?
+      // We can pass `onDataUpdate` as a property of `reportSubStatus` if it's an object? No.
+
+      // Let's call the internal enrich method.
+      // We will need to pass the `onDataUpdate` callback from the UI layer.
+      // For this refactor, I will add `onDataUpdate` to arguments.
+
+      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+
+      return top10;
+
+    } catch (e) {
+      console.warn('[Danbooru Grass] Failed to fetch fav copyright distribution', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches Top SFW and NSFW posts in parallel using API.
+   * @param {!Object} userInfo The user's info object.
+   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW top posts.
+   */
+  async getTopPostsByType(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
+    if (!userInfo.name) return { sfw: null, nsfw: null };
+
+    // Helper for fetching 1 top post
+    const fetchTop = async (ratingTags: string, extraQuery: string = ''): Promise<any | null> => {
+      try {
+        // Use tags=... order:score rating:x limit=1
+        const normalizedName = userInfo.name.replace(/ /g, '_');
+        const query = `user:${normalizedName} order:score rating:${ratingTags} ${extraQuery}`;
+        const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        if (Array.isArray(resp) && resp.length > 0) {
+          return resp[0];
+        }
+      } catch (e) {
+        console.warn(`[Danbooru Grass] Failed to fetch top post for ${ratingTags}`, e);
+      }
+      return null;
+    };
+
+    const [sfw, nsfw] = await Promise.all([
+      fetchTop('g,s'), // General, Sensitive
+      fetchTop('q,e')  // Questionable, Explicit
+    ]);
+
+    return { sfw, nsfw };
+  }
+
+  /**
+   * Fetches Recent Popular (age < 1w) SFW and NSFW posts.
+   * @param {!Object} userInfo The user's info object.
+   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW recent posts.
+   */
+  async getRecentPopularPosts(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
+    if (!userInfo.name) return { sfw: null, nsfw: null };
+
+    // Reuse logic but add age:<1w
+    const fetchTop = async (ratingTags: string): Promise<any | null> => {
+      try {
+        const normalizedName = userInfo.name.replace(/ /g, '_');
+        const query = `user:${normalizedName} order:score rating:${ratingTags} age:<1w`;
+        const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        if (Array.isArray(resp) && resp.length > 0) {
+          return resp[0];
+        }
+      } catch (e) {
+        console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTags}`, e);
+      }
+      return null;
+    };
+
+    const [sfw, nsfw] = await Promise.all([
+      fetchTop('g,s'),
+      fetchTop('q,e')
+    ]);
+
+    return { sfw, nsfw };
+  }
+
+  /**
+   * Fetches Random SFW and NSFW posts.
+   * @param {!Object} userInfo The user's info object.
+   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW random posts.
+   */
+  async getRandomPosts(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
+    if (!userInfo.name) return { sfw: null, nsfw: null };
+
+    const fetchRandom = async (ratingTags: string): Promise<any | null> => {
+      try {
+        const normalizedName = userInfo.name.replace(/ /g, '_');
+        // Use /posts/random.json?tags=...
+        const query = `user:${normalizedName} rating:${ratingTags}`;
+        const url = `/posts/random.json?tags=${encodeURIComponent(query)}&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        // /posts/random.json returns a single object, not array (usually)
+        // But sometimes it might be empty object or error?
+        if (resp && resp.id) {
+          return resp;
+        }
+      } catch (e) {
+        console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTags}`, e);
+      }
+      return null;
+    };
+
+    const [sfw, nsfw] = await Promise.all([
+      fetchRandom('g,s'),
+      fetchRandom('q,e')
+    ]);
+
+    return { sfw, nsfw };
+  }
+
+  /**
+   * Gets the post with the highest score and fetches its details.
+   * @param {Object} userInfo The user's info object.
+   * @param {string} [filterMode='sfw'] 'sfw' | 'nsfw' | 'all'.
+   * @return {Promise<Object|null>}
+   */
+  async getTopScorePost(userInfo: TargetUser, filterMode: string = 'sfw'): Promise<any | null> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return null;
+
+    // Filter Logic for IndexedDB
+    // Since Dexie 'sortBy' takes a string index, we can't easily combine it with complex filters efficiently
+    // without compound indexes.
+    // However, for a single user, it's efficient enough to traverse.
+
+    let collection = this.db.posts.where('uploader_id').equals(uploaderId);
+
+    if (filterMode === 'sfw') {
+      // 'g' (general) or 's' (sensitive)
+      collection = collection.and(p => p.rating === 'g' || p.rating === 's');
+    } else if (filterMode === 'nsfw') {
+      // 'q' (questionable) or 'e' (explicit)
+      collection = collection.and(p => p.rating === 'q' || p.rating === 'e');
+    }
+
+    // Sort by score DESC
+    const topLocal = await collection.reverse().sortBy('score').then(r => r[0]);
+
+    if (!topLocal) return null;
+
+    // 2. Fetch details (thumbnail, fav_count)
+    try {
+      const url = `/posts/${topLocal.id}.json`;
+      const details = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (details && details.id) {
+        return details; // Return full API object
+      }
+    } catch (e) {
+      console.warn('[Danbooru Grass] Failed to fetch top post details', e);
+    }
+
+    return topLocal; // Fallback to local data (might miss thumb/favs)
+  }
+
+  /**
+   * Fetches data for Scatter Plot.
+   * Returns minimal object array to save memory/time.
+   * @param {Object} userInfo The user's info object.
+   * @return {Promise<Array<{id: number, d: number, s: number, t: number, r: string}>>}
+   */
+  async getScatterData(userInfo: TargetUser): Promise<ScatterDataPoint[]> {
+    const uploaderId = parseInt(userInfo.id);
+    if (!uploaderId) return [];
+
+    const result: ScatterDataPoint[] = [];
+    // Streaming iterate
+    await this.db.posts.where('uploader_id').equals(uploaderId).each(post => {
+      if (!post.created_at) return;
+      // Use timestamps for faster plotting
+      const d = new Date(post.created_at).getTime();
+      // Rating: g, s, q, e
+      const r = post.rating;
+      const s = post.score || 0;
+      const t = post.tag_count_general || 0;
+
+      result.push({ id: post.id, d, s, t, r });
+    });
+
+    return result;
+  }
+
+  /**
+   * Fetches the date when the user was promoted to a level that can approve posts (Approver+).
+   * @param {string} userName
+   * @return {Promise<string|null>} ISO date string (YYYY-MM-DD) or null.
+   */
+  async fetchPromotionDate(userName: string): Promise<string | null> {
+    const history = await this.getPromotionHistory({ name: userName });
+    // Look for promotion to Approver, Admin, Moderator, etc.
+    // Roles: Member -> Gold -> Platinum -> Builder -> Contributor -> Approver -> Moderator -> Admin
+    // We look for the FIRST event where they reached 'Approver' level or higher.
+    // Since it's hard to parse exact level order from text, we just look for 'Approver', 'Moderator', 'Admin'.
+    // Actually, 'Builder' might also be relevant if we track that. But user asked for Approvals.
+    // Let's assume 'Approver' or higher.
+
+    // Simplified: Just find the earliest "Promoted to X" where X is Approver+.
+    // But for safety, let's just use the logic: "When did they start approving?"
+    // Better: Use the /user_feedbacks result to find "promoted to Approver".
+
+    const targetRoles = ['Approver', 'Moderator', 'Admin'];
+    const promoEvent = history.find(h => targetRoles.some(r => h.role.includes(r)));
+
+    if (promoEvent) {
+      return promoEvent.date.toISOString().slice(0, 10);
+    }
+    return null;
+  }
+
+  /**
+   * Fetches promotion history from user feedbacks.
+   * @param {Object} userInfo The user's info object.
+   * @return {Promise<Array<{date: Date, role: string, rawBody: string}>>}
+   */
+  async getPromotionHistory(userInfo: {name: string}): Promise<PromotionEvent[]> {
+    if (!userInfo.name) return [];
+    try {
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const url = `/user_feedbacks.json?commit=Search&search%5Bbody_matches%5D=promoted&search%5Buser_name%5D=${encodeURIComponent(normalizedName)}`;
+      const feedbacks = await this.rateLimiter.fetch(url).then(r => r.json());
+
+      if (!Array.isArray(feedbacks)) return [];
+
+      return feedbacks.map(f => {
+        // Parse Body: "promoted to a Builder level account"
+        const match = f.body.match(/promoted to a (.+?) level/i);
+        const role = match ? match[1] : 'Unknown';
+        return {
+          date: new Date(f.created_at),
+          role: role,
+          rawBody: f.body
+        };
+      }).filter(item => item.role !== 'Unknown').sort((a, b) => (a.date as any) - (b.date as any));
+    } catch (e) {
+      console.error('[Danbooru Grass] Failed to fetch promotions', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches breast size distribution by checking specific tags.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getBreastsDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Breasts Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'breasts_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const breastTags = [
+      'flat_chest',
+      'small_breasts',
+      'medium_breasts',
+      'large_breasts',
+      'huge_breasts',
+      'gigantic_breasts'
+    ];
+
+    // Use mapConcurrent from base class to fetch efficiently
+    // But Lazy Load the thumbs
+    const results = breastTags.map(tag => ({
+      name: tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' '),
+      tagName: tag,
+      count: 0,
+      frequency: 0,
+      thumb: null,
+      isOther: false
+    }));
+
+    // Calculate Counts
+    await this.mapConcurrent(results, 3, async (obj) => {
+      const tag = obj.tagName;
+      if (reportSubStatus) reportSubStatus(`Fetching Breasts: ${obj.name}`);
+      try {
+        const uniqueTag = `user:${normalizedName} ${tag}`;
+        const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        let count = 0;
+        if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+          count = resp.counts.posts;
+        }
+        obj.count = count;
+      } catch (e) { }
+    });
+
+    // Filter out zero counts
+    const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+
+    // Lazy Load
+    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+
+    return filtered;
+  }
+
+  /**
+   * Fetches hair length distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getHairLengthDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Hair Length Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'hair_length_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const hairLengthTags = [
+      '~bald ~bald_female',
+      'very_short_hair',
+      'short_hair',
+      'medium_hair',
+      'long_hair',
+      'very_long_hair',
+      'absurdly_long_hair'
+    ];
+
+    const results = hairLengthTags.map(tag => {
+      let label = tag;
+      if (tag.includes('~bald')) label = 'Bald';
+      else label = tag.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' ');
+
+      return {
+        name: label,
+        count: 0,
+        frequency: 0,
+        originalTag: tag,
+        thumb: null,
+        isOther: false
+      };
+    });
+
+    await this.mapConcurrent(results, 3, async (obj) => {
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Length: ${obj.name}`);
+      try {
+        const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
+        const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+          obj.count = resp.counts.posts;
+        }
+      } catch (e) { }
+    });
+
+    const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+
+    // Lazy Load
+    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+
+    return filtered;
+  }
+
+  /**
+   * Fetches hair color distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getHairColorDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Hair Color Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'hair_color_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const hairColorMap = [
+      { tag: 'black_hair', color: '#000000' },
+      { tag: 'brown_hair', color: '#A52A2A' },
+      { tag: 'blonde_hair', color: '#FFD700' },
+      { tag: 'red_hair', color: '#FF0000' },
+      { tag: 'orange_hair', color: '#FFA500' },
+      { tag: 'pink_hair', color: '#FFC0CB' },
+      { tag: 'purple_hair', color: '#800080' },
+      { tag: 'green_hair', color: '#008000' },
+      { tag: 'blue_hair', color: '#0000FF' },
+      { tag: 'aqua_hair', color: '#00FFFF' },
+      { tag: 'grey_hair', color: '#808080' },
+      { tag: 'white_hair', color: '#FFFFFF' }
+    ];
+
+    const results = hairColorMap.map(item => ({
+      name: item.tag.split('_')[0].charAt(0).toUpperCase() + item.tag.split('_')[0].slice(1) + ' Hair',
+      count: 0,
+      frequency: 0,
+      color: item.color,
+      originalTag: item.tag,
+      thumb: null,
+      isOther: false
+    }));
+
+    await this.mapConcurrent(results, 3, async (obj) => {
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Color: ${obj.name}`);
+      try {
+        const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
+        const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+          obj.count = resp.counts.posts;
+        }
+      } catch (e) { }
+    });
+
+    const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+
+    // Lazy Load
+    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+
+    return filtered;
+  }
+
+  async enrichThumbnails(cacheKey: string, uploaderId: number, items: DistributionItem[], userInfo: TargetUser, statusCallback: ((msg: string) => void) | null = null): Promise<void> {
+    let hasUpdates = false;
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+
+    // Identify items needing thumbs
+    // Explicitly check for null or empty string, but sometimes empty string means "tried and failed".
+    // Let's assume null means "not yet fetched".
+    const toFetch = items.filter(i => !i.isOther && !i.thumb);
+
+    if (toFetch.length === 0) return;
+
+    // Process in background
+
+
+    await this.mapConcurrent(toFetch, 3, async (item) => {
+      // Re-construct query based on cacheKey or item data?
+      // "item" doesn't have the full query info derived in the parent function (e.g. hair_color map).
+      // But we stored `tagName` or `originalTag` or `color`?
+      // Character/Copyright/Breasts: `tagName` exists.
+      // Hair Length: `originalTag`.
+      // Hair Color: `originalTag`.
+
+      // We need to standardize or deduce.
+      let tagPart = item.tagName || item.originalTag;
+      if (!tagPart && cacheKey === 'hair_color_dist') {
+        // Infer from name? Vulnerable.
+        // We should have saved originalTag.
+        // In getHairColorDistribution, we updated to save `originalTag`.
+      }
+
+      if (!tagPart) return;
+
+      // Construct Query
+      // Default: user:name tag order:score rating:g
+      let queryTags = `user:${normalizedName} ${tagPart} order:score rating:g`;
+
+      // Special cases if any? No, mostly standard.
+
+      const thumb = await this.fetchThumbnailWithRetry(queryTags);
+      if (thumb) {
+        item.thumb = thumb;
+        hasUpdates = true;
+        // Optional: Notify UI for incremental update?
+        // For now, let's just save at end or batch?
+      }
+    });
+
+    if (hasUpdates && uploaderId) {
+      // Save updated stats
+      await this.saveStats(cacheKey, uploaderId, items);
+
+      // Notify UI
+      // How? We need a global event or callback.
+      // Dispatch a window event? "DanbooruInsights:DataUpdated"
+      window.dispatchEvent(new CustomEvent('DanbooruInsights:DataUpdated', {
+        detail: { contentType: cacheKey, userId: uploaderId, data: items }
+      }));
+    }
+  }
+
+
+  /**
+   * helper to get robust total count.
+   * @param {Object} userInfo The user's info object.
+   * @return {Promise<number>}
+   */
+  async getTotalPostCount(userInfo: TargetUser): Promise<number> {
+    if (!userInfo.name) return 0;
+    let total = 0;
+    try {
+      // Method A: Exact Search Count (API)
+      // Use tags=... order:score rating:x limit=1
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+      const countUrl = `/counts/posts.json?tags=user:${encodeURIComponent(normalizedName)}`;
+      const countData = await this.rateLimiter.fetch(countUrl).then(r => r.json());
+      if (countData && typeof countData.counts === 'object' && typeof countData.counts.posts === 'number') {
+        return countData.counts.posts;
+      }
+    } catch (e) {
+      console.warn('[Danbooru Grass] Counts API failed:', e);
+    }
+
+    // Method B: Profile API Fallback
+    try {
+      const profileUrl = `/users/${userInfo.id}.json`;
+      const profile = await this.rateLimiter.fetch(profileUrl).then(r => r.json());
+      if (profile && typeof profile.post_upload_count === 'number') {
+        return profile.post_upload_count;
+      }
+    } catch (e2) { }
+
+    // Method C: DOM Fallback
+    try {
+      const statsLink = document.querySelector(
+        '#danbooru-grass-wrapper > div:nth-child(1) > table > tbody > tr:nth-child(6) > td > a:nth-child(1)'
+      );
+      if (statsLink) {
+        return parseInt(statsLink.textContent.replace(/,/g, ''), 10);
+      }
+    } catch (e3) { }
+
+    return 0; // Failed
+  }
+
+  /**
+   * Syncs all posts for the user using parallel buffered fetching.
+   * @param {Object} userInfo The user's info object.
+   * @param {Function} onProgress Callback for progress updates (current, total).
+   * @return {Promise<void>}
+   */
+  async syncAllPosts(userInfo: TargetUser, onProgress: (current: number, total: number, message?: string) => void): Promise<void> {
+    if (!userInfo.id) {
+      console.error('User ID required for sync');
+      return;
+    }
+
+    const uploaderId = parseInt(userInfo.id);
+
+    // Global Sync Lock
+    if (AnalyticsDataManager.isGlobalSyncing) {
+      console.warn('[Danbooru Grass] Sync already in progress.');
+      return;
+    }
+    AnalyticsDataManager.isGlobalSyncing = true;
+    AnalyticsDataManager.syncProgress = { current: 0, total: 0, message: '' };
+    AnalyticsDataManager.onProgressCallback = onProgress;
+
+    // Helper to broadcast progress
+    const reportProgress = (c: number, t: number, msg: string = '') => {
+      AnalyticsDataManager.syncProgress = { current: c, total: t, message: msg };
+      if (AnalyticsDataManager.onProgressCallback) {
+        AnalyticsDataManager.onProgressCallback(c, t, msg);
+      }
+      if (onProgress) onProgress(c, t, msg);
+    };
+
+    try {
+
+      // 1. Get total count
+      let total = await this.getTotalPostCount(userInfo);
+
+
+      // 2. Resume Check
+      // Strategy: overlapping sync (1 month back) to catch updates (score/tags)
+      const newestArr = await this.db.posts.where('uploader_id').equals(uploaderId).reverse().limit(1).toArray();
+      let startId = 0;
+
+      if (newestArr.length > 0) {
+        const newest = newestArr[0];
+        const newestDate = new Date(newest.created_at);
+        const cutOffDate = new Date(newestDate);
+        cutOffDate.setMonth(cutOffDate.getMonth() - 1);
+
+
+
+
+        // Find the first post that is OLDER than cutOffDate to determine startId
+        let found = false;
+        await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each(p => {
+          if (found) return;
+          if (new Date(p.created_at) < cutOffDate) {
+            startId = p.id;
+            found = true;
+            return false; // Stop iteration
+          }
+        });
+
+        // fallback: if history is shorter than 1 month, startId stays 0 (Full Sync)
+      }
+
+      // Initialize currentNo based on startId
+      // If startId is 0, we start counting from 0.
+      // If startId > 0, we start counting from the number of posts we have UP TO that point.
+      let currentNo = 0;
+      if (startId > 0) {
+        // Fix: Count ONLY this user's posts below startId
+        // Using filter() on the collection because composite index might not exist for (id, uploader_id)
+        currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter(p => p.id <= startId).count();
+
+      } else {
+
+      }
+
+
+
+      // FIX: If total is 0 (Failed to fetch), we CANNOT assume "Already Synced".
+      // We must assume "Unknown" and proceed to try and fetch new posts.
+      // IF total > 0 (Success), then we check if current >= total.
+      // BUT with the new overlapping logic, we almost ALWAYS want to sync at least the overlap.
+      // So we relax the "Already synced" check if we have a valid startId > 0 (meaning we have history).
+      // If startId > 0, we proceed to fetch updates.
+      // If startId == 0 and current == total, then maybe we are really done?
+      // Actually, user wants "Update". So if we calculated a startId, we should run.
+
+      if (startId === 0 && total > 0 && currentNo >= total) {
+
+        reportProgress(currentNo, total);
+        return;
+      }
+
+      // If total is 0, we simply run blindly until empty. That's fine.
+
+
+      // 3. Buffered Parallel Fetching Logic
+      let lastFetchedId = startId;
+      const limit = 200; // API Limit
+      // 3 concurrency = 600 items.
+      // User complaint "jerky" likely means 5 threads * 200 = 1000 items is too big a batch.
+      // Draining incrementally with buffer will solve this.
+      const parallel_count = 5;
+
+      let pageOffset = 1;
+      // 3. Worker Pool Logic (Rolling Window)
+      const MAX_CONCURRENCY = 5;
+      const WORKER_DELAY = 400; // 5 workers * 1 req / 0.4s = 12.5 req/s (Max)
+
+      // Shared State
+      let activeWorkers = 0;
+      let hasMore = true;
+      let completedCount = 0;
+
+      // Ordered Commit State
+      const buffer = new Map<number, any[]>(); // page -> items
+      let nextExpectedPage = 1;
+
+      const worker = async (workerId: number) => {
+        // Staggered Start: Prevent initial burst
+        if (workerId > 0) await new Promise(r => setTimeout(r, workerId * 200));
+
+        while (hasMore) {
+          // 1. Claim a page
+          const currentPage = pageOffset++;
+
+          try {
+            const params = {
+              limit,
+              page: currentPage,
+              'tags': `user:${userInfo.name.replace(/ /g, '_')} order:id id:>${startId}`,
+              'only': 'id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url'
+            };
+            const q = new URLSearchParams(params as any);
+            const url = `/posts.json?${q.toString()}`;
+
+            const pending = buffer.size;
+            reportProgress(currentNo, total, `Fetching Page ${currentPage} (Pending: ${pending})...`);
+
+            // Retry Logic
+            let items = null;
+            let attempts = 0;
+            while (attempts < 3) {
+              try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s Timeout
+
+                const fetchResp = await this.rateLimiter.fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                if (!fetchResp.ok) throw new Error(`HTTP ${fetchResp.status}`);
+                items = await fetchResp.json();
+                break; // Success
+              } catch (err) {
+                attempts++;
+                const isServerErr = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504');
+                console.warn(`[Worker ${workerId}] Page ${currentPage} attempt ${attempts} failed: ${err.message}`);
+
+                if (attempts >= 3 || !isServerErr) throw err; // Give up or fatal error
+
+                // Backoff: 1s, 2s, 4s...
+                await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempts - 1)));
+              }
+            }
+
+            if (items.length === 0) {
+              hasMore = false; // Signal end
+              return;
+            }
+
+            // 2. Buffer the result
+            buffer.set(currentPage, items);
+
+            // 3. Ordered Commit Loop (Check if we can save)
+            while (buffer.has(nextExpectedPage)) {
+              const batchItems = buffer.get(nextExpectedPage);
+              buffer.delete(nextExpectedPage); // Remove from buffer
+
+              if (batchItems.length > 0) {
+                // Assign Sequential Numbers
+                const bulkData = batchItems.map((p) => ({
+                  id: p.id,
+                  uploader_id: p.uploader_id,
+                  created_at: p.created_at,
+                  score: p.score,
+                  rating: p.rating,
+                  tag_count_general: p.tag_count_general,
+                  variants: p.variants,
+                  preview_file_url: p.preview_file_url,
+                  no: ++currentNo
+                }));
+
+                await this.db.posts.bulkPut(bulkData);
+
+                // Update Progress
+                // currentNo is now accurate (reset based on startId)
+                reportProgress(currentNo, total > currentNo ? total : currentNo);
+              }
+
+              nextExpectedPage++;
+            }
+
+          } catch (e) {
+            console.error(`[Worker ${workerId}] Page ${currentPage} failed`, e);
+            hasMore = false;
+          }
+
+          // Rate Limit Sleep
+          if (hasMore) {
+            await new Promise(r => setTimeout(r, WORKER_DELAY));
+          }
+        }
+      };
+
+      // Ignite Workers
+      const workers = [];
+      for (let i = 0; i < MAX_CONCURRENCY; i++) {
+        workers.push(worker(i));
+      }
+
+      await Promise.all(workers);
+
+      // Save "Last Synced Date" metadata
+      const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+      localStorage.setItem(lastSyncKey, new Date().toISOString());
+
+      // Auto-cleanup other users' stale data (older than 14 days)
+      await this.cleanupStaleData(userInfo.id);
+
+      // Signal UI: Processing Stats
+      reportProgress(total, total, 'PREPARING');
+
+      // Refresh all stats after sync
+      // If startId was 0, it was a Full Sync; otherwise it's a Partial Sync
+      await this.refreshAllStats(userInfo, startId === 0);
+
+    } finally {
+      AnalyticsDataManager.isGlobalSyncing = false;
+      AnalyticsDataManager.onProgressCallback = null;
+    }
+  }
+
+  /**
+   * Cleans up data for other users if they haven't been synced in 14 days.
+   * @param {number|string} currentUserId - The ID of the currently active user (to skip).
+   */
+  async cleanupStaleData(currentUserId: number | string): Promise<void> {
+    const currentId = typeof currentUserId === 'number' ? currentUserId : parseInt(currentUserId);
+    const THRESHOLD = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
+    const now = new Date().getTime();
+
+    try {
+      // 1. Get all unique uploader_ids from DB
+      // Dexie doesn't have a direct 'distinct' query efficiently without keys.
+      // But we can iterate unique keys if indexed? 'uploader_id' is indexed.
+      const allIds = await this.db.posts.orderBy('uploader_id').uniqueKeys();
+
+      for (const uid of allIds) {
+        if (uid === currentId) continue; // Skip current user
+
+        const syncKey = `danbooru_grass_last_sync_${uid}`;
+        const lastSyncStr = localStorage.getItem(syncKey);
+
+        let shouldDelete = false;
+        if (!lastSyncStr) {
+          // No record? Treat as stale (or maybe very old format). Delete to be safe/clean?
+          // Or maybe it's a new user not yet synced?
+          // If it's in DB but has no sync date, it's zombie data.
+          shouldDelete = true;
+        } else {
+          const lastDate = new Date(lastSyncStr).getTime();
+          if (now - lastDate > THRESHOLD) {
+            shouldDelete = true;
+          }
+        }
+
+        if (shouldDelete) {
+
+          await this.db.posts.where('uploader_id').equals(uid).delete();
+          await this.db.piestats.where('userId').equals(uid).delete();
+
+          localStorage.removeItem(syncKey);
+        }
+      }
+
+      // Server bubble data cleanup removed
+    } catch (e) {
+      console.warn('[Danbooru Grass] Cleanup failed', e);
+    }
+  }
+
+  /**
+   * Refreshes all cached statistics for the user.
+   * @param {Object} userInfo The user's info object.
+   * @return {Promise<void>}
+   */
+  async refreshAllStats(userInfo: TargetUser, isFullSync: boolean = false): Promise<void> {
+
+    const forceRefresh = true;
+    try {
+      await Promise.all([
+        this.getRatingDistribution(userInfo),
+        this.getCharacterDistribution(userInfo, forceRefresh, (msg) => {
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+            AnalyticsDataManager.onProgressCallback(current, total, msg);
+          }
+        }),
+        this.getCopyrightDistribution(userInfo, forceRefresh, (msg) => {
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+            AnalyticsDataManager.onProgressCallback(current, total, msg);
+          }
+        }),
+        this.getFavCopyrightDistribution(userInfo, forceRefresh),
+        this.getBreastsDistribution(userInfo, forceRefresh, (msg) => {
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+            AnalyticsDataManager.onProgressCallback(current, total, msg);
+          }
+        }),
+        this.getHairLengthDistribution(userInfo, forceRefresh, (msg) => {
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+            AnalyticsDataManager.onProgressCallback(current, total, msg);
+          }
+        }),
+        this.getHairColorDistribution(userInfo, forceRefresh, (msg) => {
+          const { current, total } = AnalyticsDataManager.syncProgress;
+          if (typeof AnalyticsDataManager.onProgressCallback === 'function') {
+            AnalyticsDataManager.onProgressCallback(current, total, msg);
+          }
+        }),
+        // Always refresh Random Posts
+        this.getRandomPosts(userInfo),
+        // Refresh Popular Posts only on Full Sync
+        ...(isFullSync ? [
+          this.getTopPostsByType(userInfo),
+          this.getRecentPopularPosts(userInfo),
+          this.getTopScorePost(userInfo, 'sfw'),
+          this.getTopScorePost(userInfo, 'nsfw')
+        ] : [])
+      ]);
+
+    } catch (e) {
+      console.warn('[Analytics] Failed to refresh stats', e);
+    }
+  }
+
+  /**
+   * Clears all analytics data for the specified user from local DB.
+   * @param {Object} userInfo The user's info object.
+   * @return {Promise<void>}
+   */
+  async clearUserData(userInfo: TargetUser): Promise<void> {
+    if (!userInfo.id) return;
+    const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
+    // const userIdStr = String(userInfo.id); // Not used anymore for Analytics clean
+
+
+
+    // 1. Delete posts (uploader_id is INT)
+    await this.db.posts.where('uploader_id').equals(uploaderId).delete();
+
+    // 2. Delete Pie Stats (userId is INT in updatePieStats)
+    await this.db.piestats.where('userId').equals(uploaderId).delete();
+
+    // 3. Delete Bubble Data (User Specific only, preserve Server cache)
+
+
+    // Clear metadata (Last Sync Time)
+    const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+    localStorage.removeItem(lastSyncKey);
+
+
+  }
+}
