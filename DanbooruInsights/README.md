@@ -80,7 +80,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 ## Credits
 
 - **Author**: AkaringoP
-- **Co-Author**: Antigravity (AI)
+- **Co-Author**: Claude Code with VS Code (AI)
 
 ## Compatibility
 
