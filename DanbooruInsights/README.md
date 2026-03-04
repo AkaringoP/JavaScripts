@@ -19,44 +19,49 @@ The script consists of three main components:
 <img width="608" height="685" alt="TagAnalyticsApp 1" src="https://github.com/user-attachments/assets/981b57c3-bb01-423b-927c-8a5f5a17d55b" />
 <img width="564" height="551" alt="TagAnalyticsApp 2" src="https://github.com/user-attachments/assets/a66065f8-87cc-4d3e-9772-953ee037871e" />
 
-## Features (v6.0)
+## Features (v7.0)
 
-* **Tag Analytics (`TagAnalyticsApp`)**: Full analytics support for any Tag, Artist, Copyright, or Character. Analyze historical trends, rankings, and milestones for specific tags.
-* **Enhanced Progress Tracking**: Real-time, descriptive loading indicators (e.g., "Analyzing monthly trends...", "Ranking top uploaders...") replacing generic loading messages.
-* **Immediate Visibility**: Analytics buttons appear immediately on page load in a "Waiting" state, ensuring accessibility even before data is fully processed.
-* **Unified Architecture**: Completely refactored codebase with a single entry point (`main`), shared `Database`, and optimized `SettingsManager`.
-* **Smart Button Injection**: Improved logic to inject analytics buttons reliably across various page layouts (Artist, Wiki, Post Lists).
-* **Refined User Experience**: Better feedback for invalid tags, automatic cleanup of old cache data, and smoother UI transitions.
+> ⚙️ **Developer Release** — No user-facing changes. Functionally identical to v6.5.2.
+
+* **TypeScript Rewrite**: Migrated the entire codebase (~12,000 lines) from a single JavaScript file to 13 TypeScript modules with full type annotations.
+* **Build System**: Introduced Vite + vite-plugin-monkey for bundling and `tsc` for type checking, replacing the hand-edited single file workflow.
+* **Test Suite**: Added 55 automated unit tests (Vitest) covering core logic modules (`config`, `settings`, `rate-limiter`, `utils`, `analytics-data-manager`, `main`).
+* **Module Architecture**: Codebase is now split into logical units — `config`, `styles`, `types`, `utils`, `core/*`, `ui/*`, and `apps/*`.
 
 ## Version History
 
-### v5.x Features
+See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
-* **Hourly Activity Analysis**: Visualizes contribution intensity by time of day (00:00 - 23:00) with a dynamic heatmap.
-* **Advanced Approvals Module**: Tracks exact Post IDs for approval actions with a paginated "Detail View".
-* **Core Analytics**: Includes Contribution Calendars, Scatter Plots for post scores, and Monthly Activity charts.
-* **Multiple Metrics**: Supports switching between **Uploads**, **Approvals**, and **Notes** with local caching (Dexie.js).
-* **Customization**: Full control over themes (light/dark presets), contribution thresholds, and visual settings.
-* **Robust Data Architecture**: Refactored caching layer ensuring consistency and performance.
+### v6.x — Tag Analytics & Architecture Overhaul
 
-### v4.x
+* **TagAnalyticsApp**: Full analytics support for any Tag, Artist, Copyright, or Character.
+* **3-Pane Animated Summary Card** with streak duration and dynamic username colors.
+* **Performance**: Lazy loading for large tag histories; Token Bucket rate limiting (6 req/s).
+* **CSS**: Centralized `GLOBAL_CSS` with `.di-` namespace prefix.
+* **GrassApp**: Resizable/movable layout with per-user IndexedDB storage.
 
-* **Analytics Dashboard**: Added a comprehensive dashboard with Tag Distribution, Milestones, and Top Posts analysis.
-* **Scatter Plot**: Visualized post scores over time with interactive filtering and zoom capabilities.
-* **Enhanced Sync**: Improved synchronization with background processing and progress indicators.
-* **UI/UX**: Refined popovers, smart positioning, and better modal interactions.
+### v5.x — Advanced Analytics
 
-### v3.x
+* **Hourly Activity Analysis**: Contribution intensity heatmap by time of day.
+* **Advanced Approvals Module**: Exact Post ID tracking with paginated "Detail View".
+* **Bubble Chart**: Jaccard Similarity analysis for character tags.
+* **Performance**: Migrated to `/post_approvals.json` with server-side filtering.
 
-* **🎨 Advanced Theme Customization**: 6 Color Themes including Gradient options.
-* **⚙️ Settings System**: Custom contribution thresholds and visual editors.
-* **🏎️ Performance**: Parallel batch fetching and optimized rendering logic.
-* **🛡️ Robustness**: Improved DOM independence and error handling.
+### v4.x — Analytics Dashboard
 
-### v2.0
+* **Rebrand**: Renamed from *Danbooru Grass* to *Danbooru Insights*.
+* **Analytics Dashboard**: Tag Distribution, Milestones, and Top Posts.
+* **Scatter Plot**: Post scores over time with interactive filtering and zoom.
 
-* **Core Implementation**: Rebuilt using `d3.v7` and `cal-heatmap`.
-* **Local Database**: Integrated `Dexie.js` for storage.
+### v3.x — Themes & Settings
+
+* **Advanced Theme Customization**: 6 color themes including gradient options.
+* **Settings System**: Custom contribution thresholds and visual editors.
+* **Performance**: Parallel batch fetching and optimized rendering.
+
+### v2.0 — Core Implementation
+
+* Built using `d3.v7` and `cal-heatmap` with `Dexie.js` for local storage.
 
 ## Installation
 

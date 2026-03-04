@@ -19,3 +19,15 @@ A collection of UserScripts developed by **AkaringoP** (with Antigravity).
     -   **[Violentmonkey](https://violentmonkey.github.io/)**
 2.  Click the **[Install]** link in the table above.
 3.  Confirm the installation in your extension.
+
+## Build Instructions (for contributors)
+
+Scripts with a build step (**DanbooruInsights**, **GroupingTags**) require Node.js:
+
+```bash
+cd DanbooruInsights   # or GroupingTags
+npm install
+npm run build         # runs vitest + tsc + vite build
+```
+
+The compiled UserScript is output to `dist/*.user.js`.
