@@ -25,7 +25,6 @@ All notable changes to Danbooru Insights are documented here.
 - **3-Pane Animated Summary Card**: Redesigned the Tag Analytics Summary Card — Profile Info, Key Milestones (progress rings), and D3.js Pie Charts with hover states.
 - **Streak Duration**: Summary card now calculates and displays the user's maximum contribution streak.
 - **Dynamic Username Colors**: Username in Dashboard Header and Ranking Columns is colored by Danbooru level tier.
-- **Performance ("Azur Lane" Fix)**: Lazy loading for large tag histories (60,000+ posts) — limits immediate generation to the latest 5,000 posts, preventing browser crashes.
 - **CSS Architecture**: Consolidated all inline `<style>` strings into a single injected `GLOBAL_CSS` stylesheet. Renamed all internal CSS classes with `.di-` namespace prefix.
 
 ### v6.4

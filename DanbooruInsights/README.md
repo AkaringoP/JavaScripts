@@ -36,7 +36,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 * **TagAnalyticsApp**: Full analytics support for any Tag, Artist, Copyright, or Character.
 * **3-Pane Animated Summary Card** with streak duration and dynamic username colors.
-* **Performance**: Lazy loading for large tag histories; Token Bucket rate limiting (6 req/s).
+* **Performance**: Token Bucket rate limiting (6 req/s).
 * **CSS**: Centralized `GLOBAL_CSS` with `.di-` namespace prefix.
 * **GrassApp**: Resizable/movable layout with per-user IndexedDB storage.
 
