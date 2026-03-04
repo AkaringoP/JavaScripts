@@ -7,8 +7,10 @@ Desktop.ini
 .vscode/
 .idea/
 
-# Node/Logs (Just in case you use npm later)
+# Node/Build output
 node_modules/
+dist/
+build/
 npm-debug.log
 yarn-error.log
 
