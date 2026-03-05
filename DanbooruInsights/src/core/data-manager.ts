@@ -29,7 +29,7 @@ interface HourlyStatEntry {
 
 /** A raw API item with dynamic shape from Danbooru endpoints. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ApiItem = Record<string, any>;
+export type ApiItem = Record<string, any>;
 
 /**
  * Handles API requests and caching via Dexie.js.

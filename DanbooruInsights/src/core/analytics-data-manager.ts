@@ -1,4 +1,5 @@
 import {DataManager} from './data-manager';
+import type {ApiItem} from './data-manager';
 import {isTopLevelTag} from '../utils';
 import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint} from '../types';
 
@@ -67,12 +68,12 @@ export class AnalyticsDataManager extends DataManager {
       const preferredTypes = ['720x720', '360x360'];
       // 1a. Try preferred variants in WebP
       for (const type of preferredTypes) {
-        const variant = post.variants.find(v => v.type === type && v.file_ext === 'webp');
+        const variant = post.variants.find((v: ApiItem) => v['type'] === type && v['file_ext'] === 'webp');
         if (variant) return variant.url;
       }
       // 1b. Try preferred variants in any format
       for (const type of preferredTypes) {
-        const variant = post.variants.find(v => v.type === type);
+        const variant = post.variants.find((v: ApiItem) => v['type'] === type);
         if (variant) return variant.url;
       }
       // 1c. Last resort: any variant
@@ -107,7 +108,7 @@ export class AnalyticsDataManager extends DataManager {
           return AnalyticsDataManager.getBestThumbnailUrl(data[0]);
         }
         return '';
-      } catch (e) {
+      } catch (e: unknown) {
         if (i === retries - 1) {
           console.warn(`[Analytics] Failed thumb fetch after ${retries} tries: ${tags}`, e);
           return '';
@@ -124,7 +125,7 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<{count: number, lastSync: ?string}>} Object containing post count and last sync date.
    */
   async getSyncStats(userInfo: TargetUser): Promise<{count: number; lastSync: string | null}> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return { count: 0, lastSync: null };
 
     const count = await this.db.posts.where('uploader_id').equals(uploaderId).count();
@@ -143,7 +144,7 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<{maxUploads: number, maxDate: string, firstUploadDate: ?Date, lastUploadDate: ?Date, count1Year: number, maxUploads1Year: number, maxDate1Year: string, maxStreak: number, maxStreakStart: ?string, maxStreakEnd: ?string, activeDays: number}>} Summary stats.
    */
   async getSummaryStats(userInfo: TargetUser): Promise<SummaryStats> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
 
     // efficiently fetch just created_at
@@ -161,8 +162,8 @@ export class AnalyticsDataManager extends DataManager {
 
     let count1Year = 0;
 
-    posts.forEach(p => {
-      const dStr = p.created_at.split('T')[0];
+    posts.forEach((p: ApiItem) => {
+      const dStr = p['created_at'].split('T')[0];
       historyAll[dStr] = (historyAll[dStr] || 0) + 1;
 
       const d = new Date(p.created_at);
@@ -257,7 +258,7 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
    */
   async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | number = 'auto'): Promise<MilestoneEntry[]> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return [];
 
     const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
@@ -322,10 +323,9 @@ export class AnalyticsDataManager extends DataManager {
     // Ensure unique and sort ASC
     targets = [...new Set(targets)].sort((a, b) => a - b);
 
-    const milestones = [];
-    const matches = await this.db.posts
+    const matches: ApiItem[] = await this.db.posts
       .where('no').anyOf(targets)
-      .filter(p => p.uploader_id === uploaderId)
+      .filter((p: ApiItem) => p['uploader_id'] === uploaderId)
       .toArray();
 
     // NEW: Fetch missing thumbnails for Safety logic
@@ -354,8 +354,8 @@ export class AnalyticsDataManager extends DataManager {
           if (res.ok) {
             const fetchedItems = await res.json();
             // Update local matches objects
-            fetchedItems.forEach(item => {
-              const local = matches.find(m => m.id === item.id);
+            fetchedItems.forEach((item: ApiItem) => {
+              const local = matches.find((m: ApiItem) => m['id'] === item['id']);
               if (local) {
                 local.variants = item.variants;
                 local.preview_file_url = item.preview_file_url;
@@ -367,12 +367,12 @@ export class AnalyticsDataManager extends DataManager {
                   variants: item.variants,
                   preview_file_url: item.preview_file_url,
                   rating: item.rating
-                }).catch(e => console.error("Failed to update post", local.id, e));
+                }).catch((e: unknown) => console.error("Failed to update post", local['id'], e));
               }
             });
           }
         }
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn("[Danbooru Grass] Failed to fetch missing milestone thumbnails", e);
       }
     }
@@ -411,16 +411,16 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<!Array<{date: string, count: number, label: string}>>} Array of monthly stats.
    */
   async getMonthlyStats(userInfo: TargetUser, minDate: Date | null = null): Promise<MonthlyStatEntry[]> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return [];
 
     const counts: Record<string, number> = {}; // "2023-01": 5
 
     // Streaming iteration to avoid memory spikes
-    await this.db.posts.where('uploader_id').equals(uploaderId).each(post => {
-      if (!post.created_at) return;
+    await this.db.posts.where('uploader_id').equals(uploaderId).each((post: ApiItem) => {
+      if (!post['created_at']) return;
       // created_at is likely ISO string "2023-01-01T..."
-      const month = post.created_at.substring(0, 7); // "YYYY-MM"
+      const month = post['created_at'].substring(0, 7); // "YYYY-MM"
       counts[month] = (counts[month] || 0) + 1;
     });
 
@@ -506,7 +506,7 @@ export class AnalyticsDataManager extends DataManager {
           count: count,
           label: status.charAt(0).toUpperCase() + status.slice(1)
         };
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(`[Danbooru Grass] Failed to fetch count for status:${status}`, e);
         return { name: status, count: 0, label: status.charAt(0).toUpperCase() + status.slice(1) };
       }
@@ -527,7 +527,7 @@ export class AnalyticsDataManager extends DataManager {
 
     const normalizedName = userInfo.name.replace(/ /g, '_');
     const ratings = ['g', 's', 'q', 'e'];
-    const labelMap = {
+    const labelMap: Record<string, string> = {
       'g': 'General',
       's': 'Sensitive',
       'q': 'Questionable',
@@ -558,7 +558,7 @@ export class AnalyticsDataManager extends DataManager {
           count: count,
           label: labelMap[rating]
         };
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(`[Danbooru Grass] Failed to fetch count for rating:${rating}`, e);
         return { rating, count: 0, label: labelMap[rating] };
       }
@@ -567,7 +567,7 @@ export class AnalyticsDataManager extends DataManager {
     try {
       const results = await Promise.all(tasks);
       return results;
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('[Danbooru Grass] Failed to fetch rating distribution', e);
       return [];
     }
@@ -605,7 +605,7 @@ export class AnalyticsDataManager extends DataManager {
       // Limit to Top 10
       const itemsToProcess = tags.slice(0, 10);
 
-      const top10 = itemsToProcess.map(item => ({
+      const top10 = itemsToProcess.map((item: ApiItem) => ({
         name: item.tag.name.replace(/_/g, ' '),
         tagName: item.tag.name,
         count: 0,
@@ -624,11 +624,11 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (e) { }
+        } catch (_e: unknown) { }
         delete obj._item;
       });
 
-      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const sumFreq = top10.reduce((acc: number, curr: {frequency: number}) => acc + curr.frequency, 0);
       const otherFreq = 1.0 - sumFreq;
 
       if (otherFreq > 0.001) {
@@ -649,7 +649,7 @@ export class AnalyticsDataManager extends DataManager {
 
       return top10;
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Failed to fetch character distribution', e);
       return [];
     }
@@ -710,11 +710,11 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (e) { }
+        } catch (_e: unknown) { }
         delete obj._item;
       });
 
-      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const sumFreq = top10.reduce((acc: number, curr: {frequency: number}) => acc + curr.frequency, 0);
       const otherFreq = 1.0 - sumFreq;
 
       if (otherFreq > 0.001) {
@@ -735,7 +735,7 @@ export class AnalyticsDataManager extends DataManager {
 
       return top10;
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Failed to fetch copyright distribution', e);
       return [];
     }
@@ -799,7 +799,7 @@ export class AnalyticsDataManager extends DataManager {
           const imps = await this.rateLimiter.fetch(impUrl).then(r => r.json());
           if (Array.isArray(imps) && imps.length > 0) return null;
           return item;
-        } catch (e) { return item; }
+        } catch (e: unknown) { return item; }
       });
 
       const filtered = filteredResults.filter(item => item !== null);
@@ -849,13 +849,13 @@ export class AnalyticsDataManager extends DataManager {
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           // console.log(`[Danbooru Grass] Fav Count for ${tagName}: ${c} (URL: ${countUrl})`); // Debug
           obj.count = c;
-        } catch (e) {
+        } catch (e: unknown) {
           console.warn('[Danbooru Grass] Count fetch failed', e);
         }
         delete obj._item;
       });
 
-      const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+      const sumFreq = top10.reduce((acc: number, curr: {frequency: number}) => acc + curr.frequency, 0);
       const otherFreq = 1.0 - sumFreq;
 
       if (otherFreq > 0.001) {
@@ -898,7 +898,7 @@ export class AnalyticsDataManager extends DataManager {
 
       return top10;
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Failed to fetch fav copyright distribution', e);
       return [];
     }
@@ -923,7 +923,7 @@ export class AnalyticsDataManager extends DataManager {
         if (Array.isArray(resp) && resp.length > 0) {
           return resp[0];
         }
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(`[Danbooru Grass] Failed to fetch top post for ${ratingTags}`, e);
       }
       return null;
@@ -955,7 +955,7 @@ export class AnalyticsDataManager extends DataManager {
         if (Array.isArray(resp) && resp.length > 0) {
           return resp[0];
         }
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTags}`, e);
       }
       return null;
@@ -989,7 +989,7 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.id) {
           return resp;
         }
-      } catch (e) {
+      } catch (e: unknown) {
         console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTags}`, e);
       }
       return null;
@@ -1010,7 +1010,7 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<Object|null>}
    */
   async getTopScorePost(userInfo: TargetUser, filterMode: string = 'sfw'): Promise<any | null> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return null;
 
     // Filter Logic for IndexedDB
@@ -1022,14 +1022,14 @@ export class AnalyticsDataManager extends DataManager {
 
     if (filterMode === 'sfw') {
       // 'g' (general) or 's' (sensitive)
-      collection = collection.and(p => p.rating === 'g' || p.rating === 's');
+      collection = collection.and((p: ApiItem) => p['rating'] === 'g' || p['rating'] === 's');
     } else if (filterMode === 'nsfw') {
       // 'q' (questionable) or 'e' (explicit)
-      collection = collection.and(p => p.rating === 'q' || p.rating === 'e');
+      collection = collection.and((p: ApiItem) => p['rating'] === 'q' || p['rating'] === 'e');
     }
 
     // Sort by score DESC
-    const topLocal = await collection.reverse().sortBy('score').then(r => r[0]);
+    const topLocal = await collection.reverse().sortBy('score').then((r: ApiItem[]) => r[0]);
 
     if (!topLocal) return null;
 
@@ -1040,7 +1040,7 @@ export class AnalyticsDataManager extends DataManager {
       if (details && details.id) {
         return details; // Return full API object
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Failed to fetch top post details', e);
     }
 
@@ -1054,21 +1054,21 @@ export class AnalyticsDataManager extends DataManager {
    * @return {Promise<Array<{id: number, d: number, s: number, t: number, r: string}>>}
    */
   async getScatterData(userInfo: TargetUser): Promise<ScatterDataPoint[]> {
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return [];
 
     const result: ScatterDataPoint[] = [];
     // Streaming iterate
-    await this.db.posts.where('uploader_id').equals(uploaderId).each(post => {
-      if (!post.created_at) return;
+    await this.db.posts.where('uploader_id').equals(uploaderId).each((post: ApiItem) => {
+      if (!post['created_at']) return;
       // Use timestamps for faster plotting
-      const d = new Date(post.created_at).getTime();
+      const d = new Date(post['created_at']).getTime();
       // Rating: g, s, q, e
-      const r = post.rating;
-      const s = post.score || 0;
-      const t = post.tag_count_general || 0;
+      const r = post['rating'];
+      const s = post['score'] || 0;
+      const t = post['tag_count_general'] || 0;
 
-      result.push({ id: post.id, d, s, t, r });
+      result.push({ id: post['id'], d, s, t, r });
     });
 
     return result;
@@ -1125,7 +1125,7 @@ export class AnalyticsDataManager extends DataManager {
           rawBody: f.body
         };
       }).filter(item => item.role !== 'Unknown').sort((a, b) => (a.date as any) - (b.date as any));
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('[Danbooru Grass] Failed to fetch promotions', e);
       return [];
     }
@@ -1182,7 +1182,7 @@ export class AnalyticsDataManager extends DataManager {
           count = resp.counts.posts;
         }
         obj.count = count;
-      } catch (e) { }
+      } catch (e: unknown) { }
     });
 
     // Filter out zero counts
@@ -1248,7 +1248,7 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e) { }
+      } catch (e: unknown) { }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
@@ -1312,7 +1312,7 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e) { }
+      } catch (e: unknown) { }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
@@ -1324,7 +1324,7 @@ export class AnalyticsDataManager extends DataManager {
     return filtered;
   }
 
-  async enrichThumbnails(cacheKey: string, uploaderId: number, items: DistributionItem[], userInfo: TargetUser, statusCallback: ((msg: string) => void) | null = null): Promise<void> {
+  async enrichThumbnails(cacheKey: string, uploaderId: number, items: DistributionItem[], userInfo: TargetUser, _statusCallback: ((msg: string) => void) | null = null): Promise<void> {
     let hasUpdates = false;
     const normalizedName = userInfo.name.replace(/ /g, '_');
 
@@ -1392,7 +1392,6 @@ export class AnalyticsDataManager extends DataManager {
    */
   async getTotalPostCount(userInfo: TargetUser): Promise<number> {
     if (!userInfo.name) return 0;
-    let total = 0;
     try {
       // Method A: Exact Search Count (API)
       // Use tags=... order:score rating:x limit=1
@@ -1402,7 +1401,7 @@ export class AnalyticsDataManager extends DataManager {
       if (countData && typeof countData.counts === 'object' && typeof countData.counts.posts === 'number') {
         return countData.counts.posts;
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Counts API failed:', e);
     }
 
@@ -1413,7 +1412,7 @@ export class AnalyticsDataManager extends DataManager {
       if (profile && typeof profile.post_upload_count === 'number') {
         return profile.post_upload_count;
       }
-    } catch (e2) { }
+    } catch (_e2: unknown) { }
 
     // Method C: DOM Fallback
     try {
@@ -1421,9 +1420,9 @@ export class AnalyticsDataManager extends DataManager {
         '#danbooru-grass-wrapper > div:nth-child(1) > table > tbody > tr:nth-child(6) > td > a:nth-child(1)'
       );
       if (statsLink) {
-        return parseInt(statsLink.textContent.replace(/,/g, ''), 10);
+        return parseInt((statsLink.textContent ?? '').replace(/,/g, ''), 10);
       }
-    } catch (e3) { }
+    } catch (_e3: unknown) { }
 
     return 0; // Failed
   }
@@ -1440,7 +1439,7 @@ export class AnalyticsDataManager extends DataManager {
       return;
     }
 
-    const uploaderId = parseInt(userInfo.id);
+    const uploaderId = parseInt(userInfo.id ?? '0');
 
     // Global Sync Lock
     if (AnalyticsDataManager.isGlobalSyncing) {
@@ -1482,12 +1481,11 @@ export class AnalyticsDataManager extends DataManager {
 
         // Find the first post that is OLDER than cutOffDate to determine startId
         let found = false;
-        await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each(p => {
+        await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each((p: ApiItem) => {
           if (found) return;
-          if (new Date(p.created_at) < cutOffDate) {
-            startId = p.id;
+          if (new Date(p['created_at']) < cutOffDate) {
+            startId = p['id'];
             found = true;
-            return false; // Stop iteration
           }
         });
 
@@ -1501,7 +1499,7 @@ export class AnalyticsDataManager extends DataManager {
       if (startId > 0) {
         // Fix: Count ONLY this user's posts below startId
         // Using filter() on the collection because composite index might not exist for (id, uploader_id)
-        currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter(p => p.id <= startId).count();
+        currentNo = await this.db.posts.where('uploader_id').equals(uploaderId).filter((p: ApiItem) => p['id'] <= startId).count();
 
       } else {
 
@@ -1528,12 +1526,7 @@ export class AnalyticsDataManager extends DataManager {
 
 
       // 3. Buffered Parallel Fetching Logic
-      let lastFetchedId = startId;
       const limit = 200; // API Limit
-      // 3 concurrency = 600 items.
-      // User complaint "jerky" likely means 5 threads * 200 = 1000 items is too big a batch.
-      // Draining incrementally with buffer will solve this.
-      const parallel_count = 5;
 
       let pageOffset = 1;
       // 3. Worker Pool Logic (Rolling Window)
@@ -1541,12 +1534,10 @@ export class AnalyticsDataManager extends DataManager {
       const WORKER_DELAY = 400; // 5 workers * 1 req / 0.4s = 12.5 req/s (Max)
 
       // Shared State
-      let activeWorkers = 0;
       let hasMore = true;
-      let completedCount = 0;
 
       // Ordered Commit State
-      const buffer = new Map<number, any[]>(); // page -> items
+      const buffer = new Map<number, ApiItem[]>(); // page -> items
       let nextExpectedPage = 1;
 
       const worker = async (workerId: number) => {
@@ -1571,7 +1562,7 @@ export class AnalyticsDataManager extends DataManager {
             reportProgress(currentNo, total, `Fetching Page ${currentPage} (Pending: ${pending})...`);
 
             // Retry Logic
-            let items = null;
+            let items: ApiItem[] | null = null;
             let attempts = 0;
             while (attempts < 3) {
               try {
@@ -1583,10 +1574,11 @@ export class AnalyticsDataManager extends DataManager {
                 if (!fetchResp.ok) throw new Error(`HTTP ${fetchResp.status}`);
                 items = await fetchResp.json();
                 break; // Success
-              } catch (err) {
+              } catch (err: unknown) {
                 attempts++;
-                const isServerErr = err.message.includes('500') || err.message.includes('502') || err.message.includes('503') || err.message.includes('504');
-                console.warn(`[Worker ${workerId}] Page ${currentPage} attempt ${attempts} failed: ${err.message}`);
+                const errMsg = err instanceof Error ? err.message : String(err);
+                const isServerErr = errMsg.includes('500') || errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('504');
+                console.warn(`[Worker ${workerId}] Page ${currentPage} attempt ${attempts} failed: ${errMsg}`);
 
                 if (attempts >= 3 || !isServerErr) throw err; // Give up or fatal error
 
@@ -1595,7 +1587,7 @@ export class AnalyticsDataManager extends DataManager {
               }
             }
 
-            if (items.length === 0) {
+            if (!items || items.length === 0) {
               hasMore = false; // Signal end
               return;
             }
@@ -1608,7 +1600,7 @@ export class AnalyticsDataManager extends DataManager {
               const batchItems = buffer.get(nextExpectedPage);
               buffer.delete(nextExpectedPage); // Remove from buffer
 
-              if (batchItems.length > 0) {
+              if (batchItems && batchItems.length > 0) {
                 // Assign Sequential Numbers
                 const bulkData = batchItems.map((p) => ({
                   id: p.id,
@@ -1632,7 +1624,7 @@ export class AnalyticsDataManager extends DataManager {
               nextExpectedPage++;
             }
 
-          } catch (e) {
+          } catch (e: unknown) {
             console.error(`[Worker ${workerId}] Page ${currentPage} failed`, e);
             hasMore = false;
           }
@@ -1716,7 +1708,7 @@ export class AnalyticsDataManager extends DataManager {
       }
 
       // Server bubble data cleanup removed
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Cleanup failed', e);
     }
   }
@@ -1774,7 +1766,7 @@ export class AnalyticsDataManager extends DataManager {
         ] : [])
       ]);
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Analytics] Failed to refresh stats', e);
     }
   }
@@ -1786,7 +1778,7 @@ export class AnalyticsDataManager extends DataManager {
    */
   async clearUserData(userInfo: TargetUser): Promise<void> {
     if (!userInfo.id) return;
-    const uploaderId = parseInt(userInfo.id); // For tables using Integers (API direct)
+    const uploaderId = parseInt(userInfo.id ?? '0'); // For tables using Integers (API direct)
     // const userIdStr = String(userInfo.id); // Not used anymore for Analytics clean
 
 
