@@ -100,12 +100,16 @@ export class RateLimitedFetch {
 
     this.isProcessingReport = true;
     const task = this.reportQueue.shift();
+    if (!task) {
+      this.isProcessingReport = false;
+      return;
+    }
     this.requestCounter++;
 
     try {
       const response = await fetch(task.url, task.options);
       task.resolve(response);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e);
       task.reject(e);
     } finally {
@@ -121,12 +125,16 @@ export class RateLimitedFetch {
 
     this.isProcessingReposts = true;
     const task = this.repostQueue.shift();
+    if (!task) {
+      this.isProcessingReposts = false;
+      return;
+    }
     this.requestCounter++;
 
     try {
       const response = await fetch(task.url, task.options);
       task.resolve(response);
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(`[RateLimitedFetch] Repost Failed: ${task.url}`, e);
       task.reject(e);
     } finally {
@@ -157,6 +165,10 @@ export class RateLimitedFetch {
     this.requestCounter++;
 
     const task = this.queue.shift();
+    if (!task) {
+      this.activeWorkers--;
+      return;
+    }
 
     // Staggered Start Delay (minimal now, rely on token bucket for rate)
     // Keep small jitter to avoid bursty browser network thread locking?
@@ -170,7 +182,7 @@ export class RateLimitedFetch {
     try {
       const response = await fetch(task.url, task.options);
       task.resolve(response);
-    } catch (e) {
+    } catch (e: unknown) {
       task.reject(e);
     } finally {
       this.activeWorkers--;

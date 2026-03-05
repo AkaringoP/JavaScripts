@@ -31,15 +31,17 @@ export class GrassApp {
    * Handles UI injection, data loading, and interactive rendering.
    * @return {Promise<void>} Resolves when the initial render is complete.
    */
-  async run() {
+  async run(): Promise<void> {
 
     const context = this.context;
+    const targetUser = context.targetUser;
+    if (!targetUser) return;
 
     const dataManager = new DataManager(this.db);
     // We pass the Shared Settings instance to GraphRenderer
     const renderer = new GraphRenderer(this.settings, this.db);
 
-    const userId = context.targetUser.id || context.targetUser.name;
+    const userId = targetUser.id || targetUser.name;
     const injected = await renderer.injectSkeleton(dataManager, userId);
     if (!injected) {
       return;
@@ -48,8 +50,8 @@ export class GrassApp {
     let currentYear = new Date().getFullYear();
     let currentMetric: Metric = (this.settings.getLastMode(userId) || 'uploads') as Metric;
 
-    const joinYear = context.targetUser.joinDate.getFullYear();
-    const years = [];
+    const joinYear = targetUser.joinDate.getFullYear();
+    const years: number[] = [];
     const startYear = Math.max(joinYear, 2005);
     for (let y = currentYear; y >= startYear; y--) years.push(y);
 
@@ -58,7 +60,7 @@ export class GrassApp {
 
       // Filter years for Approvals based on promotion date (UI Only)
       if (currentMetric === 'approvals') {
-        const promoDate = await dataManager.fetchPromotionDate(context.targetUser.name);
+        const promoDate = await dataManager.fetchPromotionDate(targetUser.name);
         if (promoDate) {
           const promoYear = parseInt(promoDate.slice(0, 4), 10);
           availableYears = availableYears.filter(y => y >= promoYear);
@@ -84,12 +86,12 @@ export class GrassApp {
           {},
           currentYear,
           currentMetric,
-          context.targetUser,
+          targetUser,
           availableYears,
           onYearChange,
           async () => {
             renderer.setLoading(true);
-            await dataManager.clearCache(currentMetric, context.targetUser);
+            await dataManager.clearCache(currentMetric, targetUser);
             updateView();
           }
         );
@@ -108,7 +110,7 @@ export class GrassApp {
           /* onRefresh */
           async () => {
             renderer.setLoading(true);
-            await dataManager.clearCache(currentMetric, context.targetUser);
+            await dataManager.clearCache(currentMetric, targetUser);
             updateView();
           },
         );
@@ -119,7 +121,7 @@ export class GrassApp {
 
         const data = await dataManager.getMetricData(
           currentMetric,
-          context.targetUser,
+          targetUser,
           currentYear,
           onProgress
         );
@@ -128,20 +130,19 @@ export class GrassApp {
           data,
           currentYear,
           currentMetric,
-          context.targetUser,
+          targetUser,
           availableYears,
           onYearChange,
           async () => {
             renderer.setLoading(true);
-            await dataManager.clearCache(currentMetric, context.targetUser);
+            await dataManager.clearCache(currentMetric, targetUser);
             updateView();
           }
         );
-      } catch (e) {
+      } catch (e: unknown) {
         console.error(e);
-        renderer.renderError(e.message || 'Unknown error occurred', () =>
-          updateView()
-        );
+        const message = e instanceof Error ? e.message : 'Unknown error occurred';
+        renderer.renderError(message, () => updateView());
       } finally {
         renderer.setLoading(false);
       }
