@@ -2,18 +2,50 @@ import {CONFIG} from '../config';
 import {RateLimitedFetch} from './rate-limiter';
 import type {Metric, MetricData, TargetUser, GrassSettings} from '../types';
 
+/** A daily count entry stored in IndexedDB. */
+interface DailyEntry {
+  id: string;
+  userId: string;
+  date: string;
+  count: number;
+}
+
+/** An approval detail entry stored in IndexedDB. */
+interface ApprovalDetailEntry {
+  id: string;
+  userId: string;
+  post_list: number[];
+}
+
+/** An hourly stats entry stored in IndexedDB. */
+interface HourlyStatEntry {
+  id: string;
+  userId: string;
+  metric: Metric;
+  year: number;
+  hour: number;
+  count: number;
+}
+
+/** A raw API item with dynamic shape from Danbooru endpoints. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ApiItem = Record<string, any>;
+
 /**
  * Handles API requests and caching via Dexie.js.
  */
 export class DataManager {
   baseUrl: string;
-  db: any; // Typed in Phase 3 (database.ts)
+  // Dexie instance typed as any: dynamic schema accessed via table names at runtime
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: any;
   rateLimiter: RateLimitedFetch;
 
   /**
    * Initializes the DataManager.
    * @param {Database} db The Dexie database instance.
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   constructor(db: any, rateLimiter: RateLimitedFetch | null = null) {
     this.baseUrl = window.location.origin;
     this.db = db;
@@ -36,7 +68,7 @@ export class DataManager {
         return record.data;
       }
       return null;
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to load stats cache', e);
       return null;
     }
@@ -57,7 +89,7 @@ export class DataManager {
         data,
         updated_at: new Date().toISOString()
       });
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to save stats cache', e);
     }
   }
@@ -71,7 +103,7 @@ export class DataManager {
     if (!userId) return null;
     try {
       return await this.db.grass_settings.get(userId.toString());
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to load grass settings', e);
       return null;
     }
@@ -91,7 +123,7 @@ export class DataManager {
         ...settings,
         updated_at: new Date().toISOString()
       });
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to save grass settings', e);
     }
   }
@@ -108,7 +140,7 @@ export class DataManager {
     try {
       const record = await this.db.completed_years.get(id);
       return !!record;
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to check completion status', e);
       return false;
     }
@@ -130,7 +162,7 @@ export class DataManager {
         timestamp: Date.now()
       });
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to mark year complete', e);
     }
   }
@@ -148,22 +180,21 @@ export class DataManager {
   async getMetricData(metric: Metric, userInfo: TargetUser, year: number, onProgress: ((count: number) => void) | null = null): Promise<MetricData> {
     try {
       // Determine fetch configuration
-      let endpoint;
-      let params;
-      let storeName;
-      let dateKey;
-      let idKey;
+      let endpoint = '';
+      let storeName = '';
+      let dateKey = 'created_at';
+      let idKey = '';
       const startDate = `${year}-01-01`;
       const endDate = `${year + 1}-01-01`;
 
-      // Params common to all
-      const baseParams = {
+      // Params common to all; typed as Record for dynamic key assignment
+      const params: Record<string, unknown> = {
         limit: 200,
       };
 
       const normalizedName = (userInfo.name || '').replace(/ /g, '_');
       // Hourly Stats: Initialize empty
-      let hourlyCounts = new Array(24).fill(0);
+      let hourlyCounts = new Array<number>(24).fill(0);
 
       switch (metric) {
         case 'uploads':
@@ -171,21 +202,15 @@ export class DataManager {
           storeName = 'uploads';
           dateKey = 'created_at';
           idKey = 'uploader_id';
-          params = {
-            ...baseParams,
-            only: 'uploader_id,created_at',
-          };
+          params['only'] = 'uploader_id,created_at';
           break;
         case 'approvals':
           endpoint = '/post_approvals.json';
           storeName = 'approvals';
           dateKey = 'created_at';
           idKey = 'user_id';
-          params = {
-            ...baseParams,
-            'search[user_id]': userInfo.id,
-            only: 'id,post_id,created_at',
-          };
+          params['search[user_id]'] = userInfo.id;
+          params['only'] = 'id,post_id,created_at';
           break;
         case 'notes':
           if (!userInfo.id) throw new Error('User ID required for Notes');
@@ -193,11 +218,8 @@ export class DataManager {
           storeName = 'notes';
           dateKey = 'created_at';
           idKey = 'updater_id';
-          params = {
-            ...baseParams,
-            'search[updater_id]': userInfo.id,
-            only: 'updater_id,created_at',
-          };
+          params['search[updater_id]'] = userInfo.id;
+          params['only'] = 'updater_id,created_at';
           break;
         default:
           return {} as MetricData;
@@ -232,7 +254,7 @@ export class DataManager {
           // Align Local check to match Remote (wide) range
           const matchedEndDate = `${year}-12-31`;
 
-          const localRecords = await table.where('id')
+          const localRecords: ApiItem[] = await table.where('id')
             .between(
               `${userIdVal}_${startDate}`,
               `${userIdVal}_${matchedEndDate}\uffff`,
@@ -241,7 +263,7 @@ export class DataManager {
             )
             .toArray(); // Get actual records to sum counts
 
-          const localCount = localRecords.reduce((acc, cur) => acc + (cur.count || 0), 0);
+          const localCount = localRecords.reduce((acc: number, cur: ApiItem) => acc + (cur['count'] || 0), 0);
 
           // C. Compare (Strict)
           if (remoteCount !== localCount) {
@@ -265,7 +287,7 @@ export class DataManager {
           } else {
             // Data is good using 'lastEntry' Logic below
           }
-        } catch (e) {
+        } catch (e: unknown) {
           console.warn('[Danbooru Grass] Integrity check failed (Network/API), proceeding with cache.', e);
         }
       }
@@ -276,8 +298,8 @@ export class DataManager {
       let fetchFromDate = null; // Default to null (Fetch ALL if no cache)
 
       // Query range for this specific year to see where we left off
-      let lastEntry = null;
-      let existingHourlyStats = []; // Store existing hourly stats for delta merging
+      let lastEntry: ApiItem | null = null;
+      let existingHourlyStats: Array<{hour: number; count: number}> = []; // Store existing hourly stats for delta merging
 
       if (!forceFullFetch && !isYearCompleteCache) {
         lastEntry = await table.where('id')
@@ -307,7 +329,7 @@ export class DataManager {
       if (lastEntry) {
 
 
-        const lastDate = new Date(lastEntry.date);
+        const lastDate = new Date(lastEntry['date']);
         const currentYear = new Date().getFullYear();
 
         // Check if this is a past year and we effectively have data up to the end
@@ -330,8 +352,6 @@ export class DataManager {
       }
 
       // Optimization: If cached up to Dec 31st of that year, and year is past, skip fetch.
-      const todayStr = new Date().toISOString().slice(0, 10);
-
       // Optimization Heuristic REMOVED.
       // Reason: It causes false positives when boundary data from the NEXT year (e.g., Jan 1st) exists.
       // We strictly rely on 'isYearCompleteCache' now.
@@ -344,7 +364,7 @@ export class DataManager {
       {
         // Set API Params & Fetch Strategy
         let stopDate = null;
-        let fetchDirection = 'desc';
+        const fetchDirection = 'desc';
 
         // hourlyCounts is already defined above
 
@@ -354,7 +374,7 @@ export class DataManager {
         const fetchRange = `${rangeStart}...${endDate}`;
 
         if (metric === 'uploads') {
-          params.tags = `user:${normalizedName} date:${fetchRange}`;
+          params['tags'] = `user:${normalizedName} date:${fetchRange}`;
         } else if (metric === 'notes') {
           params['search[created_at]'] = fetchRange;
         } else if (metric === 'approvals') {
@@ -373,9 +393,9 @@ export class DataManager {
 
 
           // 3. Aggregate
-          const dailyCounts = {};
+          const dailyCounts: Record<string, {count: number; postList: number[]}> = {};
 
-          items.forEach((item) => {
+          items.forEach((item: ApiItem) => {
             const rawDate = item[dateKey] || item['created_at'];
             if (!rawDate) return;
 
@@ -389,13 +409,13 @@ export class DataManager {
               return;
             }
 
-            const dateStr = rawDate.slice(0, 10);
+            const dateStr = String(rawDate).slice(0, 10);
             if (!dailyCounts[dateStr]) {
               dailyCounts[dateStr] = { count: 0, postList: [] };
             }
             dailyCounts[dateStr].count += 1;
-            if (item.post_id) {
-              dailyCounts[dateStr].postList.push(item.post_id);
+            if (item['post_id']) {
+              dailyCounts[dateStr].postList.push(item['post_id']);
             }
 
             // Hourly Aggregation
@@ -405,7 +425,7 @@ export class DataManager {
             // adding counts from the overlapped buffer period would double-count them.
             // Note: This effectively freezes the hourly distribution for the 'lastEntry' day (today)
             // until the next day, but this is preferable to corrupting the data with duplication.
-            const isNewData = !lastEntry || rawDate.slice(0, 10) > lastEntry.date;
+            const isNewData = !lastEntry || String(rawDate).slice(0, 10) > lastEntry['date'];
 
             const itemDate = new Date(rawDate);
             const hour = itemDate.getHours();
@@ -415,8 +435,8 @@ export class DataManager {
           });
 
           // 4. Upsert into DB
-          const bulkData = [];
-          const detailData = [];
+          const bulkData: DailyEntry[] = [];
+          const detailData: ApprovalDetailEntry[] = [];
 
           Object.entries(dailyCounts).forEach(([date, entry]) => {
             const id = `${userIdVal}_${date}`;
@@ -424,14 +444,14 @@ export class DataManager {
               id,
               userId: userIdVal,
               date,
-              count: (entry as any).count,
+              count: entry.count,
             });
 
             if (metric === 'approvals') {
               detailData.push({
                 id,
                 userId: userIdVal,
-                post_list: (entry as any).postList,
+                post_list: entry.postList,
               });
             }
           });
@@ -445,7 +465,7 @@ export class DataManager {
 
           // [Fix] Hourly Stats are already initialized from DB (lines 813) and incremented with new data (lines 933).
           // We just need to save the current state of 'hourlyCounts' to the DB.
-          const hourlyBulk = [];
+          const hourlyBulk: HourlyStatEntry[] = [];
           hourlyCounts.forEach((count, h) => {
             hourlyBulk.push({
               id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, '0')}`,
@@ -469,7 +489,7 @@ export class DataManager {
 
       // 5. Return Full Year Data from Cache
       const dataEndDate = `${year}-12-31`; // Strictly return data only for this year
-      const fullYearData = await table.where('id')
+      const fullYearData: DailyEntry[] = await table.where('id')
         .between(
           `${userIdVal}_${startDate}`,
           `${userIdVal}_${dataEndDate}\uffff`,
@@ -478,7 +498,7 @@ export class DataManager {
         )
         .toArray();
 
-      const resultMap = {};
+      const resultMap: Record<string, number> = {};
       fullYearData.forEach((i) => resultMap[i.date] = i.count);
 
       // If cached complete, we need to load hourly stats from DB as we skipped the fetch block
@@ -486,12 +506,12 @@ export class DataManager {
       // CHECK: If isYearCompleteCache is true, we must load.
       // If we fetched data (else block), hourlyCounts is already populated.
       if (isYearCompleteCache) {
-        const cachedHourly = await this.db.hourly_stats.where('id')
+        const cachedHourly: Array<{hour: number; count: number}> = await this.db.hourly_stats.where('id')
           .between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false)
           .toArray();
 
         // Reset and fill
-        hourlyCounts.fill(0);
+        hourlyCounts = new Array<number>(24).fill(0);
         cachedHourly.forEach(stat => {
           if (stat.hour >= 0 && stat.hour < 24) {
             hourlyCounts[stat.hour] = stat.count;
@@ -501,7 +521,7 @@ export class DataManager {
 
       return {daily: resultMap, hourly: hourlyCounts};
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('[Danbooru Grass] Data fetch failed:', e);
       throw e; // Propagate error to UI
     }
@@ -509,11 +529,11 @@ export class DataManager {
 
   /**
    * Clears the cache for a specific metric and user.
-   * @param {Metric} metric 'uploads', 'approvals', or 'notes'.
+   * @param {Metric} _metric 'uploads', 'approvals', or 'notes'.
    * @param {TargetUser} userInfo User info object.
    * @return {Promise<boolean>} True if successful.
    */
-  async clearCache(metric: Metric, userInfo: TargetUser): Promise<boolean> {
+  async clearCache(_metric: Metric, userInfo: TargetUser): Promise<boolean> {
     try {
       const userIdVal = userInfo.id || userInfo.name;
       const tablesToClear = ['uploads', 'approvals', 'approvals_detail', 'notes', 'completed_years', 'hourly_stats'];
@@ -531,7 +551,7 @@ export class DataManager {
       }
 
       return true;
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('[Danbooru Grass] Clear cache failed:', e);
       return false;
     }
@@ -542,15 +562,15 @@ export class DataManager {
    * Fetches pages from an API endpoint until a stop condition is met.
    * Handles pagination and batching automatically.
    * @param {string} endpoint The API endpoint (e.g., '/posts.json').
-   * @param {Record<string, any>} params Query parameters for the API.
+   * @param {Record<string, unknown>} params Query parameters for the API.
    * @param {string|null} [stopDate=null] ISO Date string (YYYY-MM-DD). If encountered, stops fetching.
    * @param {string} [dateKey='created_at'] Key to check date against.
    * @param {string} [direction='desc'] Fetch direction ('desc' or 'asc').
    * @param {Function|null} [onProgress=null] Optional callback for reporting fetch progress (count).
-   * @return {Promise<any[]>} List of all fetched items up to the stop condition.
+   * @return {Promise<ApiItem[]>} List of all fetched items up to the stop condition.
    */
-  async fetchAllPages(endpoint: string, params: Record<string, any>, stopDate: string | null = null, dateKey = 'created_at', direction = 'desc', onProgress: ((count: number) => void) | null = null): Promise<any[]> {
-    let allItems = [];
+  async fetchAllPages(endpoint: string, params: Record<string, unknown>, stopDate: string | null = null, dateKey = 'created_at', direction = 'desc', onProgress: ((count: number) => void) | null = null): Promise<ApiItem[]> {
+    let allItems: ApiItem[] = [];
     let page = 1;
 
     // [Modified] Dynamic Batch Size for Approvals
@@ -559,19 +579,21 @@ export class DataManager {
     const DELAY_BETWEEN_BATCHES = 150;
 
     while (true) {
-      const promises = [];
+      const promises: Array<Promise<{page: number; data: ApiItem[]}>> = [];
 
       // 1. Prepare Batch Requests
       for (let i = 0; i < BATCH_SIZE; i++) {
         const currentPage = page + i;
+        // URLSearchParams requires string values; params contains mixed types at runtime
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const q = new URLSearchParams({
           ...params,
           page: currentPage
-        } as any);
+        } as unknown as Record<string, string>);
         const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
 
         // [New] Fetch Task with Limit, Random Delay & Retry for Approvals
-        const fetchTask = async () => {
+        const fetchTask = async (): Promise<{page: number; data: ApiItem[]}> => {
           // 1. Random Start Delay (Approvals Only)
           if (isApprovals) {
             const delay = Math.floor(Math.random() * 300) + 200; // 200~500ms
@@ -608,7 +630,7 @@ export class DataManager {
         };
 
         promises.push(
-          fetchTask().catch((e) => {
+          fetchTask().catch((e: unknown) => {
             console.error(`[Danbooru Grass] Critical Error on Page ${currentPage}:`, e);
             throw e; // Fail fast to prevent data corruption
           })
@@ -662,7 +684,7 @@ export class DataManager {
           onProgress(allItems.length);
         }
 
-        if (json.length < params.limit) {
+        if (json.length < (params['limit'] as number)) {
           finished = true;
         }
       }
@@ -693,13 +715,13 @@ export class DataManager {
 
       const resp = await fetch(url);
       if (!resp.ok) return null;
-      const json = await resp.json();
+      const json: ApiItem[] = await resp.json();
 
       if (Array.isArray(json) && json.length > 0) {
-        return json[0].created_at ? json[0].created_at.slice(0, 10) : null;
+        return json[0]['created_at'] ? String(json[0]['created_at']).slice(0, 10) : null;
       }
       return null; // Not found (maybe invited differently or too old)
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to fetch promotion date', e);
       return null;
     }
@@ -733,6 +755,8 @@ export class DataManager {
       }
       // Approximate size: navigator.storage (Origin total)
       if (navigator.storage && navigator.storage.estimate) {
+        // StorageEstimate.usageDetails is non-standard; cast to access it
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const est = await navigator.storage.estimate() as any;
         if (est.usageDetails && est.usageDetails.indexedDB) {
           stats.indexedDB.size = est.usageDetails.indexedDB;
@@ -740,7 +764,7 @@ export class DataManager {
           stats.indexedDB.size = est.usage; // Fallback to total origin usage
         }
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('Failed to get IDB stats', e);
     }
 
@@ -749,7 +773,7 @@ export class DataManager {
     let lsSize = 0;
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k.startsWith(CONFIG.STORAGE_PREFIX)) {
+      if (k && k.startsWith(CONFIG.STORAGE_PREFIX)) {
         lsCount++;
         const val = localStorage.getItem(k);
         if (val) lsSize += (k.length + val.length) * 2;
@@ -770,9 +794,9 @@ export class DataManager {
     const url = `${this.baseUrl}/counts/posts.json?tags=${encodeURIComponent(tags)}`;
     const resp = await this.rateLimiter.fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const json = await resp.json();
-    return json.counts && typeof json.counts.posts === 'number'
-      ? json.counts.posts
+    const json: ApiItem = await resp.json();
+    return json['counts'] && typeof json['counts']['posts'] === 'number'
+      ? json['counts']['posts']
       : 0;
   }
 
