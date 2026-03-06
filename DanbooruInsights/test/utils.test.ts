@@ -10,7 +10,8 @@ describe('isTopLevelTag', () => {
     const mockRateLimiter = {
       fetch: vi.fn().mockResolvedValue({json: async () => []}),
     };
-    const result = await isTopLevelTag(mockRateLimiter, 'original');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await isTopLevelTag(mockRateLimiter as any, 'original');
     expect(result).toBe(true);
   });
 
@@ -20,7 +21,8 @@ describe('isTopLevelTag', () => {
         json: async () => [{status: 'active', consequent_name: 'parent_tag'}],
       }),
     };
-    const result = await isTopLevelTag(mockRateLimiter, 'child_tag');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await isTopLevelTag(mockRateLimiter as any, 'child_tag');
     expect(result).toBe(false);
   });
 
@@ -28,7 +30,8 @@ describe('isTopLevelTag', () => {
     const mockRateLimiter = {
       fetch: vi.fn().mockRejectedValue(new Error('Network error')),
     };
-    const result = await isTopLevelTag(mockRateLimiter, 'some_tag');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await isTopLevelTag(mockRateLimiter as any, 'some_tag');
     expect(result).toBe(true);
   });
 
@@ -36,7 +39,8 @@ describe('isTopLevelTag', () => {
     const mockRateLimiter = {
       fetch: vi.fn().mockResolvedValue({json: async () => []}),
     };
-    await isTopLevelTag(mockRateLimiter, 'tag with spaces');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await isTopLevelTag(mockRateLimiter as any, 'tag with spaces');
     expect(mockRateLimiter.fetch).toHaveBeenCalledWith(
       expect.stringContaining('tag%20with%20spaces')
     );
@@ -46,7 +50,8 @@ describe('isTopLevelTag', () => {
     const mockRateLimiter = {
       fetch: vi.fn().mockResolvedValue({json: async () => []}),
     };
-    await isTopLevelTag(mockRateLimiter, 'original');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await isTopLevelTag(mockRateLimiter as any, 'original');
     expect(mockRateLimiter.fetch).toHaveBeenCalledWith(
       expect.stringContaining('/tag_implications.json')
     );
