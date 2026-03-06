@@ -164,6 +164,19 @@ export class TagAnalyticsApp {
    */
   async run(): Promise<void> {
     if (!this.tagName) return;
+
+    // Early validation: check if this is a real tag with a valid category.
+    // Wiki pages like "help:home" are not Danbooru tags and should be silently ignored.
+    try {
+      const tagData = await this.fetchTagData(this.tagName);
+      const validCategories = [1, 3, 4]; // 1=Artist, 3=Copyright, 4=Character
+      if (!tagData || !validCategories.includes(tagData.category)) {
+        return;
+      }
+    } catch (e) {
+      return; // On network error, silently skip
+    }
+
     // Only inject the button in idle state — no data fetching until user clicks
     this.injectAnalyticsButton(null);
 
