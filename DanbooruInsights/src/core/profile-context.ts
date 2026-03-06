@@ -13,7 +13,7 @@ export class ProfileContext {
   constructor() {
     try {
       this.targetUser = this.getTargetUserInfo();
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('[Danbooru Grass] Context Init Failed:', e);
       this.targetUser = null;
     }
@@ -39,7 +39,7 @@ export class ProfileContext {
 
       if (!name) {
         const h1 = document.querySelector('h1');
-        if (h1) name = h1.textContent.trim().replace(/^User: /, '');
+        if (h1) name = h1.textContent?.trim().replace(/^User: /, '') ?? null;
       }
 
       // --- 2. Extract ID ---
@@ -64,7 +64,7 @@ export class ProfileContext {
           'a[href^="/users/"][href$="/edit"]'
         );
         if (editLink) {
-          const m = editLink.getAttribute('href').match(/\/users\/(\d+)\/edit/);
+          const m = editLink.getAttribute('href')?.match(/\/users\/(\d+)\/edit/);
           if (m) id = m[1];
         }
       }
@@ -73,8 +73,8 @@ export class ProfileContext {
       if (!id && name) {
         const userLinks = Array.from(document.querySelectorAll('a[href^="/users/"]'));
         for (const link of userLinks) {
-          const m = link.getAttribute('href').match(/\/users\/(\d+)(?:\?|$)/);
-          if (m && link.textContent.trim() === name) {
+          const m = link.getAttribute('href')?.match(/\/users\/(\d+)(?:\?|$)/);
+          if (m && link.textContent?.trim() === name) {
             id = m[1];
             break;
           }
@@ -83,27 +83,27 @@ export class ProfileContext {
 
       // --- 3. Extract Join Date ---
       const cells = Array.from(document.querySelectorAll('th, td'));
-      const joinHeader = cells.find((el) => el.textContent.trim() === 'Join Date');
+      const joinHeader = cells.find((el) => el.textContent?.trim() === 'Join Date');
 
       if (joinHeader) {
         const valEl = joinHeader.nextElementSibling;
         if (valEl) {
           const timeEl = valEl.querySelector('time');
           if (timeEl) {
-            joinDate = timeEl.getAttribute('datetime') || timeEl.textContent.trim();
+            joinDate = timeEl.getAttribute('datetime') || timeEl.textContent?.trim() || joinDate;
           } else {
-            joinDate = valEl.textContent.trim();
+            joinDate = valEl.textContent?.trim() || joinDate;
           }
         }
       }
 
       // --- 4. Extract Level ---
       let level_string = null;
-      const levelHeader = cells.find((el) => el.textContent.trim() === 'Level');
+      const levelHeader = cells.find((el) => el.textContent?.trim() === 'Level');
       if (levelHeader) {
         const valEl = levelHeader.nextElementSibling;
         if (valEl) {
-          level_string = valEl.textContent.trim();
+          level_string = valEl.textContent?.trim() ?? null;
         }
       }
 
@@ -121,7 +121,7 @@ export class ProfileContext {
         level_string
       };
 
-    } catch (e) {
+    } catch (e: unknown) {
       console.warn('[Danbooru Grass] Extraction error:', e);
       return null;
     }

@@ -70,7 +70,7 @@ export class GraphRenderer {
         wrapper.style.gap = '20px';
         wrapper.style.flexWrap = 'wrap';
         wrapper.style.width = '100%';
-        stats.parentNode.insertBefore(wrapper, stats);
+        stats.parentNode?.insertBefore(wrapper, stats);
         wrapper.appendChild(stats);
       }
     }
@@ -107,7 +107,7 @@ export class GraphRenderer {
         container.style.width = `${clampedWidth}px`;
 
         // Also clamp X to ensure it doesn't overflow right
-        const clampedX = Math.max(0, Math.min(savedX, maxAvailableWidth - clampedWidth));
+        const clampedX = Math.max(0, Math.min(savedX ?? 0, maxAvailableWidth - clampedWidth));
         container.style.transform = `translateX(${clampedX}px)`;
       } else {
         container.style.flex = '1';
@@ -277,7 +277,7 @@ export class GraphRenderer {
    * @param {function(string)} onMetricChange Callback invoked when the metric changes.
    * @param {function()} onRefresh Callback invoked to refresh data.
    */
-  updateControls(availableYears: number[], currentYear: number, currentMetric: string, onYearChange: (year: number) => void, onMetricChange: (metric: string) => void, onRefresh: () => void): void {
+  updateControls(_availableYears: number[], _currentYear: number, currentMetric: string, _onYearChange: (year: number) => void, onMetricChange: (metric: string) => void, _onRefresh: () => void): void {
     const controls = document.getElementById('grass-controls');
     if (!controls) return;
     controls.innerHTML = '';
@@ -444,7 +444,7 @@ export class GraphRenderer {
       cell.removeAttribute('title');
 
       // Add custom tooltip events
-      (cell as HTMLElement).onmouseenter = (e) => {
+      (cell as HTMLElement).onmouseenter = (_e) => {
         const tooltip = document.getElementById('danbooru-grass-tooltip');
         if (!tooltip) return;
 
@@ -474,7 +474,7 @@ export class GraphRenderer {
       const step = max / 5;
       const rects = legend.querySelectorAll('.legend-rect');
       rects.forEach(r => {
-        const l = parseInt(r.getAttribute('data-level'));
+        const l = parseInt(r.getAttribute('data-level') ?? '0');
         let minRange, maxRange;
 
         if (l === 0) {
@@ -491,7 +491,7 @@ export class GraphRenderer {
         r.removeAttribute('title');
 
         // Add custom dark tooltip
-        (r as HTMLElement).onmouseenter = (e) => {
+        (r as HTMLElement).onmouseenter = (_e) => {
           const tooltip = document.getElementById('danbooru-grass-tooltip');
           if (!tooltip) return;
 
@@ -628,7 +628,7 @@ export class GraphRenderer {
     const sanitizedName = (userInfo as any).normalizedName || (userName as string).replace(/ /g, '_');
     const userIdVal = (userInfo as any).id || (userInfo as any).name;
 
-    const getUrl = (date: string, count: number): string | null => {
+    const getUrl = (date: string, _count: number): string | null => {
       if (!date) return null;
 
       switch (metric) {
@@ -962,6 +962,7 @@ export class GraphRenderer {
 
     // 3. Footer (Settings & Legend)
     const mainContainer = document.getElementById('danbooru-grass-container');
+    if (!mainContainer) return;
     if (!document.getElementById('danbooru-grass-footer')) {
       const footer = document.createElement('div');
       footer.id = 'danbooru-grass-footer';
@@ -1132,7 +1133,7 @@ export class GraphRenderer {
           columnWrapper.appendChild(panel);
         } else {
           // Fallback (shouldn't happen if wrapper logic works)
-          mainContainer.parentNode.appendChild(panel);
+          mainContainer.parentNode?.appendChild(panel);
         }
       }
 
@@ -1331,7 +1332,7 @@ export class GraphRenderer {
       };
 
       let isStatsVisible = false;
-      let statsInterval = null;
+      let statsInterval: ReturnType<typeof setInterval> | null = null;
 
       const updateMyStats = async (): Promise<void> => {
         const dataManager = new DataManager(this.db);
@@ -1384,7 +1385,7 @@ export class GraphRenderer {
               updateMyStats();
             } else {
               // Safety clear
-              clearInterval(statsInterval);
+              if (statsInterval) clearInterval(statsInterval);
             }
           }, 100);
         }
@@ -1559,7 +1560,7 @@ export class GraphRenderer {
               const datum = d || d3.select(this).datum();
               if (!datum || !(datum as CalHeatmapDatum).t) return;
 
-              const count = ((datum as CalHeatmapDatum).v !== null && (datum as CalHeatmapDatum).v !== undefined) ? (datum as CalHeatmapDatum).v : 0;
+              const count = ((datum as CalHeatmapDatum).v ?? 0);
               const dateStr = new Date((datum as CalHeatmapDatum).t).toISOString().split('T')[0];
 
               updateTooltip(event, `<strong>${dateStr}</strong>, ${count} ${metric}`);
@@ -1571,7 +1572,7 @@ export class GraphRenderer {
                 return;
               }
 
-              const count = ((datum as CalHeatmapDatum).v !== null && (datum as CalHeatmapDatum).v !== undefined) ? (datum as CalHeatmapDatum).v : 0;
+              const count = ((datum as CalHeatmapDatum).v ?? 0);
               const dateStr = new Date((datum as CalHeatmapDatum).t).toISOString().split('T')[0];
 
               if (metric === 'approvals' && count > 0) {
@@ -1596,7 +1597,7 @@ export class GraphRenderer {
           // Select the 6 manual colored divs in the legend
           const legendDivs = d3.selectAll('#danbooru-grass-legend > div');
 
-          legendDivs.each(function (d, i) {
+          legendDivs.each(function (_d, i) {
             if (i >= 0 && i < legendThresholds.length) {
               d3.select(this)
                 .on('mouseover', function (event) {
@@ -1607,7 +1608,7 @@ export class GraphRenderer {
           });
         }, 300); // Increased timeout significantly to ensure render is done
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         console.error('[Danbooru Grass] Render failed:', err);
         // Still update summary grid on failure
         this.updateSummaryGrid(hourlyData, metric);
@@ -1694,7 +1695,7 @@ export class GraphRenderer {
             </div>
           </div>
           <div class="post-grid">
-            ${pagePosts.map(id => `<a href="/posts/${id}" target="_blank" class="post-link">#${id}</a>`).join('')}
+            ${pagePosts.map((id: number) => `<a href="/posts/${id}" target="_blank" class="post-link">#${id}</a>`).join('')}
           </div>
           <div class="pagination">
             <button class="page-btn" id="popover-prev" ${page === 1 ? 'disabled' : ''}>&lt;</button>
@@ -1744,7 +1745,7 @@ export class GraphRenderer {
     pop.style.top = `${top}px`;
 
     // Close on outside click
-    const closeHandler = (e) => {
+    const closeHandler = (e: MouseEvent) => {
       if (!pop.contains(e.target as Node)) {
         pop.style.setProperty('display', 'none', 'important');
         document.removeEventListener('mousedown', closeHandler);

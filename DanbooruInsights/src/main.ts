@@ -21,6 +21,7 @@ export function detectCurrentTag(): string | null {
   // 1. Wiki Page: /wiki_pages/TAG_NAME
   if (path.startsWith('/wiki_pages/')) {
     const rawName = path.split('/').pop();
+    if (!rawName) return null;
     return decodeURIComponent(rawName);
   }
 
