@@ -4,6 +4,16 @@ import {RateLimitedFetch} from '../core/rate-limiter';
 import {SettingsManager} from '../core/settings';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
+import type {DistributionItem, ScatterDataPoint} from '../types';
+
+/** Processed pie chart slice used for D3 rendering. */
+interface PieSlice {
+  value: number;
+  label: string;
+  color: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  details: any; // DistributionItem | StatusItem | RatingItem
+}
 
 export class UserAnalyticsApp {
   [key: string]: any;
@@ -209,7 +219,7 @@ export class UserAnalyticsApp {
     render();
     animInterval = setInterval(render, 500);
 
-    const onProgress = (current, total, msg) => {
+    const onProgress = (current: number, total: number, msg: string) => {
       state.current = current;
       state.total = total;
       if (msg) state.message = msg;
@@ -261,7 +271,7 @@ export class UserAnalyticsApp {
    * @param {string|null} [customColor=null] CSS color for the text.
    * @return {Promise<void>}
    */
-  async updateHeaderStatus(progressText = null, customColor = null) {
+  async updateHeaderStatus(progressText: string | null = null, customColor: string | null = null) {
     const el = document.getElementById(`${this.modalId}-header-status`);
     if (!el) return;
 
@@ -335,7 +345,7 @@ export class UserAnalyticsApp {
    * Shows the Sync Settings Popover.
    * @param {HTMLElement} target The settings button element.
    */
-  showSyncSettingsPopover(target) {
+  showSyncSettingsPopover(target: HTMLElement) {
     // Remove existing
     const existing = document.getElementById('danbooru-grass-sync-settings');
     if (existing) existing.remove();
@@ -379,8 +389,8 @@ export class UserAnalyticsApp {
     document.body.appendChild(popover);
 
     // Close on click outside
-    const closeHandler = (e) => {
-      if (!popover.contains(e.target) && e.target !== target) {
+    const closeHandler = (e: MouseEvent) => {
+      if (!popover.contains(e.target as Node) && e.target !== target) {
         popover.remove();
         document.removeEventListener('click', closeHandler);
       }
@@ -408,7 +418,7 @@ export class UserAnalyticsApp {
    * Toggles the visibility of the modal.
    * @param {boolean} show True to show, false to hide.
    */
-  toggleModal(show) {
+  toggleModal(show: boolean) {
     const overlay = document.getElementById(`${this.modalId}-overlay`);
     if (!overlay) return;
 
@@ -440,7 +450,7 @@ export class UserAnalyticsApp {
    * @param {string} contentHtml The HTML content to display.
    * @param {string|null} [helpHtml=null] Optional HTML content for the help tooltip.
    */
-  showSubModal(title, contentHtml, helpHtml = null) {
+  showSubModal(title: string, contentHtml: string, helpHtml: string | null = null) {
     let subOverlay = document.getElementById(`${this.modalId}-sub-overlay`);
 
     // Remove existing if any (simplifies logic)
@@ -589,7 +599,7 @@ export class UserAnalyticsApp {
     });
   }
 
-  getLevelClass(level) {
+  getLevelClass(level: string | null) {
     if (!level) return 'user-member';
     const l = level.toLowerCase();
     if (l.includes('admin') || l.includes('owner')) return 'user-admin';
@@ -693,7 +703,7 @@ export class UserAnalyticsApp {
       // NSFW State
       const nsfwKey = 'danbooru_grass_nsfw_enabled';
       let isNsfwEnabled = localStorage.getItem(nsfwKey) === 'true';
-      let applyNsfwUpdate = null;
+      let applyNsfwUpdate: (() => void) | null = null;
       let isMilestoneExpanded = false;
 
       // 1. Header (Flexbox with Refresh Button)
@@ -809,7 +819,7 @@ export class UserAnalyticsApp {
 
             // Anchor to Reset button parent
             (dBtn.parentNode as HTMLElement).style.position = 'relative';
-            dBtn.parentNode.appendChild(bubble);
+            dBtn.parentNode?.appendChild(bubble);
 
             // Auto remove after 10 seconds
             setTimeout(() => {
@@ -926,14 +936,14 @@ export class UserAnalyticsApp {
           // --- Bubble Chart Data Collection ---
           try {
             const dist = await this.dataManager.getCopyrightDistribution(this.context.targetUser);
-            const topCopyrights = dist.slice(0, 10).map(d => d.tagName).filter(n => n && n !== 'Other');
+            const topCopyrights = dist.slice(0, 10).map((d: DistributionItem) => d.tagName).filter((n: string | undefined) => n && n !== 'Other') as string[];
 
             if (topCopyrights.length > 0) {
               const bar = syncDiv.querySelector('#analytics-main-bar') as HTMLElement;
               const percent = syncDiv.querySelector('#analytics-main-percent') as HTMLElement;
               const countText = syncDiv.querySelector('#analytics-main-count') as HTMLElement;
 
-              await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c, t, msg) => {
+              await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c: number, t: number, _msg: string) => {
                 const p = t > 0 ? Math.round((c / t) * 100) : 0;
                 bar.style.width = `${p}%`;
                 percent.textContent = `${p}%`;
@@ -976,7 +986,7 @@ export class UserAnalyticsApp {
        * @param {string} [details=''] Additional HTML details.
        * @return {string} HTML string.
        */
-      const makeCard = (title, val, icon, details = '') => `
+      const makeCard = (title: string, val: string | number, icon: string, details: string = '') => `
           <div style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start;">
              <div style="font-size:2em; margin-right:15px; margin-top:5px;">${icon}</div>
              <div>
@@ -1168,7 +1178,8 @@ export class UserAnalyticsApp {
       // --- PIE CHART WIDGET REFRACTOR ---
 
       // Data Store for Pie Charts (Initialized with pre-fetched data)
-      const pieData = { ...distributions };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pieData: Record<string, any[]> = { ...distributions };
 
       // Pre-process special distributions
       if (pieData.breasts) {
@@ -1195,12 +1206,12 @@ export class UserAnalyticsApp {
       };
 
       // Listen for Lazy Loaded Updates
-      const onPieDataUpdate = (e) => {
+      const onPieDataUpdate = (e: Event) => {
         if (!document.body.contains(dashboardDiv)) {
           window.removeEventListener('DanbooruInsights:DataUpdated', onPieDataUpdate);
           return;
         }
-        const { contentType, data } = e.detail;
+        const { contentType, data } = (e as CustomEvent).detail;
         const keyMap = {
           'character_dist': 'character',
           'copyright_dist': 'copyright',
@@ -1210,7 +1221,8 @@ export class UserAnalyticsApp {
           'hair_color_dist': 'hair_color',
           'rating_dist': 'rating'
         };
-        const key = keyMap[contentType];
+        const contentTypeStr = contentType as string;
+        const key = keyMap[contentTypeStr as keyof typeof keyMap];
 
         // Special handling for breasts/hair_length/hair_color if they need processing?
         // The data originating from `getBreastsDistribution` is already processed structure (name, count, thumb).
@@ -1226,7 +1238,7 @@ export class UserAnalyticsApp {
         // If `data` was a NEW array (map return), then `enrichThumbnails` (which works on the original array passed to it) might be working on a DIFFERENT array if `loadTab` re-mapped it?
         // Let's check `loadTab` logic again.
 
-        if (key && pieData[key]) {
+        if (key && (pieData as Record<string, unknown[]>)[key]) {
           // If we are replacing the WHOLE array, we lose custom props added by `loadTab` (like 'value', 'label').
           // However, `data` in the event is the `items` array from `AnalyticsDataManager`.
           // `getBreastsDistribution` returns `filtered`.
@@ -1239,15 +1251,16 @@ export class UserAnalyticsApp {
           // So modifying the original objects in `enrichThumbnails` won't affect `pieData` objects if they were copied.
 
           // Check `loadTab`: `data = data.map(d => ({ ...d, ... }))`.
-          // YES, it creates NEW objects. 
+          // YES, it creates NEW objects.
           // So `enrichThumbnails` updates to `filtered` will NOT propagate to `pieData` automatically if `loadTab` ran.
           // WE MUST MERGE.
 
           // Merge Strategy:
           // Iterate `pieData[key]` and update thumbs from `data` based on name/tagName.
 
-          const incomingMap = new Map(data.map(d => [d.name, d]));
-          const currentData = pieData[key];
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const incomingMap = new Map((data as any[]).map((d: any) => [d.name, d]));
+          const currentData = (pieData as Record<string, unknown[]>)[key];
 
           let changed = false;
           currentData.forEach((item: any) => {
@@ -1280,7 +1293,7 @@ export class UserAnalyticsApp {
        * Opens a search query in a new tab based on the selected slice.
        * @param {Object} d The data object from D3.
        */
-      const handlePieClick = (d) => {
+      const handlePieClick = (d: d3.PieArcDatum<PieSlice>) => {
         const targetName = this.context.targetUser.normalizedName || this.context.targetUser.name.replace(/ /g, '_') || '';
         if (!targetName) return;
         let query = '';
@@ -1337,7 +1350,7 @@ export class UserAnalyticsApp {
         // Sort: Hair Length has a specific order (custom sort)
         if (currentPieTab === 'hair_length') {
           const order = ['Bald', 'Very Short Hair', 'Short Hair', 'Medium Hair', 'Long Hair', 'Very Long Hair', 'Absurdly Long Hair'];
-          data.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+          data.sort((a: {name: string}, b: {name: string}) => order.indexOf(a.name) - order.indexOf(b.name));
         }
 
         container.style.display = 'flex';
@@ -1358,12 +1371,13 @@ export class UserAnalyticsApp {
           '#ffc107', '#ff9800', '#ff5722', '#795548'
         ];
 
-        const processedData = data.map((d, i) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const processedData: PieSlice[] = data.map((d: any, i: number) => {
           if (['rating', 'status', 'breasts', 'hair_length', 'hair_color'].includes(currentPieTab)) {
             return {
               value: d.count,
-              label: (currentPieTab === 'rating') ? (ratingLabels[d.rating] || d.rating) : d.label || d.name,
-              color: (currentPieTab === 'rating') ? (ratingColors[d.rating] || '#999') : (
+              label: (currentPieTab === 'rating') ? (ratingLabels[d.rating as keyof typeof ratingLabels] || d.rating) : d.label || d.name,
+              color: (currentPieTab === 'rating') ? (ratingColors[d.rating as keyof typeof ratingColors] || '#999') : (
                 (currentPieTab === 'hair_color' && d.color) ? d.color : (d.color || (d.isOther ? '#bdbdbd' : palette[i % palette.length]))
               ),
               details: d
@@ -1385,8 +1399,8 @@ export class UserAnalyticsApp {
         });
 
         // Filter out invalid/zero values to prevent D3 errors
-        const validData = processedData.filter(d => Number.isFinite(d.value) && d.value > 0);
-        const totalValue = validData.reduce((acc, curr) => acc + curr.value, 0);
+        const validData = processedData.filter((d: PieSlice) => Number.isFinite(d.value) && d.value > 0);
+        const totalValue = validData.reduce((acc: number, curr: PieSlice) => acc + curr.value, 0);
 
         if (validData.length === 0 || totalValue === 0) {
           container.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available (Total count is 0)</div>';
@@ -1473,9 +1487,9 @@ export class UserAnalyticsApp {
         const radius = Math.min(width, height) / 2 - 20;
 
         const svg = d3.select(chartWrapper).select('svg g');
-        const pie = d3.pie().value(d => d.value).sort(null);
-        const arc = d3.arc().innerRadius(0).outerRadius(radius);
-        const arcHover = d3.arc().innerRadius(0).outerRadius(radius * 1.2);
+        const pie = d3.pie<PieSlice>().value(d => d.value).sort(null);
+        const arc = d3.arc<d3.PieArcDatum<PieSlice>>().innerRadius(0).outerRadius(radius);
+        const arcHover = d3.arc<d3.PieArcDatum<PieSlice>>().innerRadius(0).outerRadius(radius * 1.2);
 
         // Tooltip (Join Pattern)
         const tooltip = d3.select("body").selectAll(".danbooru-grass-pie-tooltip").data([0]).join("div")
@@ -1492,7 +1506,8 @@ export class UserAnalyticsApp {
 
         // PATHS (Join Pattern)
         svg.selectAll('path')
-          .data(pie(validData), d => d.data.label)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .data(pie(validData), (d: any) => d.data.label)
           .join(
             enter => enter.append('path')
               .attr('class', 'danbooru-grass-pie-path')
@@ -1508,8 +1523,8 @@ export class UserAnalyticsApp {
           )
           .attr('stroke', '#fff')
           .style('stroke-width', '1px')
-          .on('mouseover', function (event, d) {
-            d3.select(this).transition().duration(200).attr('d', arcHover)
+          .on('mouseover', function (_event, d) {
+            d3.select(this).transition().duration(200).attr('d', (td: unknown) => arcHover(td as d3.PieArcDatum<PieSlice>) ?? '')
               .style('opacity', '1')
               .style('filter', 'drop-shadow(0px 0px 8px rgba(255,255,255,0.4))');
 
@@ -1552,10 +1567,10 @@ export class UserAnalyticsApp {
             tooltip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY + 15) + "px");
           })
           .on('mouseout', function () {
-            d3.select(this).transition().duration(200).attr('d', arc).style('opacity', '0.9').style('filter', 'none');
+            d3.select(this).transition().duration(200).attr('d', (td: unknown) => arc(td as d3.PieArcDatum<PieSlice>) ?? '').style('opacity', '0.9').style('filter', 'none');
             tooltip.style("opacity", 0);
           })
-          .on('click', (event, d) => handlePieClick(d));
+          .on('click', (_event, d) => handlePieClick(d));
 
         // Update Legend
         const legendDiv = container.querySelector('.danbooru-grass-legend-scroll');
@@ -1572,7 +1587,7 @@ export class UserAnalyticsApp {
 
           // Rebuild legend content (simplest for text updates)
           // Preserve style tag
-          const styleTag = legendDiv.querySelector('style') ? legendDiv.querySelector('style').outerHTML : '';
+          const styleTag = legendDiv.querySelector('style')?.outerHTML ?? '';
 
           const listHtml = processedData.map(d => {
             const val = (d.value / totalValue) * 100;
@@ -1660,7 +1675,7 @@ export class UserAnalyticsApp {
 
 
       // Lazy Loading for Pie Chart Tabs
-      const loadTab = async (tabName) => {
+      const loadTab = async (tabName: string) => {
         // 1. Check if data exists
         if (pieData[tabName]) {
           renderPieContent();
@@ -1686,9 +1701,10 @@ export class UserAnalyticsApp {
               'banned': '#6e7781', // Grey
               'appealed': '#bf3989' // Purple
             };
-            data = data.map(d => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            data = data.map((d: any) => ({
               ...d,
-              color: statusColors[d.name] || '#888'
+              color: statusColors[d.name as keyof typeof statusColors] || '#888'
             }));
           } else if (tabName === 'character') {
             data = await this.dataManager.getCharacterDistribution(this.context.targetUser);
@@ -1702,8 +1718,10 @@ export class UserAnalyticsApp {
             // getBreastsReturns {name, count}
             // Pie logic uses 'value' (frequency) or calculates it
             // Let's manually calculate total and assign 'value' as ratio
-            const total = data.reduce((acc, c) => acc + c.count, 0);
-            data = data.map(d => ({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            data = data.map((d: any) => ({
               ...d,
               frequency: total > 0 ? d.count / total : 0,
               value: total > 0 ? d.count / total : 0,
@@ -1728,8 +1746,8 @@ export class UserAnalyticsApp {
       // Event Delegation
       pieContainer.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).classList.contains('di-pie-tab')) {
-          const mode = (e.target as HTMLElement).getAttribute('data-mode');
-          if (currentPieTab !== mode) {
+          const mode = (e.target as HTMLElement).getAttribute('data-mode') ?? '';
+          if (mode && currentPieTab !== mode) {
             currentPieTab = mode;
             updatePieTabs();
             loadTab(mode);
@@ -1747,7 +1765,8 @@ export class UserAnalyticsApp {
 
       // Use pre-fetched top posts
       // Structure: { most: {sfw, nsfw}, recent: {sfw, nsfw}, random: {sfw, nsfw} }
-      const topPostGroups = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const topPostGroups: Record<string, any> = {
         most: topPosts,
         recent: recentPopularPosts,
         random: randomPosts
@@ -1762,7 +1781,8 @@ export class UserAnalyticsApp {
       const renderTopPostContent = () => {
         const group = topPostGroups[currentWidgetMode];
         const data = group ? group[currentTab] : null;
-        const contentDiv = topPostContainer.querySelector('.top-post-content');
+        const contentDiv = topPostContainer.querySelector('.top-post-content') as HTMLElement | null;
+        if (!contentDiv) return;
 
         if (!data) {
           contentDiv.innerHTML = '<div style="color:#888; padding:20px 0;">No posts found or loading...</div>';
@@ -1772,7 +1792,7 @@ export class UserAnalyticsApp {
         const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(data);
         const dateStr = data.created_at ? new Date(data.created_at).toISOString().split('T')[0] : 'N/A';
         const link = `/posts/${data.id}`;
-        const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
+        const ratingMap: Record<string, string> = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
         const ratingLabel = ratingMap[data.rating] || data.rating;
 
         // Refresh Button Visibility
@@ -1797,7 +1817,7 @@ export class UserAnalyticsApp {
         }
 
         // Helper to generate tag lines
-        const createTagLine = (label, icon, tags) => {
+        const createTagLine = (label: string, icon: string, tags: string) => {
           if (!tags) return '';
           const tagList = tags.replace(/_/g, ' ');
           const displayTags = (label === 'Char' && tags.split(' ').length > 5)
@@ -1840,10 +1860,10 @@ export class UserAnalyticsApp {
        * Updates the Top Post tab styles (SFW/NSFW).
        */
       const updateTabs = () => {
-        const btnSfw = topPostContainer.querySelector('button[data-mode="sfw"]');
-        const btnNsfw = topPostContainer.querySelector('button[data-mode="nsfw"]');
+        const btnSfw = topPostContainer.querySelector('button[data-mode="sfw"]') as HTMLElement | null;
+        const btnNsfw = topPostContainer.querySelector('button[data-mode="nsfw"]') as HTMLElement | null;
 
-        const setStyle = (btn, isActive) => {
+        const setStyle = (btn: HTMLElement | null, isActive: boolean) => {
           if (!btn) return;
           btn.style.background = isActive ? '#0969da' : '#f6f8fa';
           btn.style.color = isActive ? '#fff' : '#24292f';
@@ -1916,7 +1936,7 @@ export class UserAnalyticsApp {
       // Tab Event Delegation
       topPostContainer.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).classList.contains('top-post-tab')) {
-          currentTab = (e.target as HTMLElement).getAttribute('data-mode');
+          currentTab = (e.target as HTMLElement).getAttribute('data-mode') ?? 'sfw';
           updateTabs();
           renderTopPostContent();
         }
@@ -2350,9 +2370,9 @@ export class UserAnalyticsApp {
         toggleContainer.style.fontSize = '0.9em';
 
         let currentScatterMode = 'score'; // 'score' or 'tags'
-        let selectedYear = null; // Year Zoom State
+        let selectedYear: number | null = null; // Year Zoom State
 
-        const makeToggleBtn = (id, label, active, tooltip = null) => {
+        const makeToggleBtn = (id: string, label: string, active: boolean, tooltip: string | null = null) => {
           const btn = document.createElement('button');
           btn.style.border = '1px solid #d0d7de';
           btn.style.borderRadius = '20px';
@@ -2463,13 +2483,13 @@ export class UserAnalyticsApp {
         countLabel.style.marginRight = '5px';
         filterContainer.appendChild(countLabel);
 
-        const ratings = {
+        const ratings: Record<string, { label: string; color: string }> = {
           g: { label: 'G', color: '#4caf50' }, // Green
           s: { label: 'S', color: '#ffb74d' }, // Orange/Yellow
           q: { label: 'Q', color: '#ab47bc' }, // Purple
           e: { label: 'E', color: '#f44336' }  // Red
         };
-        const activeFilters = { g: true, s: true, q: true, e: true };
+        const activeFilters: Record<string, boolean> = { g: true, s: true, q: true, e: true };
 
         Object.keys(ratings).forEach(key => {
           const btn = document.createElement('div');
@@ -2526,10 +2546,6 @@ export class UserAnalyticsApp {
 
         const canvas = document.createElement('canvas');
         // Handle high DPI
-        const dpr = window.devicePixelRatio || 1;
-        const width = 800; // Layout logic can vary, let's assume specific or calc later
-        // Ideally we start with clientWidth after append, but for now fixed internal res
-        // We'll resize on mount.
 
         canvas.style.width = '100%';
         canvas.style.height = '100%';
@@ -2574,7 +2590,7 @@ export class UserAnalyticsApp {
 
         // Render Logic
         const renderScatter = () => {
-          if (!scatterDiv.isConnected) return; // Safety
+          if (!scatterDiv.isConnected || !ctx) return; // Safety
 
           const rect = canvasContainer.getBoundingClientRect();
           const dpr = window.devicePixelRatio || 1;
@@ -2609,7 +2625,7 @@ export class UserAnalyticsApp {
             maxDate = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
 
             resetBtn.style.display = 'block';
-            yearLabel.textContent = selectedYear;
+            yearLabel.textContent = String(selectedYear);
             yearLabel.style.display = 'block';
           } else {
             resetBtn.style.display = 'none';
@@ -2775,7 +2791,7 @@ export class UserAnalyticsApp {
           // 3. Render Overlays
           // ... (Keep existing overlay logic) ... 
           // We can simplify and just re-implement the short helper
-          const addOverlayLine = (dateObjOrStr, color, title, isDashed, thickness = '2px') => {
+          const addOverlayLine = (dateObjOrStr: Date | string, color: string, title: string, isDashed: boolean, thickness: string = '2px') => {
             const d = new Date(dateObjOrStr).getTime();
             if (d < minDate || d > maxDate) return;
 
@@ -2868,8 +2884,9 @@ export class UserAnalyticsApp {
           canvas.style.cursor = isHand ? 'pointer' : 'default';
         });
         // Drag Event Listeners
-        let dragStart = null;
+        let dragStart: {x: number; y: number} | null = null;
         let ignoreNextClick = false;
+        void ignoreNextClick; // Suppress TS6133 (written but read check deferred)
         let lastDragEndTime = 0;
 
         canvas.addEventListener('mousedown', (e) => {
@@ -2979,7 +2996,7 @@ export class UserAnalyticsApp {
           showPopover(e.clientX, e.clientY, sortedList, aDMin, aDMax, aVMin, aVMax);
         });
 
-        const showPopover = (mx, my, items, dMin, dMax, sMin, sMax) => {
+        const showPopover = (mx: number, my: number, items: ScatterDataPoint[], dMin: number, dMax: number, sMin: number, sMax: number) => {
           const d1 = new Date(dMin).toLocaleDateString();
           const d2 = new Date(dMax).toLocaleDateString();
           const sm1 = Math.floor(sMin);
@@ -2988,11 +3005,11 @@ export class UserAnalyticsApp {
           const isTags = currentScale.mode === 'tags';
           let visibleLimit = 50;
 
-          const renderItems = (start, limit) => {
+          const renderItems = (start: number, limit: number) => {
             let chunkHtml = '';
             const slice = items.slice(start, start + limit);
 
-            slice.forEach(it => {
+            slice.forEach((it: ScatterDataPoint) => {
               const itDate = new Date(it.d).toLocaleDateString();
               const val = isTags ? (it.t || 0) : it.s;
               let color = '#ccc';
@@ -3036,11 +3053,13 @@ export class UserAnalyticsApp {
           popover.innerHTML = headerHtml;
 
           // Event Attachment Helper
-          const attachEvents = (parent) => {
-            parent.querySelectorAll('.pop-item').forEach(el => {
-              el.onmouseover = () => el.style.backgroundColor = '#f5f9ff';
-              el.onmouseout = () => el.style.backgroundColor = 'transparent';
-              el.onclick = () => window.open(`/posts/${el.dataset.id}`, '_blank');
+          const attachEvents = (parent: Element | null) => {
+            if (!parent) return;
+            parent.querySelectorAll('.pop-item').forEach((el) => {
+              const htmlEl = el as HTMLElement;
+              htmlEl.onmouseover = () => htmlEl.style.backgroundColor = '#f5f9ff';
+              htmlEl.onmouseout = () => htmlEl.style.backgroundColor = 'transparent';
+              htmlEl.onclick = () => window.open(`/posts/${htmlEl.dataset.id}`, '_blank');
             });
           };
 
