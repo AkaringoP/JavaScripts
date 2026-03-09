@@ -1,6 +1,6 @@
 # JavaScripts
 
-A collection of UserScripts developed by **AkaringoP** (with Antigravity).
+A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 
 ## Scripts
 
