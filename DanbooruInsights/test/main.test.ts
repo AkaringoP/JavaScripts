@@ -81,4 +81,46 @@ describe('detectCurrentTag', () => {
     mockDocument.querySelector = vi.fn().mockReturnValue(null);
     expect(detectCurrentTag()).toBeNull();
   });
+
+  // Wiki page exclusions
+  it('returns null on a wiki edit page', () => {
+    mockLocation.pathname = '/wiki_pages/12345/edit';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the wiki search page', () => {
+    mockLocation.pathname = '/wiki_pages/search';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the wiki show_or_new page', () => {
+    mockLocation.pathname = '/wiki_pages/show_or_new';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the wiki new page', () => {
+    mockLocation.pathname = '/wiki_pages/new';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  // Artist page exclusions
+  it('returns null on an artist edit page', () => {
+    mockLocation.pathname = '/artists/12345/edit';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the artists banned page', () => {
+    mockLocation.pathname = '/artists/banned';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the artists show_or_new page', () => {
+    mockLocation.pathname = '/artists/show_or_new';
+    expect(detectCurrentTag()).toBeNull();
+  });
+
+  it('returns null on the artists new page', () => {
+    mockLocation.pathname = '/artists/new';
+    expect(detectCurrentTag()).toBeNull();
+  });
 });

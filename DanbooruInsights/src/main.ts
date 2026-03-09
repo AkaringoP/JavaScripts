@@ -18,15 +18,24 @@ injectGlobalStyles();
 export function detectCurrentTag(): string | null {
   const path = window.location.pathname;
 
-  // 1. Wiki Page: /wiki_pages/TAG_NAME
+  // 1. Wiki Page: /wiki_pages/TAG_NAME (show page only)
   if (path.startsWith('/wiki_pages/')) {
-    const rawName = path.split('/').pop();
-    if (!rawName) return null;
+    const segments = path.split('/').filter(s => s !== '');
+    // Only /wiki_pages/TAG_NAME is valid (exactly 2 segments)
+    if (segments.length !== 2) return null;
+    const rawName = segments[1];
+    // Exclude reserved action names
+    const reserved = new Set(['search', 'show_or_new', 'new']);
+    if (reserved.has(rawName)) return null;
     return decodeURIComponent(rawName);
   }
 
-  // 2. Artist Page: /artists/12345
+  // 2. Artist Page: /artists/NUMERIC_ID (show page only)
   if (path.startsWith('/artists/')) {
+    const segments = path.split('/').filter(s => s !== '');
+    // Only /artists/NUMERIC_ID is valid (exactly 2 segments, numeric ID)
+    if (segments.length !== 2 || !/^\d+$/.test(segments[1])) return null;
+
     // 2a. Data Attribute (Primary)
     if (document.body.dataset.artistName) {
       return document.body.dataset.artistName;
