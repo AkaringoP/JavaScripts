@@ -9,6 +9,9 @@ import {TagAnalyticsApp} from './apps/tag-analytics-app';
 // Inject exactly once on script execution
 injectGlobalStyles();
 
+// Reserved path segments that are not tag show pages
+const WIKI_RESERVED = new Set(['search', 'show_or_new', 'new']);
+
 /* --- Helper: Tag Detection --- */
 /**
  * Detects the current tag name from the page URL.
@@ -25,8 +28,7 @@ export function detectCurrentTag(): string | null {
     if (segments.length !== 2) return null;
     const rawName = segments[1];
     // Exclude reserved action names
-    const reserved = new Set(['search', 'show_or_new', 'new']);
-    if (reserved.has(rawName)) return null;
+    if (WIKI_RESERVED.has(rawName)) return null;
     return decodeURIComponent(rawName);
   }
 

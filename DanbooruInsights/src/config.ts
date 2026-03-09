@@ -10,7 +10,7 @@ export const CONFIG: {
 } = {
   STORAGE_PREFIX: 'danbooru_contrib_',
   CLEANUP_THRESHOLD_MS: 7 * 24 * 60 * 60 * 1000, // 7 Days
-  RATE_LIMITER: {concurrency: 6, jitter: [100, 300], rps: 6},
+  RATE_LIMITER: {concurrency: 6, jitter: [0, 50], rps: 6},
   SELECTORS: {
     STATISTICS_SECTION: 'div.user-statistics',
   },

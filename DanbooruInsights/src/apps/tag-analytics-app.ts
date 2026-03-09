@@ -448,8 +448,9 @@ export class TagAnalyticsApp {
           }
         };
 
-        // 7. Calculate Related Tag Distribution Locally (Artist -> Copyright/Character)
-        if (meta.category === 1) { // Artist
+        // 7. Calculate Related Tag Distribution Locally
+        // Artist (1) -> Copyright + Character, Copyright (3) -> Character only
+        if (meta.category === 1 || meta.category === 3) {
           const copyrightMap: Record<string, number> = {};
           const characterMap: Record<string, number> = {};
 
@@ -466,21 +467,23 @@ export class TagAnalyticsApp {
             }
           });
 
-          // Copyright: filter sub-copyrights out via isTopLevelTag
-          const copyrightCandidates = Object.entries(copyrightMap)
-            .sort((a, b) => (b[1] as number) - (a[1] as number))
-            .slice(0, 20);
+          if (meta.category === 1) {
+            // Copyright: filter sub-copyrights out via isTopLevelTag
+            const copyrightCandidates = Object.entries(copyrightMap)
+              .sort((a, b) => (b[1] as number) - (a[1] as number))
+              .slice(0, 20);
 
-          const filteredCopyright = (await Promise.all(
-            copyrightCandidates.map(async ([tag, count]) =>
-              await isTopLevelTag(this.rateLimiter, tag) ? [tag, count] : null
-            )
-          )).filter(e => e !== null);
+            const filteredCopyright = (await Promise.all(
+              copyrightCandidates.map(async ([tag, count]) =>
+                await isTopLevelTag(this.rateLimiter, tag) ? [tag, count] : null
+              )
+            )).filter(e => e !== null);
 
-          meta.copyrightCounts = {};
-          (filteredCopyright as any[]).slice(0, 10).forEach(([name, count]) => {
-            meta.copyrightCounts[name] = count;
-          });
+            meta.copyrightCounts = {};
+            (filteredCopyright as any[]).slice(0, 10).forEach(([name, count]) => {
+              meta.copyrightCounts[name] = count;
+            });
+          }
 
           // Character: take top 10 directly (no implication filtering needed)
           meta.characterCounts = {};
@@ -2211,6 +2214,8 @@ export class TagAnalyticsApp {
         this.resizeObserver.disconnect();
         this.resizeObserver = null;
       }
+      // Remove any lingering area chart tooltips appended to body
+      d3.select('body').selectAll('.tag-analytics-tooltip').remove();
     }
   }
 

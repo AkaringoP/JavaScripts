@@ -147,11 +147,6 @@ export class AnalyticsDataManager extends DataManager {
     const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
 
-    // efficiently fetch just created_at
-    const posts = await this.db.posts.where('uploader_id').equals(uploaderId).toArray();
-
-    if (posts.length === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
-
     const historyAll: Record<string, number> = {};
     const history1Year: Record<string, number> = {};
     let firstUploadDate: Date | null = null;
@@ -161,8 +156,11 @@ export class AnalyticsDataManager extends DataManager {
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
 
     let count1Year = 0;
+    let totalCount = 0;
 
-    posts.forEach((p: ApiItem) => {
+    // Cursor iteration: processes one record at a time to avoid loading all posts into memory
+    await this.db.posts.where('uploader_id').equals(uploaderId).each((p: ApiItem) => {
+      totalCount++;
       const dStr = p['created_at'].split('T')[0];
       historyAll[dStr] = (historyAll[dStr] || 0) + 1;
 
@@ -179,6 +177,8 @@ export class AnalyticsDataManager extends DataManager {
         count1Year++;
       }
     });
+
+    if (totalCount === 0) return { maxUploads: 0, maxDate: 'N/A', firstUploadDate: null, lastUploadDate: null } as SummaryStats;
 
     let maxUploads = 0;
     let maxDate = 'N/A';
@@ -323,9 +323,9 @@ export class AnalyticsDataManager extends DataManager {
     // Ensure unique and sort ASC
     targets = [...new Set(targets)].sort((a, b) => a - b);
 
+    // Use compound index [uploader_id+no] to fetch only this user's posts at the target positions
     const matches: ApiItem[] = await this.db.posts
-      .where('no').anyOf(targets)
-      .filter((p: ApiItem) => p['uploader_id'] === uploaderId)
+      .where('[uploader_id+no]').anyOf(targets.map((no: number) => [uploaderId, no]))
       .toArray();
 
     // NEW: Fetch missing thumbnails for Safety logic
@@ -749,15 +749,15 @@ export class AnalyticsDataManager extends DataManager {
    * @param {number} [delayMs=250] Delay between iterations per worker.
    * @return {Promise<Array>} Results array.
    */
-  async mapConcurrent(items: any[], concurrency: number, fn: (item: any) => Promise<any>, delayMs: number = 250): Promise<any[]> {
+  async mapConcurrent(items: any[], concurrency: number, fn: (item: any) => Promise<any>, delayMs: number = 50): Promise<any[]> {
     const results = new Array(items.length);
     let index = 0;
     const next = async () => {
       while (index < items.length) {
         const i = index++;
         results[i] = await fn(items[i]);
-        // Rate limit protection
-        await new Promise(r => setTimeout(r, delayMs));
+        // Minimal stagger delay — RateLimitedFetch handles actual rate limiting
+        if (delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
       }
     }
     await Promise.all(Array.from({ length: concurrency }, next));
@@ -1013,23 +1013,21 @@ export class AnalyticsDataManager extends DataManager {
     const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return null;
 
-    // Filter Logic for IndexedDB
-    // Since Dexie 'sortBy' takes a string index, we can't easily combine it with complex filters efficiently
-    // without compound indexes.
-    // However, for a single user, it's efficient enough to traverse.
+    // Use compound index [uploader_id+score] to traverse posts from highest score downward.
+    // .reverse() on a between() range walks from the upper bound down, stopping at the first filter match.
+    const ratingFilter =
+      filterMode === 'sfw'
+        ? (p: ApiItem) => p['rating'] === 'g' || p['rating'] === 's'
+        : filterMode === 'nsfw'
+          ? (p: ApiItem) => p['rating'] === 'q' || p['rating'] === 'e'
+          : () => true;
 
-    let collection = this.db.posts.where('uploader_id').equals(uploaderId);
-
-    if (filterMode === 'sfw') {
-      // 'g' (general) or 's' (sensitive)
-      collection = collection.and((p: ApiItem) => p['rating'] === 'g' || p['rating'] === 's');
-    } else if (filterMode === 'nsfw') {
-      // 'q' (questionable) or 'e' (explicit)
-      collection = collection.and((p: ApiItem) => p['rating'] === 'q' || p['rating'] === 'e');
-    }
-
-    // Sort by score DESC
-    const topLocal = await collection.reverse().sortBy('score').then((r: ApiItem[]) => r[0]);
+    const topLocal = await (this.db.posts as any)
+      .where('[uploader_id+score]')
+      .between([uploaderId, -Infinity], [uploaderId, Infinity])
+      .reverse()
+      .filter(ratingFilter)
+      .first();
 
     if (!topLocal) return null;
 
@@ -1480,14 +1478,16 @@ export class AnalyticsDataManager extends DataManager {
 
 
         // Find the first post that is OLDER than cutOffDate to determine startId
-        let found = false;
-        await this.db.posts.where('uploader_id').equals(uploaderId).reverse().each((p: ApiItem) => {
-          if (found) return;
-          if (new Date(p['created_at']) < cutOffDate) {
-            startId = p['id'];
-            found = true;
-          }
-        });
+        // Use .until() to stop iteration immediately after the first match
+        let cutOffFound = false;
+        await this.db.posts.where('uploader_id').equals(uploaderId).reverse()
+          .until(() => cutOffFound)
+          .each((p: ApiItem) => {
+            if (new Date(p['created_at']) < cutOffDate) {
+              startId = p['id'];
+              cutOffFound = true;
+            }
+          });
 
         // fallback: if history is shorter than 1 month, startId stays 0 (Full Sync)
       }
