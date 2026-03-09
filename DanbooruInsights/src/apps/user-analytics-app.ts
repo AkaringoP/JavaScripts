@@ -1,4 +1,5 @@
 import * as d3 from 'd3';
+import {CONFIG} from '../config';
 import {AnalyticsDataManager} from '../core/analytics-data-manager';
 import {RateLimitedFetch} from '../core/rate-limiter';
 import {SettingsManager} from '../core/settings';
@@ -29,10 +30,8 @@ export class UserAnalyticsApp {
     this.settings = settings;
     this.context = context;
     // Initialize RateLimiter: 
-    // - Max Concurrency: 6 (Default)
-    // - Start Delay: [100, 300] ms
-    // - Rate Limit: 7 requests / 1 second (Token Bucket)
-    this.rateLimiter = new RateLimitedFetch(6, [100, 300], 6);
+    const rl = CONFIG.RATE_LIMITER;
+    this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
 
     this.dataManager = new AnalyticsDataManager(db);
 

@@ -1,4 +1,5 @@
 import * as d3 from 'd3';
+import {CONFIG} from '../config';
 import {AnalyticsDataManager} from '../core/analytics-data-manager';
 import {RateLimitedFetch} from '../core/rate-limiter';
 import {isTopLevelTag, escapeHtml} from '../utils';
@@ -28,7 +29,8 @@ export class TagAnalyticsApp {
     this.db = db;
     this.settings = settings;
     this.tagName = tagName;
-    this.rateLimiter = new RateLimitedFetch(6, [100, 300], 6); // 6 concurrent, 6 req/s total
+    const rl = CONFIG.RATE_LIMITER;
+    this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
     this.isMilestoneExpanded = false;
     this.resizeObserver = null;
     this.resizeTimeout = null;

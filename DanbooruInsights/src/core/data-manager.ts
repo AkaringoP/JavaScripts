@@ -50,7 +50,8 @@ export class DataManager {
     this.baseUrl = window.location.origin;
     this.db = db;
     // Allow passing shared rate limiter, fallback to default if missing (though app should pass it)
-    this.rateLimiter = rateLimiter || new RateLimitedFetch(6, [100, 300], 6);
+    const rl = CONFIG.RATE_LIMITER;
+    this.rateLimiter = rateLimiter || new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
   }
 
   /**
