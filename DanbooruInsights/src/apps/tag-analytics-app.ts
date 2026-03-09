@@ -3580,13 +3580,14 @@ export class TagAnalyticsApp {
         }
       }
 
+      const safeName = escapeHtml(name);
       if (query) {
-        nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+        nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
       } else if (u.id) {
         // Fallback
-        nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+        nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
       } else {
-        nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${name}</span>`;
+        nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${safeName}</span>`;
       }
 
       const count = u.count || u.post_count || 0;
@@ -3594,7 +3595,7 @@ export class TagAnalyticsApp {
 
       return `
           <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 5px; border-bottom: 1px solid #f5f5f5; background: linear-gradient(90deg, rgba(0,0,0,0.06) ${percentage}%, transparent ${percentage}%);">
-              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${name}">${i + 1}. ${nameHtml}</span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${safeName}">${i + 1}. ${nameHtml}</span>
               <span style="color: #666; font-weight: bold;">${count}</span>
           </div>`;
     }).join('');
