@@ -28,9 +28,9 @@ export default defineConfig({
         downloadURL:
           'https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js',
         require: [
-          'https://d3js.org/d3.v7.min.js',
-          'https://unpkg.com/cal-heatmap/dist/cal-heatmap.min.js',
-          'https://unpkg.com/dexie/dist/dexie.js',
+          'https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js',
+          'https://cdn.jsdelivr.net/npm/cal-heatmap@4.2.4/dist/cal-heatmap.min.js',
+          'https://cdn.jsdelivr.net/npm/dexie@3.2.7/dist/dexie.min.js',
         ],
       },
       build: {
