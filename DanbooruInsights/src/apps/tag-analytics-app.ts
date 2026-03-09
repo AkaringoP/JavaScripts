@@ -2176,6 +2176,13 @@ export class TagAnalyticsApp {
     modal.onclick = (e) => {
       if (e.target === modal) this.toggleModal(false);
     };
+
+    // Keyboard: close on Escape
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && modal.style.display !== 'none') {
+        this.toggleModal(false);
+      }
+    });
   }
 
   /**
@@ -2191,6 +2198,8 @@ export class TagAnalyticsApp {
     modal.style.display = show ? "flex" : "none";
     if (show) {
       document.body.style.overflow = "hidden";
+      const closeBtn = document.getElementById("tag-analytics-close");
+      if (closeBtn) closeBtn.focus();
     } else {
       document.body.style.overflow = "";
       if (this.resizeTimeout) {
