@@ -3006,7 +3006,7 @@ export class TagAnalyticsApp {
                 </a>
             </div>
             <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
-                <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${uploaderName}</a>
+                <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
             </div>
         `;
 
