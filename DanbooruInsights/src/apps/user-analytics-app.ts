@@ -126,6 +126,8 @@ export class UserAnalyticsApp {
       const btn = document.createElement('span');
       btn.className = 'di-analytics-entry-btn';
       btn.title = 'Open Analytics Report';
+      btn.setAttribute('role', 'button');
+      btn.setAttribute('aria-label', 'Open user analytics report');
       btn.innerHTML = '📊';
       btn.style.margin = '0'; // Reset margin since container has it
       btn.onclick = async (e) => {

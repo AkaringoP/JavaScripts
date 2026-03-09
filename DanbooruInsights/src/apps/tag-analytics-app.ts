@@ -2044,6 +2044,7 @@ export class TagAnalyticsApp {
     if (isNew) {
       btn = document.createElement("button");
       btn.id = "tag-analytics-btn";
+      btn.setAttribute('aria-label', 'View tag analytics dashboard');
       btn.style.marginLeft = "10px";
       btn.style.border = "none";
       btn.style.background = "transparent";
