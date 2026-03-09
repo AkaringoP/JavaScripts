@@ -1,7 +1,7 @@
 import * as d3 from 'd3';
 import {AnalyticsDataManager} from '../core/analytics-data-manager';
 import {RateLimitedFetch} from '../core/rate-limiter';
-import {isTopLevelTag} from '../utils';
+import {isTopLevelTag, escapeHtml} from '../utils';
 import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 
@@ -2293,7 +2293,7 @@ export class TagAnalyticsApp {
     content.innerHTML = `
       <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
           <div>
-              <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
+              <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${escapeHtml(tagData.name.replace(/_/g, ' '))}</h2>
               <div style="display: flex; align-items: center; gap: 10px;">
                   <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
                   <span style="font-size: 0.9em; color: #777;">Created: ${tagData.created_at ? new Date(tagData.created_at).toLocaleDateString('en-CA') : 'N/A'}</span>
