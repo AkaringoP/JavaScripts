@@ -373,6 +373,7 @@ export class TagAnalyticsApp {
       const MAX_OPTIMIZED_POSTS = 1200;
       if (initialPosts && totalCount <= MAX_OPTIMIZED_POSTS && initialPosts.length >= totalCount) {
 
+        this.injectAnalyticsButton(null, 0, "Calculating history... (0%)");
 
         // 2. Calculate History Locally
         const historyData = this.calculateHistoryFromPosts(initialPosts);
@@ -388,6 +389,7 @@ export class TagAnalyticsApp {
         });
 
         // 4. Calculate Ratings & Rankings Locally
+        this.injectAnalyticsButton(null, 15, "Calculating rankings... (15%)");
         const localStatsAllTime = this.calculateLocalStats(initialPosts);
 
         const oneYearAgo = new Date();
@@ -399,13 +401,23 @@ export class TagAnalyticsApp {
 
         // 5. Parallel Data Fetching (Volatile & Status)
         // Note: backfillUploaderNames is CRITICAL for showing names instead of IDs
+        this.injectAnalyticsButton(null, 25, "Fetching stats... (25%)");
+        let smallTagFetched = 0;
+        const smallTagTotalFetches = 6;
+        const trackSmall = (label: string, promise: Promise<any>) => promise.then((res: any) => {
+          smallTagFetched++;
+          const pct = 25 + Math.round((smallTagFetched / smallTagTotalFetches) * 55);
+          this.injectAnalyticsButton(null, pct, `${label}... (${pct}%)`);
+          return res;
+        });
+
         const [statusCounts, latestPost, trendingPost, trendingPostNSFW, newPostCount, commentaryCounts] = await Promise.all([
-          this.fetchStatusCounts(tagName),
-          this.fetchLatestPost(tagName),
-          this.fetchTrendingPost(tagName, false),
-          this.fetchTrendingPost(tagName, true),
-          this.fetchNewPostCount(tagName),
-          this.fetchCommentaryCounts(tagName),
+          trackSmall('Fetching status', this.fetchStatusCounts(tagName)),
+          trackSmall('Fetching latest post', this.fetchLatestPost(tagName)),
+          trackSmall('Finding trending post', this.fetchTrendingPost(tagName, false)),
+          trackSmall('Finding trending NSFW', this.fetchTrendingPost(tagName, true)),
+          trackSmall('Counting new posts', this.fetchNewPostCount(tagName)),
+          trackSmall('Analyzing commentary', this.fetchCommentaryCounts(tagName)),
           this.backfillUploaderNames(initialPosts) // Ensure ALL posts have names backfilled
         ]);
 
@@ -450,6 +462,7 @@ export class TagAnalyticsApp {
 
         // 7. Calculate Related Tag Distribution Locally
         // Artist (1) -> Copyright + Character, Copyright (3) -> Character only
+        this.injectAnalyticsButton(null, 85, "Analyzing tag distribution... (85%)");
         if (meta.category === 1 || meta.category === 3) {
           const copyrightMap: Record<string, number> = {};
           const characterMap: Record<string, number> = {};
