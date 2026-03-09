@@ -2191,6 +2191,10 @@ export class TagAnalyticsApp {
       document.body.style.overflow = "hidden";
     } else {
       document.body.style.overflow = "";
+      if (this.resizeTimeout) {
+        clearTimeout(this.resizeTimeout);
+        this.resizeTimeout = null;
+      }
       if (this.resizeObserver) {
         this.resizeObserver.disconnect();
         this.resizeObserver = null;
