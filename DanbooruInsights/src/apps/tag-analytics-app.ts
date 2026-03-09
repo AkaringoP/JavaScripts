@@ -2738,7 +2738,7 @@ export class TagAnalyticsApp {
         d3.select(this).transition().duration(200).attr('d', arcHover).style('opacity', 1);
         const percent = Math.round((d.data.count / totalValue) * 100);
         tooltip.transition().duration(200).style('opacity', 1);
-        tooltip.html(`<strong>${d.data.name}</strong>: ${d.data.count.toLocaleString()} (${percent}%)`)
+        tooltip.html(`<strong>${escapeHtml(d.data.name)}</strong>: ${d.data.count.toLocaleString()} (${percent}%)`)
           .style('left', (event.pageX + 10) + 'px')
           .style('top', (event.pageY - 20) + 'px');
       })
