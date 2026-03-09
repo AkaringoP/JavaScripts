@@ -1,5 +1,17 @@
 import type {RateLimitedFetch} from './core/rate-limiter';
 
+/* --- Helper: HTML Escaping --- */
+/**
+ * Escapes HTML special characters to prevent XSS when inserting into innerHTML.
+ * @param {string} text The text to escape.
+ * @return {string} The escaped HTML-safe string.
+ */
+export function escapeHtml(text: string): string {
+  const el = document.createElement('div');
+  el.textContent = text;
+  return el.innerHTML;
+}
+
 /* --- Helper: Tag Utility --- */
 /**
  * Checks whether a tag is top-level (not a sub-tag) by querying its implications.

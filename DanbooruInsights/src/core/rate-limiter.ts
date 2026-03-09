@@ -176,6 +176,7 @@ export class RateLimitedFetch {
     // Burst is allowed up to 'rateLimit' (7).
     // We can remove startDelay or keep it very small.
     // The original code had 100-300ms.
+    // Minimal jitter to avoid burst — token bucket handles actual rate limiting
     const startDelay = Math.floor(Math.random() * (this.startDelayRange[1] - this.startDelayRange[0] + 1)) + this.startDelayRange[0];
     if (startDelay > 0) await new Promise(r => setTimeout(r, startDelay));
 

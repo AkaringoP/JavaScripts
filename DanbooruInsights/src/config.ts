@@ -4,11 +4,13 @@ import type {Theme} from './types';
 export const CONFIG: {
   STORAGE_PREFIX: string;
   CLEANUP_THRESHOLD_MS: number;
+  RATE_LIMITER: {concurrency: number; jitter: [number, number]; rps: number};
   SELECTORS: {STATISTICS_SECTION: string};
   THEMES: Record<string, Theme>;
 } = {
   STORAGE_PREFIX: 'danbooru_contrib_',
   CLEANUP_THRESHOLD_MS: 7 * 24 * 60 * 60 * 1000, // 7 Days
+  RATE_LIMITER: {concurrency: 6, jitter: [0, 50], rps: 6},
   SELECTORS: {
     STATISTICS_SECTION: 'div.user-statistics',
   },

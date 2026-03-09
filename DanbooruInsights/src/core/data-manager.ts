@@ -50,7 +50,8 @@ export class DataManager {
     this.baseUrl = window.location.origin;
     this.db = db;
     // Allow passing shared rate limiter, fallback to default if missing (though app should pass it)
-    this.rateLimiter = rateLimiter || new RateLimitedFetch(6, [100, 300], 6);
+    const rl = CONFIG.RATE_LIMITER;
+    this.rateLimiter = rateLimiter || new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
   }
 
   /**
@@ -254,16 +255,16 @@ export class DataManager {
           // Align Local check to match Remote (wide) range
           const matchedEndDate = `${year}-12-31`;
 
-          const localRecords: ApiItem[] = await table.where('id')
+          // Cursor iteration: sum counts without loading all records into memory
+          let localCount = 0;
+          await table.where('id')
             .between(
               `${userIdVal}_${startDate}`,
               `${userIdVal}_${matchedEndDate}\uffff`,
               true,
               true // Inclusive to match Remote's "..." behavior on Jan 1st
             )
-            .toArray(); // Get actual records to sum counts
-
-          const localCount = localRecords.reduce((acc: number, cur: ApiItem) => acc + (cur['count'] || 0), 0);
+            .each((cur: ApiItem) => { localCount += cur['count'] || 0; });
 
           // C. Compare (Strict)
           if (remoteCount !== localCount) {
@@ -456,14 +457,7 @@ export class DataManager {
             }
           });
 
-          if (bulkData.length > 0) {
-            await table.bulkPut(bulkData);
-          }
-          if (detailData.length > 0) {
-            await this.db.approvals_detail.bulkPut(detailData);
-          }
-
-          // [Fix] Hourly Stats are already initialized from DB (lines 813) and incremented with new data (lines 933).
+          // [Fix] Hourly Stats are already initialized from DB and incremented with new data.
           // We just need to save the current state of 'hourlyCounts' to the DB.
           const hourlyBulk: HourlyStatEntry[] = [];
           hourlyCounts.forEach((count, h) => {
@@ -477,7 +471,16 @@ export class DataManager {
             });
           });
 
-          await this.db.hourly_stats.bulkPut(hourlyBulk);
+          // Wrap all writes in a single transaction for atomicity
+          await this.db.transaction('rw', [table, this.db.approvals_detail, this.db.hourly_stats], async () => {
+            if (bulkData.length > 0) {
+              await table.bulkPut(bulkData);
+            }
+            if (detailData.length > 0) {
+              await this.db.approvals_detail.bulkPut(detailData);
+            }
+            await this.db.hourly_stats.bulkPut(hourlyBulk);
+          });
 
           // Mark as complete if it's a past year
           if (year < new Date().getFullYear()) {
@@ -605,7 +608,7 @@ export class DataManager {
           const backoff = [1000, 2000, 4000];
 
           while (true) {
-            const resp = await fetch(url);
+            const resp = await this.rateLimiter.fetch(url);
 
             if (resp.status === 429 || resp.status >= 500) {
               if (attempt < backoff.length) {

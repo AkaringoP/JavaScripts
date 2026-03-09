@@ -119,5 +119,12 @@ export class Database extends Dexie {
     this.version(8).stores({
       bubble_data: null
     });
+
+    // [v9] Add compound indexes to posts table for efficient per-user queries
+    // [uploader_id+no]    — getMilestones: look up milestone posts by user-scoped sequence number
+    // [uploader_id+score] — getTopScorePost: index-based sort by score per user
+    this.version(9).stores({
+      posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general, [uploader_id+no], [uploader_id+score]'
+    });
   }
 }

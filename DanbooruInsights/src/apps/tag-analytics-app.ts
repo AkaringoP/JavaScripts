@@ -1,7 +1,8 @@
 import * as d3 from 'd3';
+import {CONFIG} from '../config';
 import {AnalyticsDataManager} from '../core/analytics-data-manager';
 import {RateLimitedFetch} from '../core/rate-limiter';
-import {isTopLevelTag} from '../utils';
+import {isTopLevelTag, escapeHtml} from '../utils';
 import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 
@@ -28,7 +29,8 @@ export class TagAnalyticsApp {
     this.db = db;
     this.settings = settings;
     this.tagName = tagName;
-    this.rateLimiter = new RateLimitedFetch(6, [100, 300], 6); // 6 concurrent, 6 req/s total
+    const rl = CONFIG.RATE_LIMITER;
+    this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
     this.isMilestoneExpanded = false;
     this.resizeObserver = null;
     this.resizeTimeout = null;
@@ -371,6 +373,7 @@ export class TagAnalyticsApp {
       const MAX_OPTIMIZED_POSTS = 1200;
       if (initialPosts && totalCount <= MAX_OPTIMIZED_POSTS && initialPosts.length >= totalCount) {
 
+        this.injectAnalyticsButton(null, 0, "Calculating history... (0%)");
 
         // 2. Calculate History Locally
         const historyData = this.calculateHistoryFromPosts(initialPosts);
@@ -386,6 +389,7 @@ export class TagAnalyticsApp {
         });
 
         // 4. Calculate Ratings & Rankings Locally
+        this.injectAnalyticsButton(null, 15, "Calculating rankings... (15%)");
         const localStatsAllTime = this.calculateLocalStats(initialPosts);
 
         const oneYearAgo = new Date();
@@ -397,13 +401,23 @@ export class TagAnalyticsApp {
 
         // 5. Parallel Data Fetching (Volatile & Status)
         // Note: backfillUploaderNames is CRITICAL for showing names instead of IDs
+        this.injectAnalyticsButton(null, 25, "Fetching stats... (25%)");
+        let smallTagFetched = 0;
+        const smallTagTotalFetches = 6;
+        const trackSmall = (label: string, promise: Promise<any>) => promise.then((res: any) => {
+          smallTagFetched++;
+          const pct = 25 + Math.round((smallTagFetched / smallTagTotalFetches) * 55);
+          this.injectAnalyticsButton(null, pct, `${label}... (${pct}%)`);
+          return res;
+        });
+
         const [statusCounts, latestPost, trendingPost, trendingPostNSFW, newPostCount, commentaryCounts] = await Promise.all([
-          this.fetchStatusCounts(tagName),
-          this.fetchLatestPost(tagName),
-          this.fetchTrendingPost(tagName, false),
-          this.fetchTrendingPost(tagName, true),
-          this.fetchNewPostCount(tagName),
-          this.fetchCommentaryCounts(tagName),
+          trackSmall('Fetching status', this.fetchStatusCounts(tagName)),
+          trackSmall('Fetching latest post', this.fetchLatestPost(tagName)),
+          trackSmall('Finding trending post', this.fetchTrendingPost(tagName, false)),
+          trackSmall('Finding trending NSFW', this.fetchTrendingPost(tagName, true)),
+          trackSmall('Counting new posts', this.fetchNewPostCount(tagName)),
+          trackSmall('Analyzing commentary', this.fetchCommentaryCounts(tagName)),
           this.backfillUploaderNames(initialPosts) // Ensure ALL posts have names backfilled
         ]);
 
@@ -446,8 +460,10 @@ export class TagAnalyticsApp {
           }
         };
 
-        // 7. Calculate Related Tag Distribution Locally (Artist -> Copyright/Character)
-        if (meta.category === 1) { // Artist
+        // 7. Calculate Related Tag Distribution Locally
+        // Artist (1) -> Copyright + Character, Copyright (3) -> Character only
+        this.injectAnalyticsButton(null, 85, "Analyzing tag distribution... (85%)");
+        if (meta.category === 1 || meta.category === 3) {
           const copyrightMap: Record<string, number> = {};
           const characterMap: Record<string, number> = {};
 
@@ -464,21 +480,23 @@ export class TagAnalyticsApp {
             }
           });
 
-          // Copyright: filter sub-copyrights out via isTopLevelTag
-          const copyrightCandidates = Object.entries(copyrightMap)
-            .sort((a, b) => (b[1] as number) - (a[1] as number))
-            .slice(0, 20);
+          if (meta.category === 1) {
+            // Copyright: filter sub-copyrights out via isTopLevelTag
+            const copyrightCandidates = Object.entries(copyrightMap)
+              .sort((a, b) => (b[1] as number) - (a[1] as number))
+              .slice(0, 20);
 
-          const filteredCopyright = (await Promise.all(
-            copyrightCandidates.map(async ([tag, count]) =>
-              await isTopLevelTag(this.rateLimiter, tag) ? [tag, count] : null
-            )
-          )).filter(e => e !== null);
+            const filteredCopyright = (await Promise.all(
+              copyrightCandidates.map(async ([tag, count]) =>
+                await isTopLevelTag(this.rateLimiter, tag) ? [tag, count] : null
+              )
+            )).filter(e => e !== null);
 
-          meta.copyrightCounts = {};
-          (filteredCopyright as any[]).slice(0, 10).forEach(([name, count]) => {
-            meta.copyrightCounts[name] = count;
-          });
+            meta.copyrightCounts = {};
+            (filteredCopyright as any[]).slice(0, 10).forEach(([name, count]) => {
+              meta.copyrightCounts[name] = count;
+            });
+          }
 
           // Character: take top 10 directly (no implication filtering needed)
           meta.characterCounts = {};
@@ -2042,6 +2060,7 @@ export class TagAnalyticsApp {
     if (isNew) {
       btn = document.createElement("button");
       btn.id = "tag-analytics-btn";
+      btn.setAttribute('aria-label', 'View tag analytics dashboard');
       btn.style.marginLeft = "10px";
       btn.style.border = "none";
       btn.style.background = "transparent";
@@ -2174,6 +2193,13 @@ export class TagAnalyticsApp {
     modal.onclick = (e) => {
       if (e.target === modal) this.toggleModal(false);
     };
+
+    // Keyboard: close on Escape
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && modal.style.display !== 'none') {
+        this.toggleModal(false);
+      }
+    });
   }
 
   /**
@@ -2189,12 +2215,20 @@ export class TagAnalyticsApp {
     modal.style.display = show ? "flex" : "none";
     if (show) {
       document.body.style.overflow = "hidden";
+      const closeBtn = document.getElementById("tag-analytics-close");
+      if (closeBtn) closeBtn.focus();
     } else {
       document.body.style.overflow = "";
+      if (this.resizeTimeout) {
+        clearTimeout(this.resizeTimeout);
+        this.resizeTimeout = null;
+      }
       if (this.resizeObserver) {
         this.resizeObserver.disconnect();
         this.resizeObserver = null;
       }
+      // Remove any lingering area chart tooltips appended to body
+      d3.select('body').selectAll('.tag-analytics-tooltip').remove();
     }
   }
 
@@ -2293,7 +2327,7 @@ export class TagAnalyticsApp {
     content.innerHTML = `
       <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
           <div>
-              <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${tagData.name.replace(/_/g, ' ')}</h2>
+              <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${escapeHtml(tagData.name.replace(/_/g, ' '))}</h2>
               <div style="display: flex; align-items: center; gap: 10px;">
                   <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
                   <span style="font-size: 0.9em; color: #777;">Created: ${tagData.created_at ? new Date(tagData.created_at).toLocaleDateString('en-CA') : 'N/A'}</span>
@@ -2738,7 +2772,7 @@ export class TagAnalyticsApp {
         d3.select(this).transition().duration(200).attr('d', arcHover).style('opacity', 1);
         const percent = Math.round((d.data.count / totalValue) * 100);
         tooltip.transition().duration(200).style('opacity', 1);
-        tooltip.html(`<strong>${d.data.name}</strong>: ${d.data.count.toLocaleString()} (${percent}%)`)
+        tooltip.html(`<strong>${escapeHtml(d.data.name)}</strong>: ${d.data.count.toLocaleString()} (${percent}%)`)
           .style('left', (event.pageX + 10) + 'px')
           .style('top', (event.pageY - 20) + 'px');
       })
@@ -3006,7 +3040,7 @@ export class TagAnalyticsApp {
                 </a>
             </div>
             <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
-                <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${uploaderName}</a>
+                <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
             </div>
         `;
 
@@ -3580,13 +3614,14 @@ export class TagAnalyticsApp {
         }
       }
 
+      const safeName = escapeHtml(name);
       if (query) {
-        nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+        nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
       } else if (u.id) {
         // Fallback
-        nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${name}</a>`;
+        nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
       } else {
-        nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${name}</span>`;
+        nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${safeName}</span>`;
       }
 
       const count = u.count || u.post_count || 0;
@@ -3594,7 +3629,7 @@ export class TagAnalyticsApp {
 
       return `
           <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 5px; border-bottom: 1px solid #f5f5f5; background: linear-gradient(90deg, rgba(0,0,0,0.06) ${percentage}%, transparent ${percentage}%);">
-              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${name}">${i + 1}. ${nameHtml}</span>
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${safeName}">${i + 1}. ${nameHtml}</span>
               <span style="color: #666; font-weight: bold;">${count}</span>
           </div>`;
     }).join('');
