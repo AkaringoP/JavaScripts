@@ -158,6 +158,7 @@ export const GLOBAL_CSS = `
     .user-platinum { color: #777892; } .user-platinum:hover { color: #9192a7; }
     .user-gold { color: #fd9200; } .user-gold:hover { color: #ffc5a5; }
     .user-member { color: #0075f8; } .user-member:hover { color: #5091fa; }
+    .user-janitor { color: #000; } .user-janitor:hover { color: #555; }
 
     /* -- Hover Utilities -- */
     .di-hover-translate-up { transition: transform 0.2s; }

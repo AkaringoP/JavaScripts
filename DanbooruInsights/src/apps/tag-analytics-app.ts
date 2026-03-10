@@ -3649,6 +3649,7 @@ export class TagAnalyticsApp {
     if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
     if (l.includes('platinum')) return 'user-platinum';
     if (l.includes('gold')) return 'user-gold';
+    if (l.includes('janitor')) return 'user-janitor';
     if (l.includes('member')) return 'user-member';
     return 'user-member';
   }

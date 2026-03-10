@@ -1143,27 +1143,88 @@ export class AnalyticsDataManager extends DataManager {
   }
 
   /**
-   * Fetches user level change history from mod_actions API.
-   * Returns promoted/demoted events with fromLevel and toLevel.
+   * Fetches user level change history from user_feedbacks API.
+   * Handles both "from X to Y" and "to Y from X" body formats.
    * @param {!Object} userInfo The user's info object.
    * @return {!Promise<!Array<!LevelChangeEvent>>}
    */
   async getLevelChangeHistory(userInfo: TargetUser): Promise<LevelChangeEvent[]> {
-    const userId = userInfo.id;
-    if (!userId) return [];
-    try {
-      const url = `/mod_actions.json?search[category]=user_level_change&search[subject_type]=User&search[subject_id]=${encodeURIComponent(userId)}&search[order]=created_at_asc&limit=100`;
-      const actions = await this.rateLimiter.fetch(url).then(r => r.json());
-      if (!Array.isArray(actions)) return [];
+    if (!userInfo.name) return [];
+    const normalizedName = userInfo.name.replace(/ /g, '_');
 
-      return actions.map((a: any) => {
-        const match = a.description?.match(/(?:promoted|demoted).+from\s+(\S+)\s+to\s+(\S+)/i);
-        if (!match) return null;
-        const fromLevel = match[1];
-        const toLevel = match[2];
-        const isPromotion = /promoted/i.test(a.description);
-        return {date: new Date(a.created_at), fromLevel, toLevel, isPromotion};
-      }).filter(Boolean) as LevelChangeEvent[];
+    // Known Danbooru levels ordered by rank (lowest → highest)
+    const LEVEL_HIERARCHY = [
+      'Restricted', 'Member', 'Gold', 'Platinum',
+      'Builder', 'Contributor', 'Janitor', 'Approver',
+      'Moderator', 'Admin', 'Owner'
+    ];
+    const levelRank = new Map(LEVEL_HIERARCHY.map((l, i) => [l.toLowerCase(), i]));
+
+    /**
+     * Parses a feedback body into {fromLevel, toLevel, isPromotion} or null.
+     * Extracts all known level names from text, then uses promotion/demotion
+     * keyword + level hierarchy to determine from/to direction.
+     */
+    const parse = (body: string): {fromLevel: string; toLevel: string; isPromotion: boolean} | null => {
+      // Find all known levels mentioned in the body (case-insensitive, unique)
+      const found: string[] = [];
+      const bodyLower = body.toLowerCase();
+      for (const level of LEVEL_HIERARCHY) {
+        if (bodyLower.includes(level.toLowerCase()) && !found.includes(level)) {
+          found.push(level);
+        }
+      }
+      if (found.length < 2) return null;
+
+      // Determine promotion vs demotion from keywords
+      const isPromotion = /promot/i.test(body);
+
+      // Sort the two levels by hierarchy rank
+      const sorted = found.slice(0, 2).sort((a, b) =>
+        (levelRank.get(a.toLowerCase()) ?? 0) - (levelRank.get(b.toLowerCase()) ?? 0)
+      );
+      const [lower, higher] = sorted;
+
+      // Promotion: lower → higher, Demotion: higher → lower
+      return isPromotion
+        ? {fromLevel: lower, toLevel: higher, isPromotion: true}
+        : {fromLevel: higher, toLevel: lower, isPromotion: false};
+    };
+
+    try {
+      const base = `/user_feedbacks.json?commit=Search&search[category]=neutral&search[user_name]=${encodeURIComponent(normalizedName)}`;
+      const [promoted, demoted] = await Promise.all([
+        this.rateLimiter.fetch(`${base}&search[body_matches]=promoted+to+from`).then(r => r.json()),
+        this.rateLimiter.fetch(`${base}&search[body_matches]=demoted+to+from`).then(r => r.json()),
+      ]);
+
+      const all = [
+        ...(Array.isArray(promoted) ? promoted : []),
+        ...(Array.isArray(demoted) ? demoted : []),
+      ];
+
+      const events: LevelChangeEvent[] = [];
+      for (const fb of all) {
+        const body: string = fb.body || '';
+        const parsed = parse(body);
+        if (!parsed) continue;
+        events.push({
+          date: new Date(fb.created_at),
+          fromLevel: parsed.fromLevel,
+          toLevel: parsed.toLevel,
+          isPromotion: parsed.isPromotion,
+        });
+      }
+
+      // Sort oldest first, deduplicate by date+fromLevel+toLevel
+      events.sort((a, b) => a.date.getTime() - b.date.getTime());
+      const seen = new Set<string>();
+      return events.filter(e => {
+        const key = `${e.date.getTime()}-${e.fromLevel}-${e.toLevel}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     } catch (e: unknown) {
       console.warn('[Danbooru Grass] Failed to fetch level change history', e);
       return [];

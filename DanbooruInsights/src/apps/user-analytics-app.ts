@@ -608,6 +608,7 @@ export class UserAnalyticsApp {
     if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
     if (l.includes('platinum')) return 'user-platinum';
     if (l.includes('gold')) return 'user-gold';
+    if (l.includes('janitor')) return 'user-janitor';
     if (l.includes('member')) return 'user-member';
     return 'user-member';
   }
@@ -1158,12 +1159,13 @@ export class UserAnalyticsApp {
       levelChanges.forEach(lc => {
         const icon = lc.isPromotion ? '⬆️' : '⬇️';
         const dateStr = lc.date.toISOString().split('T')[0];
+        const daysAgo = Math.floor((today.getTime() - lc.date.getTime()) / oneDay);
         const fromLevelClass = this.getLevelClass(lc.fromLevel);
         const toLevelClass = this.getLevelClass(lc.toLevel);
         tlEvents.push({
           date: lc.date,
           icon,
-          html: `${icon} <strong class="${fromLevelClass}">${lc.fromLevel}</strong> → <strong class="${toLevelClass}">${lc.toLevel}</strong> <span style="color:#888;">(${dateStr})</span>`
+          html: `${icon} <strong class="${fromLevelClass}">${lc.fromLevel}</strong> → <strong class="${toLevelClass}">${lc.toLevel}</strong> ${daysAgo.toLocaleString()} days ago <span style="color:#888;">(${dateStr})</span>`
         });
       });
 
