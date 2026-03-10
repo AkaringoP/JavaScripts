@@ -631,9 +631,10 @@ export class UserAnalyticsApp {
       topPosts,
       recentPopularPosts,
       randomPosts,
-      promotions,
       milestones1k,
-      scatterData
+      scatterData,
+      levelChanges,
+      timelineMilestones
     ] = await Promise.all([
       dataManager.getSyncStats(user),
       dataManager.getTotalPostCount(user),
@@ -652,9 +653,10 @@ export class UserAnalyticsApp {
       dataManager.getTopPostsByType(user),
       dataManager.getRecentPopularPosts(user),
       dataManager.getRandomPosts(user),
-      dataManager.getPromotionHistory(user),
       dataManager.getMilestones(user, isNsfwEnabled, 1000),
-      dataManager.getScatterData(user)
+      dataManager.getScatterData(user),
+      dataManager.getLevelChangeHistory(user),
+      dataManager.getTimelineMilestones(user)
     ]);
 
     return {
@@ -665,9 +667,10 @@ export class UserAnalyticsApp {
       topPosts,
       recentPopularPosts,
       randomPosts,
-      promotions,
       milestones1k,
-      scatterData
+      scatterData,
+      levelChanges,
+      timelineMilestones
     };
   }
 
@@ -695,7 +698,7 @@ export class UserAnalyticsApp {
 
       // Pre-fetch all data!
       const dashboardData = await this.fetchDashboardData();
-      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, promotions, milestones1k, scatterData } = dashboardData;
+      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones } = dashboardData;
       const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
       const today = new Date();
       const oneDay = 1000 * 60 * 60 * 24;
@@ -975,7 +978,7 @@ export class UserAnalyticsApp {
       // Summary Card Wrapper
       const summaryWrapper = document.createElement('div');
       summaryWrapper.style.display = 'grid';
-      summaryWrapper.style.gridTemplateColumns = 'repeat(auto-fit, minmax(200px, 1fr))';
+      summaryWrapper.style.gridTemplateColumns = 'repeat(auto-fit, minmax(300px, 1fr))';
       summaryWrapper.style.gap = '15px';
       summaryWrapper.style.marginBottom = '35px'; // Increased Spacing
 
@@ -990,12 +993,10 @@ export class UserAnalyticsApp {
       const makeCard = (title: string, val: string | number, icon: string, details: string = '') => `
           <div style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start;">
              <div style="font-size:2em; margin-right:15px; margin-top:5px;">${icon}</div>
-             <div>
+             <div style="flex:1; min-width:0;">
                 <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">${title}</div>
-                <div style="display:flex; align-items:center; gap:12px;">
-                    <div style="font-size:1.5em; font-weight:bold; color:#333;">${val}</div>
-                    ${details ? `<div style="font-size:0.85em; color:#555;">${details}</div>` : ''}
-                </div>
+                ${val ? `<div style="font-size:1.5em; font-weight:bold; color:#333;">${val}</div>` : ''}
+                ${details ? `<div style="font-size:0.85em; color:#555;">${details}</div>` : ''}
              </div>
           </div>
        `;
@@ -1112,15 +1113,86 @@ export class UserAnalyticsApp {
 
       const firstUploadDateStr = firstUploadDate ? firstUploadDate.toISOString().split('T')[0] : '';
 
-      // Details for Card 2
+      // Build timeline events (all types merged, sorted by date ASC)
+      interface TimelineEvent {
+        date: Date;
+        icon: string;
+        html: string;
+      }
+      const tlEvents: TimelineEvent[] = [];
+
+      // Join
+      if (this.context.targetUser.created_at) {
+        const joinDate = new Date(this.context.targetUser.created_at);
+        tlEvents.push({
+          date: joinDate,
+          icon: '🎊',
+          html: `🎊 <strong>Join:</strong> ${daysSinceJoin.toLocaleString()} days ago <span style="color:#888;">(${joinDateStr})</span>`
+        });
+      }
+
+      // 1st Post
+      if (firstUploadDate) {
+        tlEvents.push({
+          date: firstUploadDate,
+          icon: '🚀',
+          html: `🚀 <strong>1st Post:</strong> ${daysSinceFirst.toLocaleString()} days ago <span style="color:#888;">(${firstUploadDateStr})</span>`
+        });
+      }
+
+      // Timeline milestones (100th, 1000th, 10000th, ...)
+      const milestoneIcons: Record<number, string> = {100: '💯'};
+      timelineMilestones.forEach(m => {
+        const icon = milestoneIcons[m.index] ?? '🏅';
+        const label = `${m.index.toLocaleString()}th Post`;
+        const dateStr = m.date.toISOString().split('T')[0];
+        const daysAgo = Math.floor((today.getTime() - m.date.getTime()) / oneDay);
+        tlEvents.push({
+          date: m.date,
+          icon,
+          html: `${icon} <strong>${label}:</strong> ${daysAgo.toLocaleString()} days ago <span style="color:#888;">(${dateStr})</span>`
+        });
+      });
+
+      // Level changes
+      levelChanges.forEach(lc => {
+        const icon = lc.isPromotion ? '⬆️' : '⬇️';
+        const dateStr = lc.date.toISOString().split('T')[0];
+        const fromLevelClass = this.getLevelClass(lc.fromLevel);
+        const toLevelClass = this.getLevelClass(lc.toLevel);
+        tlEvents.push({
+          date: lc.date,
+          icon,
+          html: `${icon} <strong class="${fromLevelClass}">${lc.fromLevel}</strong> → <strong class="${toLevelClass}">${lc.toLevel}</strong> <span style="color:#888;">(${dateStr})</span>`
+        });
+      });
+
+      // Latest Post (with total post count as Nth)
+      if (lastUploadDate) {
+        const daysAgoLast = Math.floor((today.getTime() - lastUploadDate.getTime()) / oneDay);
+        const latestLabel = total > 0 ? `${total.toLocaleString()}th Post` : 'Latest Post';
+        tlEvents.push({
+          date: lastUploadDate,
+          icon: '📌',
+          html: `📌 <strong>${latestLabel}:</strong> ${daysAgoLast.toLocaleString()} days ago <span style="color:#888;">(${lastDate})</span>`
+        });
+      }
+
+      // Sort by date ASC
+      tlEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      const timelineRows = tlEvents.map(ev =>
+        `<div style="white-space:nowrap;">${ev.html}</div>`
+      ).join('');
+
+      // Details for Card 2 — scrollable timeline (3 rows visible by default)
       const dateDetails = `
-       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
-           <div>🎊 <strong>Join:</strong> ${daysSinceJoin.toLocaleString()} days ago <span style="color:#888;">(${joinDateStr})</span></div>
-           <div>🚀 <strong>1st Post:</strong> ${daysSinceFirst.toLocaleString()} days ago <span style="color:#888;">(${firstUploadDateStr})</span></div>
+       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px; max-height:66px; overflow-y:auto;">
+           ${timelineRows}
        </div>
     `;
 
-      summaryWrapper.innerHTML += makeCard('Latest Post', lastDate, '📅', dateDetails);
+      summaryWrapper.innerHTML += makeCard('User History', '', '📅', dateDetails);
 
       dashboardDiv.appendChild(summaryWrapper);
 
@@ -1263,17 +1335,19 @@ export class UserAnalyticsApp {
           const incomingMap = new Map((data as any[]).map((d: any) => [d.name, d]));
           const currentData = (pieData as Record<string, unknown[]>)[key];
 
-          let changed = false;
+          // Merge thumbs from incoming data (handles remapped objects like breasts/hair)
           currentData.forEach((item: any) => {
-            const update = incomingMap.get(item.name) as any; // Match by name (unique?)
+            const update = incomingMap.get(item.name) as any;
             if (update && update.thumb && item.thumb !== update.thumb) {
-              item.thumb = update.thumb; // Update the thumb in the View Model
-              if (item.details) item.details.thumb = update.thumb; // Update details too
-              changed = true;
+              item.thumb = update.thumb;
+              if (item.details) item.details.thumb = update.thumb;
             }
           });
 
-          if (changed && currentPieTab === key) {
+          // Always re-render: enrichThumbnails only dispatches when hasUpdates=true.
+          // For same-reference items (copyright/character/fav_copyright), thumbs are
+          // already set in-place, so the diff check above is a no-op but re-render is needed.
+          if (currentPieTab === key) {
             requestRender();
           }
         } else if (key) {
@@ -1765,7 +1839,7 @@ export class UserAnalyticsApp {
       topPostContainer.style.padding = '15px';
 
       // Use pre-fetched top posts
-      // Structure: { most: {sfw, nsfw}, recent: {sfw, nsfw}, random: {sfw, nsfw} }
+      // Structure: { most: {g, s, q, e}, recent: {sfw, nsfw}, random: {sfw, nsfw} }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const topPostGroups: Record<string, any> = {
         most: topPosts,
@@ -1774,14 +1848,16 @@ export class UserAnalyticsApp {
       };
 
       let currentWidgetMode = 'recent'; // 'recent', 'most', 'random'
-      let currentTab = 'sfw'; // 'sfw', 'nsfw'
+      let currentMostTab = 'g'; // 'g', 's', 'q', 'e' — for Most Popular only
+      let currentSfwTab = 'sfw'; // 'sfw', 'nsfw' — for Recent Popular and Random
 
       /**
        * Renders the content of the Top Post widget.
        */
       const renderTopPostContent = () => {
         const group = topPostGroups[currentWidgetMode];
-        const data = group ? group[currentTab] : null;
+        const tabKey = currentWidgetMode === 'most' ? currentMostTab : currentSfwTab;
+        const data = group ? group[tabKey] : null;
         const contentDiv = topPostContainer.querySelector('.top-post-content') as HTMLElement | null;
         if (!contentDiv) return;
 
@@ -1809,7 +1885,7 @@ export class UserAnalyticsApp {
           searchLinkBtn.style.display = (currentWidgetMode === 'recent') ? 'inline-block' : 'none';
 
           const normalizedName = this.context.targetUser.normalizedName;
-          const ratingTag = currentTab === 'sfw' ? 'is:sfw' : 'is:nsfw';
+          const ratingTag = currentSfwTab === 'sfw' ? 'is:sfw' : 'is:nsfw';
           const searchQuery = `user:${normalizedName} order:score age:<1w ${ratingTag}`;
 
           searchLinkBtn.onclick = () => {
@@ -1858,20 +1934,33 @@ export class UserAnalyticsApp {
       };
 
       /**
-       * Updates the Top Post tab styles (SFW/NSFW).
+       * Updates the Top Post tab styles and visibility based on current mode.
        */
       const updateTabs = () => {
-        const btnSfw = topPostContainer.querySelector('button[data-mode="sfw"]') as HTMLElement | null;
-        const btnNsfw = topPostContainer.querySelector('button[data-mode="nsfw"]') as HTMLElement | null;
-
         const setStyle = (btn: HTMLElement | null, isActive: boolean) => {
           if (!btn) return;
           btn.style.background = isActive ? '#0969da' : '#f6f8fa';
           btn.style.color = isActive ? '#fff' : '#24292f';
         };
 
-        setStyle(btnSfw, currentTab === 'sfw');
-        setStyle(btnNsfw, currentTab === 'nsfw');
+        const gsqeGroup = topPostContainer.querySelector('#top-post-tabs-gsqe') as HTMLElement | null;
+        const sfwnsfwGroup = topPostContainer.querySelector('#top-post-tabs-sfwnsfw') as HTMLElement | null;
+
+        if (currentWidgetMode === 'most') {
+          if (gsqeGroup) gsqeGroup.style.display = 'flex';
+          if (sfwnsfwGroup) sfwnsfwGroup.style.display = 'none';
+          for (const mode of ['g', 's', 'q', 'e']) {
+            const btn = topPostContainer.querySelector(`button[data-mode="${mode}"]`) as HTMLElement | null;
+            setStyle(btn, currentMostTab === mode);
+          }
+        } else {
+          if (gsqeGroup) gsqeGroup.style.display = 'none';
+          if (sfwnsfwGroup) sfwnsfwGroup.style.display = 'flex';
+          for (const mode of ['sfw', 'nsfw']) {
+            const btn = topPostContainer.querySelector(`button[data-mode="${mode}"]`) as HTMLElement | null;
+            setStyle(btn, currentSfwTab === mode);
+          }
+        }
       };
 
       // Header with Dropdown
@@ -1890,9 +1979,15 @@ export class UserAnalyticsApp {
                      ↗️
                  </button>
              </div>
-            <div style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
-               <button class="top-post-tab" data-mode="sfw" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
+            <div id="top-post-tabs-sfwnsfw" style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
+               <button class="top-post-tab" data-mode="sfw" style="border:none; background:#0969da; color:#fff; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
                <button class="top-post-tab" id="analytics-top-nsfw-btn" data-mode="nsfw" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">NSFW</button>
+            </div>
+            <div id="top-post-tabs-gsqe" style="display:none; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
+               <button class="top-post-tab" data-mode="g" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">G</button>
+               <button class="top-post-tab" data-mode="s" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">S</button>
+               <button class="top-post-tab" id="analytics-top-q-btn" data-mode="q" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">Q</button>
+               <button class="top-post-tab" id="analytics-top-e-btn" data-mode="e" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? 'inline-block' : 'none'};">E</button>
             </div>
          </div>
          <div class="top-post-content">
@@ -1905,6 +2000,7 @@ export class UserAnalyticsApp {
       if (modeSelect) {
         modeSelect.addEventListener('change', (e) => {
           currentWidgetMode = (e.target as HTMLSelectElement).value;
+          updateTabs();
           renderTopPostContent();
         });
       }
@@ -1937,7 +2033,12 @@ export class UserAnalyticsApp {
       // Tab Event Delegation
       topPostContainer.addEventListener('click', (e) => {
         if ((e.target as HTMLElement).classList.contains('top-post-tab')) {
-          currentTab = (e.target as HTMLElement).getAttribute('data-mode') ?? 'sfw';
+          const mode = (e.target as HTMLElement).getAttribute('data-mode') ?? '';
+          if (currentWidgetMode === 'most') {
+            currentMostTab = mode || 'g';
+          } else {
+            currentSfwTab = mode || 'sfw';
+          }
           updateTabs();
           renderTopPostContent();
         }
@@ -1947,7 +2048,7 @@ export class UserAnalyticsApp {
       topStatsRow.appendChild(topPostContainer);
       dashboardDiv.appendChild(topStatsRow);
 
-      updateTabs(); // Initialize tabs style (default: sfw)
+      updateTabs(); // Initialize tabs style (default: recent → SFW active)
       renderTopPostContent();
       content.appendChild(dashboardDiv);
 
@@ -2066,16 +2167,24 @@ export class UserAnalyticsApp {
        * Applies NSFW setting updates to widgets without full re-render.
        */
       applyNsfwUpdate = async () => {
-        // 1. Top Post Button
-        const nsfwBtn = document.getElementById('analytics-top-nsfw-btn');
-        if (nsfwBtn) {
-          nsfwBtn.style.display = isNsfwEnabled ? 'inline-block' : 'none';
+        // 1. Show/hide NSFW-only tabs (Q, E in Most Popular; NSFW in Recent/Random)
+        for (const id of ['analytics-top-q-btn', 'analytics-top-e-btn', 'analytics-top-nsfw-btn']) {
+          const btn = document.getElementById(id);
+          if (btn) btn.style.display = isNsfwEnabled ? 'inline-block' : 'none';
         }
 
-        // 2. Tab Switch
-        if (!isNsfwEnabled && currentTab === 'nsfw') {
-          const sfwBtn = topPostContainer.querySelector('button[data-mode="sfw"]') as HTMLElement;
-          if (sfwBtn) sfwBtn.click();
+        // 2. Tab Switch: if NSFW disabled and on Q/E tab (Most Popular), switch to G
+        if (!isNsfwEnabled && (currentMostTab === 'q' || currentMostTab === 'e')) {
+          currentMostTab = 'g';
+          updateTabs();
+          if (currentWidgetMode === 'most') renderTopPostContent();
+        }
+
+        // 3. Tab Switch: if NSFW disabled and on NSFW tab (Recent/Random), switch to SFW
+        if (!isNsfwEnabled && currentSfwTab === 'nsfw') {
+          currentSfwTab = 'sfw';
+          updateTabs();
+          if (currentWidgetMode !== 'most') renderTopPostContent();
         }
 
         // 3. Milestones
@@ -2087,8 +2196,8 @@ export class UserAnalyticsApp {
 
       // 4. Monthly Activity Chart
       let minDate = null;
-      if (promotions.length > 0) {
-        minDate = promotions[0].date;
+      if (levelChanges.length > 0) {
+        minDate = levelChanges[0].date;
       }
 
       const monthly = await (new AnalyticsDataManager(this.db)).getMonthlyStats(this.context.targetUser, minDate);
@@ -2222,13 +2331,13 @@ export class UserAnalyticsApp {
           }
         });
 
-        // 4. Promotions Overlay
-        if (promotions && promotions.length > 0) {
+        // 4. Level Change Overlay
+        if (levelChanges && levelChanges.length > 0) {
           const [sY, sM] = monthly[0].date.split('-').map(Number);
-          promotions.forEach(p => {
-            const pY = p.date.getFullYear();
-            const pM = p.date.getMonth() + 1;
-            const pD = p.date.getDate();
+          levelChanges.forEach(lc => {
+            const pY = lc.date.getFullYear();
+            const pM = lc.date.getMonth() + 1;
+            const pD = lc.date.getDate();
             const monthDiff = (pY - sY) * 12 + (pM - sM);
             const daysInMonth = new Date(pY, pM, 0).getDate();
             const frac = (pD - 1) / daysInMonth;
@@ -2241,7 +2350,7 @@ export class UserAnalyticsApp {
               <g class="promotion-marker">
                  <line x1="${x}" y1="${padTop}" x2="${x}" y2="${vHeight - padBottom}" stroke="#ff5722" stroke-width="2" stroke-dasharray="4 2"></line>
                  <rect x="${x - 4}" y="${padTop}" width="8" height="${vHeight - padBottom - padTop}" fill="transparent">
-                     <title>${p.date.toLocaleDateString()}: Promoted to ${p.role}</title>
+                     <title>${lc.date.toLocaleDateString()}: ${lc.fromLevel} → ${lc.toLevel}</title>
                  </rect>
               </g>
            `;
@@ -2818,9 +2927,9 @@ export class UserAnalyticsApp {
             addOverlayLine(jd, '#00E676', `${jd.toLocaleDateString()}: Joined Danbooru`, true, '2px');
           }
 
-          if (promotions) {
-            promotions.forEach(p => {
-              addOverlayLine(p.date, '#ff5722', `${p.date.toLocaleDateString()}: ${p.role}`, true);
+          if (levelChanges) {
+            levelChanges.forEach(lc => {
+              addOverlayLine(lc.date, '#ff5722', `${lc.date.toLocaleDateString()}: ${lc.fromLevel} → ${lc.toLevel}`, true);
             });
           }
 
