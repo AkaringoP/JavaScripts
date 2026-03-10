@@ -39,6 +39,20 @@ export interface PromotionEvent {
   rawBody: string;
 }
 
+/** A user level change event parsed from mod_actions. */
+export interface LevelChangeEvent {
+  date: Date;
+  fromLevel: string;
+  toLevel: string;
+  isPromotion: boolean;
+}
+
+/** A lightweight milestone entry for the timeline (date only, no thumbnail). */
+export interface TimelineMilestone {
+  index: number;
+  date: Date;
+}
+
 /**
  * AnalyticsDataManager: Handles heavy data fetching for full history.
  */
@@ -102,6 +116,7 @@ export class AnalyticsDataManager extends DataManager {
           delay *= 2;
           continue;
         }
+        if (resp.status === 422) return ''; // Unprocessable query — no point retrying
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -905,99 +920,97 @@ export class AnalyticsDataManager extends DataManager {
   }
 
   /**
-   * Fetches Top SFW and NSFW posts in parallel using API.
+   * Fetches top posts per rating (G/S/Q/E) in parallel using API.
    * @param {!Object} userInfo The user's info object.
-   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW top posts.
+   * @return {!Promise<{g: ?Object, s: ?Object, q: ?Object, e: ?Object}>} Top post per rating.
    */
-  async getTopPostsByType(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
-    if (!userInfo.name) return { sfw: null, nsfw: null };
+  async getTopPostsByType(userInfo: TargetUser): Promise<{g: any | null; s: any | null; q: any | null; e: any | null}> {
+    if (!userInfo.name) return { g: null, s: null, q: null, e: null };
 
     // Helper for fetching 1 top post
-    const fetchTop = async (ratingTags: string, extraQuery: string = ''): Promise<any | null> => {
+    const fetchTop = async (ratingTag: string, extraQuery: string = ''): Promise<any | null> => {
       try {
         // Use tags=... order:score rating:x limit=1
         const normalizedName = userInfo.name.replace(/ /g, '_');
-        const query = `user:${normalizedName} order:score rating:${ratingTags} ${extraQuery}`;
+        const query = `user:${normalizedName} order:score rating:${ratingTag} ${extraQuery}`;
         const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
         const resp = await this.rateLimiter.fetch(url).then(r => r.json());
         if (Array.isArray(resp) && resp.length > 0) {
           return resp[0];
         }
       } catch (e: unknown) {
-        console.warn(`[Danbooru Grass] Failed to fetch top post for ${ratingTags}`, e);
+        console.warn(`[Danbooru Grass] Failed to fetch top post for rating:${ratingTag}`, e);
       }
       return null;
     };
 
-    const [sfw, nsfw] = await Promise.all([
-      fetchTop('g,s'), // General, Sensitive
-      fetchTop('q,e')  // Questionable, Explicit
+    const [g, s, q, e] = await Promise.all([
+      fetchTop('g'),
+      fetchTop('s'),
+      fetchTop('q'),
+      fetchTop('e'),
     ]);
 
-    return { sfw, nsfw };
+    return { g, s, q, e };
   }
 
   /**
-   * Fetches Recent Popular (age < 1w) SFW and NSFW posts.
+   * Fetches Recent Popular (age < 1w) posts for SFW and NSFW in parallel.
    * @param {!Object} userInfo The user's info object.
-   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW recent posts.
+   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Recent popular post per SFW/NSFW.
    */
   async getRecentPopularPosts(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
     if (!userInfo.name) return { sfw: null, nsfw: null };
 
-    // Reuse logic but add age:<1w
-    const fetchTop = async (ratingTags: string): Promise<any | null> => {
+    const fetchTop = async (ratingTag: string): Promise<any | null> => {
       try {
         const normalizedName = userInfo.name.replace(/ /g, '_');
-        const query = `user:${normalizedName} order:score rating:${ratingTags} age:<1w`;
+        const query = `user:${normalizedName} order:score ${ratingTag} age:<1w`;
         const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
         const resp = await this.rateLimiter.fetch(url).then(r => r.json());
         if (Array.isArray(resp) && resp.length > 0) {
           return resp[0];
         }
       } catch (e: unknown) {
-        console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTags}`, e);
+        console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTag}`, e);
       }
       return null;
     };
 
     const [sfw, nsfw] = await Promise.all([
-      fetchTop('g,s'),
-      fetchTop('q,e')
+      fetchTop('is:sfw'),
+      fetchTop('is:nsfw'),
     ]);
 
     return { sfw, nsfw };
   }
 
   /**
-   * Fetches Random SFW and NSFW posts.
+   * Fetches Random posts for SFW and NSFW in parallel.
    * @param {!Object} userInfo The user's info object.
-   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Object containing SFW and NSFW random posts.
+   * @return {!Promise<{sfw: ?Object, nsfw: ?Object}>} Random post per SFW/NSFW.
    */
   async getRandomPosts(userInfo: TargetUser): Promise<{sfw: any | null; nsfw: any | null}> {
     if (!userInfo.name) return { sfw: null, nsfw: null };
 
-    const fetchRandom = async (ratingTags: string): Promise<any | null> => {
+    const fetchRandom = async (ratingTag: string): Promise<any | null> => {
       try {
         const normalizedName = userInfo.name.replace(/ /g, '_');
-        // Use /posts/random.json?tags=...
-        const query = `user:${normalizedName} rating:${ratingTags}`;
+        const query = `user:${normalizedName} ${ratingTag}`;
         const url = `/posts/random.json?tags=${encodeURIComponent(query)}&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
         const resp = await this.rateLimiter.fetch(url).then(r => r.json());
-        // /posts/random.json returns a single object, not array (usually)
-        // But sometimes it might be empty object or error?
         if (resp && resp.id) {
           return resp;
         }
       } catch (e: unknown) {
-        console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTags}`, e);
+        console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTag}`, e);
       }
       return null;
     };
 
     const [sfw, nsfw] = await Promise.all([
-      fetchRandom('g,s'),
-      fetchRandom('q,e')
+      fetchRandom('is:sfw'),
+      fetchRandom('is:nsfw'),
     ]);
 
     return { sfw, nsfw };
@@ -1127,6 +1140,69 @@ export class AnalyticsDataManager extends DataManager {
       console.error('[Danbooru Grass] Failed to fetch promotions', e);
       return [];
     }
+  }
+
+  /**
+   * Fetches user level change history from mod_actions API.
+   * Returns promoted/demoted events with fromLevel and toLevel.
+   * @param {!Object} userInfo The user's info object.
+   * @return {!Promise<!Array<!LevelChangeEvent>>}
+   */
+  async getLevelChangeHistory(userInfo: TargetUser): Promise<LevelChangeEvent[]> {
+    const userId = userInfo.id;
+    if (!userId) return [];
+    try {
+      const url = `/mod_actions.json?search[category]=user_level_change&search[subject_type]=User&search[subject_id]=${encodeURIComponent(userId)}&search[order]=created_at_asc&limit=100`;
+      const actions = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (!Array.isArray(actions)) return [];
+
+      return actions.map((a: any) => {
+        const match = a.description?.match(/(?:promoted|demoted).+from\s+(\S+)\s+to\s+(\S+)/i);
+        if (!match) return null;
+        const fromLevel = match[1];
+        const toLevel = match[2];
+        const isPromotion = /promoted/i.test(a.description);
+        return {date: new Date(a.created_at), fromLevel, toLevel, isPromotion};
+      }).filter(Boolean) as LevelChangeEvent[];
+    } catch (e: unknown) {
+      console.warn('[Danbooru Grass] Failed to fetch level change history', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches milestone posts for the timeline (100th, 1000th, 10000th, N*10000th).
+   * Lightweight — no thumbnail fetch, date only.
+   * @param {!Object} userInfo The user's info object.
+   * @return {!Promise<!Array<!TimelineMilestone>>}
+   */
+  async getTimelineMilestones(userInfo: TargetUser): Promise<TimelineMilestone[]> {
+    const uploaderId = parseInt(userInfo.id ?? '0');
+    if (!uploaderId) return [];
+
+    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+    if (total === 0) return [];
+
+    const targets: number[] = [];
+    if (total >= 100) targets.push(100);
+    if (total >= 1000) targets.push(1000);
+    for (let i = 10000; i <= total; i += 10000) targets.push(i);
+
+    if (targets.length === 0) return [];
+
+    const matches: ApiItem[] = await this.db.posts
+      .where('[uploader_id+no]').anyOf(targets.map(no => [uploaderId, no]))
+      .toArray();
+
+    const map = new Map(matches.map(p => [p.no, p]));
+
+    return targets
+      .map(t => {
+        const p = map.get(t);
+        if (!p || !p.created_at) return null;
+        return {index: t, date: new Date(p.created_at)};
+      })
+      .filter(Boolean) as TimelineMilestone[];
   }
 
   /**
@@ -1355,8 +1431,13 @@ export class AnalyticsDataManager extends DataManager {
       if (!tagPart) return;
 
       // Construct Query
-      // Default: user:name tag order:score rating:g
-      let queryTags = `user:${normalizedName} ${tagPart} order:score rating:g`;
+      // fav_copyright: search from user's favorites; others: from user's uploads
+      let queryTags: string;
+      if (cacheKey === 'fav_copyright_dist') {
+        queryTags = `fav:${normalizedName} ${tagPart} rating:g order:score`;
+      } else {
+        queryTags = `user:${normalizedName} ${tagPart} order:score rating:g`;
+      }
 
       // Special cases if any? No, mostly standard.
 
