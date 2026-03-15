@@ -548,7 +548,8 @@ export class GraphRenderer {
     userInfo: TargetUser | string,
     availableYears: number[],
     onYearChange: (year: number) => void,
-    onRefresh: () => void
+    onRefresh: () => void,
+    skipScroll = false
   ): Promise<void> {
     // Handle new data format { daily, hourly } or legacy map
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1530,7 +1531,7 @@ export class GraphRenderer {
 
           // --- Auto-Scroll to Current Date (Refined) ---
           const scrollContainer = document.getElementById('cal-heatmap-scroll');
-          if (scrollContainer) {
+          if (scrollContainer && !skipScroll) {
             if (year === new Date().getFullYear()) {
               const currentMonth = new Date().getMonth() + 1; // 1-12
               // Find the Nth .ch-domain (Month) element

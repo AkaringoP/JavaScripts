@@ -81,7 +81,7 @@ export class GrassApp {
 
       renderer.setLoading(true);
       try {
-        // Initial render for layout
+        // Initial render for layout (skeleton — scroll deferred to final render)
         await renderer.renderGraph(
           {},
           currentYear,
@@ -93,7 +93,8 @@ export class GrassApp {
             renderer.setLoading(true);
             await dataManager.clearCache(currentMetric, targetUser);
             updateView();
-          }
+          },
+          /* skipScroll */ true
         );
 
         renderer.updateControls(

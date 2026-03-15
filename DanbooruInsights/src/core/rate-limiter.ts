@@ -24,8 +24,6 @@ export class RateLimitedFetch {
   requestCounter: number;
   reportQueue: QueueTask[];
   isProcessingReport: boolean;
-  repostQueue: QueueTask[];
-  isProcessingReposts: boolean;
 
   /**
    * @param {number} maxConcurrency Maximum concurrent requests (for general queue).
@@ -54,9 +52,6 @@ export class RateLimitedFetch {
     this.reportQueue = [];
     this.isProcessingReport = false;
 
-    // Dedicated Worker for Reposts
-    this.repostQueue = [];
-    this.isProcessingReposts = false;
   }
 
   getRequestCount(): number {
@@ -72,23 +67,7 @@ export class RateLimitedFetch {
       });
     }
 
-    // 2. Intercept /reposts/ requests (Strict 1 req / 3s)
-    if (url.includes('/related_tag.json') || url.includes('/reposts/')) {
-      // Note: related_tag.json usage in 'getFavCopyrightDistribution' was effectively a repost check or similar heavy op?
-      // Actually user said "/reposts/posts.json". Let's stick to that strictly?
-      // But let's check if 'related_tag' needs similar treatment. The user specific request was for "/reposts/posts.json".
-      // Let's match strictly "reposts" or maybe "related_tag" if it's heavy.
-      // For now, adhere to user request: /reposts/posts.json
-    }
-
-    if (url.includes('/reposts/')) {
-      return new Promise((resolve, reject) => {
-        this.repostQueue.push({ url, options, resolve, reject });
-        this.processRepostQueue();
-      });
-    }
-
-    // 3. General Queue (Token Bucket)
+    // 2. General Queue (Token Bucket)
     return new Promise((resolve, reject) => {
       this.queue.push({ url, options, resolve, reject });
       this.processQueue();
@@ -117,31 +96,6 @@ export class RateLimitedFetch {
       await new Promise(r => setTimeout(r, 3000));
       this.isProcessingReport = false;
       this.processReportQueue();
-    }
-  }
-
-  async processRepostQueue(): Promise<void> {
-    if (this.isProcessingReposts || this.repostQueue.length === 0) return;
-
-    this.isProcessingReposts = true;
-    const task = this.repostQueue.shift();
-    if (!task) {
-      this.isProcessingReposts = false;
-      return;
-    }
-    this.requestCounter++;
-
-    try {
-      const response = await fetch(task.url, task.options);
-      task.resolve(response);
-    } catch (e: unknown) {
-      console.error(`[RateLimitedFetch] Repost Failed: ${task.url}`, e);
-      task.reject(e);
-    } finally {
-      // Strict 3s cooldown for Reposts as requested
-      await new Promise(r => setTimeout(r, 3000));
-      this.isProcessingReposts = false;
-      this.processRepostQueue();
     }
   }
 

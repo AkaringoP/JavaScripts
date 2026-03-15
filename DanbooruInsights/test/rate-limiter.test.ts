@@ -55,15 +55,6 @@ describe('RateLimitedFetch', () => {
       expect(rl.getRequestCount()).toBe(1);
     });
 
-    it('routes /reposts/ URLs to the repost queue', async () => {
-      const rl = new RateLimitedFetch(6, [0, 0], 6);
-      const p = rl.fetch('/reposts/posts.json');
-      await vi.runAllTimersAsync();
-      await p;
-      expect(global.fetch).toHaveBeenCalledWith('/reposts/posts.json', undefined);
-      expect(rl.getRequestCount()).toBe(1);
-    });
-
     it('routes general URLs to the token bucket queue', async () => {
       const rl = new RateLimitedFetch(6, [0, 0], 6);
       const p = rl.fetch('/posts.json');

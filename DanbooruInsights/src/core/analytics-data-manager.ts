@@ -1807,6 +1807,114 @@ export class AnalyticsDataManager extends DataManager {
   }
 
   /**
+   * Quickly syncs all posts for small users (total ≤ 1200) using sequential
+   * cursor-based pagination. Simpler and faster than the full worker-pool approach.
+   * @param {TargetUser} userInfo The user's info object.
+   * @param {Function=} onProgress Optional progress callback (current, total, message).
+   * @return {Promise<void>}
+   */
+  async quickSyncAllPosts(userInfo: TargetUser, onProgress?: (current: number, total: number, msg?: string) => void): Promise<void> {
+    if (!userInfo.id || !userInfo.name) return;
+
+    if (AnalyticsDataManager.isGlobalSyncing) {
+      console.warn('[Danbooru Grass] Sync already in progress.');
+      return;
+    }
+    AnalyticsDataManager.isGlobalSyncing = true;
+    AnalyticsDataManager.syncProgress = {current: 0, total: 0, message: ''};
+    AnalyticsDataManager.onProgressCallback = onProgress || null;
+
+    const reportProgress = (c: number, t: number, msg: string = '') => {
+      AnalyticsDataManager.syncProgress = {current: c, total: t, message: msg};
+      if (AnalyticsDataManager.onProgressCallback) {
+        AnalyticsDataManager.onProgressCallback(c, t, msg);
+      }
+      if (onProgress) onProgress(c, t, msg);
+    };
+
+    try {
+      const uploaderId = parseInt(userInfo.id ?? '0');
+      const normalizedName = userInfo.name.replace(/ /g, '_');
+
+      // 1. Get total count
+      const total = await this.getTotalPostCount(userInfo);
+      reportProgress(0, total, 'Fetching posts...');
+
+      // 2. Clear existing posts for a clean re-fetch
+      await this.db.posts.where('uploader_id').equals(uploaderId).delete();
+
+      // 3. Sequential cursor-based fetch (ascending by ID, 200 per batch)
+      const limit = 200;
+      let page = 'a0';
+      let hasMore = true;
+      let no = 0;
+
+      while (hasMore) {
+        const params = new URLSearchParams({
+          tags: `user:${normalizedName}`,
+          limit: String(limit),
+          page,
+          only: 'id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url'
+        } as any);
+        const url = `/posts.json?${params.toString()}`;
+
+        reportProgress(no, total, `Fetching posts (${no}/${total})...`);
+
+        let batch: ApiItem[] = await this.rateLimiter.fetch(url).then((r: Response) => r.json());
+
+        if (!Array.isArray(batch) || batch.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        // Ensure ascending order (oldest first)
+        if (batch.length > 1 && batch[0].id > batch[batch.length - 1].id) {
+          batch.reverse();
+        }
+
+        // Store batch with sequential no values
+        const bulkData = batch.map((p: ApiItem) => ({
+          id: p.id,
+          uploader_id: p.uploader_id,
+          created_at: p.created_at,
+          score: p.score,
+          rating: p.rating,
+          tag_count_general: p.tag_count_general,
+          variants: p.variants,
+          preview_file_url: p.preview_file_url,
+          no: ++no
+        }));
+
+        await this.db.posts.bulkPut(bulkData);
+        reportProgress(no, total);
+
+        if (batch.length < limit) {
+          hasMore = false;
+        } else {
+          page = `a${batch[batch.length - 1].id}`;
+        }
+      }
+
+      // 4. Save last sync timestamp
+      const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+      localStorage.setItem(lastSyncKey, new Date().toISOString());
+
+      // 5. Cleanup stale data for other users
+      await this.cleanupStaleData(userInfo.id);
+
+      // 6. Signal UI: Processing Stats
+      reportProgress(no, no, 'PREPARING');
+
+      // 7. Refresh all stats (full sync)
+      await this.refreshAllStats(userInfo, true);
+
+    } finally {
+      AnalyticsDataManager.isGlobalSyncing = false;
+      AnalyticsDataManager.onProgressCallback = null;
+    }
+  }
+
+  /**
    * Cleans up data for other users if they haven't been synced in 14 days.
    * @param {number|string} currentUserId - The ID of the currently active user (to skip).
    */

@@ -234,7 +234,13 @@ export class UserAnalyticsApp {
     };
 
     try {
-      await this.dataManager.syncAllPosts(this.context.targetUser, onProgress);
+      const MAX_QUICK_SYNC_POSTS = 1200;
+      const syncTotal = await this.dataManager.getTotalPostCount(this.context.targetUser);
+      if (syncTotal > 0 && syncTotal <= MAX_QUICK_SYNC_POSTS) {
+        await this.dataManager.quickSyncAllPosts(this.context.targetUser, onProgress);
+      } else {
+        await this.dataManager.syncAllPosts(this.context.targetUser, onProgress);
+      }
 
       if (animInterval) clearInterval(animInterval);
 
@@ -696,6 +702,49 @@ export class UserAnalyticsApp {
            <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
         </div>
       `;
+
+      // Quick Sync Pre-Check: If total posts ≤ MAX_QUICK_SYNC_POSTS and DB is incomplete,
+      // fetch all posts inline (no sync UI required) before rendering the dashboard.
+      const MAX_QUICK_SYNC_POSTS = 1200;
+      {
+        const [preStats, preTotal] = await Promise.all([
+          this.dataManager.getSyncStats(this.context.targetUser),
+          this.dataManager.getTotalPostCount(this.context.targetUser)
+        ]);
+
+        if (preTotal > 0 && preTotal <= MAX_QUICK_SYNC_POSTS && preStats.count < preTotal) {
+          content.innerHTML = `
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+              <div class="di-spinner"></div>
+              <div style="font-size:1.2em; font-weight:600; margin-top:20px;">Syncing Data...</div>
+              <div id="analytics-quick-sync-msg" style="font-size:0.9em; color:#888; margin-top:10px;">Fetching posts...</div>
+              <div style="width:300px; height:8px; background:#e1e4e8; border-radius:4px; overflow:hidden; margin-top:15px;">
+                <div id="analytics-quick-sync-bar" style="width:0%; height:100%; background:#2da44e; transition:width 0.2s;"></div>
+              </div>
+            </div>
+          `;
+
+          const qBar = content.querySelector('#analytics-quick-sync-bar') as HTMLElement;
+          const qMsg = content.querySelector('#analytics-quick-sync-msg') as HTMLElement;
+
+          await this.dataManager.quickSyncAllPosts(this.context.targetUser, (c: number, t: number, msg?: string) => {
+            if (qBar && t > 0) qBar.style.width = `${Math.round((c / t) * 100)}%`;
+            if (qMsg && msg && msg !== 'PREPARING') qMsg.textContent = msg;
+          });
+
+          this.isFullySynced = true;
+          this.updateHeaderStatus();
+
+          // Restore loading spinner before heavy data fetch
+          content.innerHTML = `
+            <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+               <div class="di-spinner"></div>
+               <div style="font-size:1.2em; font-weight:600; margin-top: 20px;">Generating Report...</div>
+               <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
+            </div>
+          `;
+        }
+      }
 
       // Pre-fetch all data!
       const dashboardData = await this.fetchDashboardData();

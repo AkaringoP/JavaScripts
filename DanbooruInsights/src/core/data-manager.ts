@@ -577,7 +577,7 @@ export class DataManager {
     let page = 1;
 
     // [Modified] Dynamic Batch Size for Approvals
-    const isApprovals = endpoint.includes('/post_events.json');
+    const isApprovals = endpoint.includes('/post_approvals.json');
     const BATCH_SIZE = isApprovals ? 1 : 5;
     const DELAY_BETWEEN_BATCHES = 150;
 
