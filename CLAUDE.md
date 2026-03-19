@@ -12,6 +12,7 @@ GitHub repository: `AkaringoP/JavaScripts`
 | LocateInGallery | JS | None (single file) | Gallery page location finder |
 | MobileNoteAssist | JS | None (single file) | Mobile note assistant |
 | NextRandomPost | JS | None (single file) | Random post navigation |
+| PostTimeline | JS | None (single file) | Post timeline (source publish date, asset upload, post creation) |
 
 ## Common Environment
 - All scripts are Tampermonkey userscripts
