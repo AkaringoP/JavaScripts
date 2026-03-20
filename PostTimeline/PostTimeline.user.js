@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Danbooru Post Timeline
 // @namespace    https://github.com/AkaringoP
-// @version      1.1
-// @description  Shows when an illustration was published on its source platform (Pixiv, X/Twitter, Bluesky) and when it was first uploaded to Danbooru as a media asset.
+// @version      1.2
+// @description  Shows when an illustration was published on its source platform (Pixiv, X/Twitter, Bluesky, Fanbox, Fantia, Nico Seiga, Pawoo, ArtStation) and when it was first uploaded to Danbooru as a media asset.
 // @author       AkaringoP
 // @license      MIT
 // @match        *://danbooru.donmai.us/posts/*
@@ -10,8 +10,14 @@
 // @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js
 // @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js
 // @grant        GM_xmlhttpRequest
+// @grant        GM_cookie.list
 // @connect      pixiv.net
 // @connect      public.api.bsky.app
+// @connect      fanbox.cc
+// @connect      fantia.jp
+// @connect      nicovideo.jp
+// @connect      pawoo.net
+// @connect      www.artstation.com
 // @run-at       document-end
 // ==/UserScript==
 
@@ -34,6 +40,30 @@
 
   /** @const {bigint} Twitter Snowflake epoch (2010-11-04T01:42:54.657Z). */
   const TWITTER_EPOCH = 1288834974657n;
+
+  /**
+   * Whether GM_cookie.list is available in the current userscript manager.
+   *
+   * Modern browsers block third-party cookies by default (Chrome Privacy
+   * Sandbox, Firefox ETP, Safari ITP). GM_xmlhttpRequest's automatic cookie
+   * forwarding is affected by these restrictions when the target domain
+   * (e.g. api.fanbox.cc) differs from the current page (danbooru.donmai.us).
+   * GM_cookie.list bypasses this by reading cookies from the browser's
+   * unpartitioned cookie store and attaching them manually as a Cookie header.
+   *
+   * Browser compatibility:
+   *   Chrome/Edge + Tampermonkey  — GM_cookie supported → "login required" shown
+   *   Firefox + Tampermonkey      — GM_cookie supported → "login required" shown
+   *   Safari + Tampermonkey       — GM_cookie NOT supported, Safari ITP also
+   *                                  blocks third-party cookies → logging in
+   *                                  cannot fix the issue, so "unavailable" is
+   *                                  shown instead to avoid misleading the user
+   *   Violentmonkey / Greasemonkey — GM_cookie NOT supported → "unavailable"
+   *
+   * @const {boolean}
+   */
+  const HAS_GM_COOKIE =
+    typeof GM_cookie !== 'undefined' && typeof GM_cookie.list === 'function';
 
   /** @const {string} CSS for custom tooltip component and delta color classes. */
   const GLOBAL_CSS = `
@@ -222,7 +252,7 @@
 
   /**
    * Detects the source platform and extracts relevant identifiers.
-   * Supported platforms: Pixiv, X/Twitter, Bluesky.
+   * Supported: Pixiv, X/Twitter, Bluesky, Fantia, Seiga, ArtStation, Pawoo, Fanbox.
    * @return {{type: string, label: string, [key: string]: string}|null}
    */
   function detectSource() {
@@ -250,6 +280,50 @@
         type: 'bluesky', label: 'Bluesky',
         handle: bskyMatch[1], rkey: bskyMatch[2],
       };
+    }
+
+    // Fantia
+    const fantiaMatch = sourceUrl.match(/\/\/(?:www\.)?fantia\.jp\/posts\/(\d+)/i);
+    if (fantiaMatch) {
+      return {type: 'fantia', label: 'Fantia', id: fantiaMatch[1]};
+    }
+
+    // Nico Nico Seiga (CDN URLs like lohas.nicoseiga.jp are not supported)
+    const seigaMatch = sourceUrl.match(
+      /\/\/seiga\.nicovideo\.jp\/seiga\/im(\d+)/i
+    );
+    if (seigaMatch) {
+      return {type: 'seiga', label: 'Seiga', id: seigaMatch[1]};
+    }
+
+    // ArtStation
+    // Pattern 1: www.artstation.com/artwork/{hash}
+    // Pattern 2: {username}.artstation.com/projects/{hash}
+    const artStationMatch = sourceUrl.match(
+      /\/\/(?:www\.artstation\.com\/artwork|(?!www\.)[^/]+\.artstation\.com\/projects)\/([a-z0-9]+)/i
+    );
+    if (artStationMatch) {
+      return {type: 'artstation', label: 'ArtStation', id: artStationMatch[1]};
+    }
+
+    // Pawoo (Mastodon instance)
+    const pawooMatch = sourceUrl.match(
+      /\/\/pawoo\.net\/@[^/]+\/(\d+)/i
+    );
+    if (pawooMatch) {
+      return {type: 'pawoo', label: 'Pawoo', id: pawooMatch[1]};
+    }
+
+    // Fanbox (must come after Pixiv — fanbox.cc is unrelated to pixiv.net)
+    // Pattern 1: {creator}.fanbox.cc/posts/{id}
+    // Pattern 2: www.fanbox.cc/@{creator}/posts/{id}
+    // Pattern 3: downloads.fanbox.cc/images/post/{id}/... (CDN)
+    const fanboxMatch = sourceUrl.match(
+      /fanbox\.cc\/(?:@[^/]+\/)?posts\/(\d+)|downloads\.fanbox\.cc\/images\/post\/(\d+)/i
+    );
+    if (fanboxMatch) {
+      const postId = fanboxMatch[1] ?? fanboxMatch[2];
+      return {type: 'fanbox', label: 'Fanbox', id: postId};
     }
 
     return null;
@@ -403,20 +477,339 @@
   }
 
   /**
+   * Reads cookies for the given URL via GM_cookie.list and returns them as a
+   * Cookie header string. Bypasses third-party cookie restrictions in modern
+   * browsers (Chrome Privacy Sandbox, Firefox ETP).
+   * Returns empty string when GM_cookie is unavailable (e.g. Safari).
+   * @param {string} url - The URL whose cookies to read.
+   * @return {Promise<string>} Cookie header value, or empty string on failure.
+   */
+  function readCookies(url) {
+    if (typeof GM_cookie === 'undefined' || !GM_cookie.list) {
+      return Promise.resolve('');
+    }
+    return new Promise((resolve) => {
+      GM_cookie.list({url}, (cookies, error) => {
+        if (error || !cookies?.length) {
+          resolve('');
+          return;
+        }
+        resolve(cookies.map((c) => `${c.name}=${c.value}`).join('; '));
+      });
+    });
+  }
+
+  /**
+   * Fetches the Fanbox post's publishedDatetime via the Fanbox API.
+   * Explicitly reads cookies via GM_cookie.list to bypass third-party cookie
+   * restrictions in modern browsers.
+   * @param {string} postId
+   * @return {Promise<SourceDateResult>}
+   */
+  async function fetchFanboxDate(postId) {
+    const cookieStr = await readCookies('https://www.fanbox.cc');
+
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://api.fanbox.cc/post.info?postId=${postId}`,
+        headers: {
+          'Origin': 'https://www.fanbox.cc',
+          'Referer': 'https://www.fanbox.cc/',
+          ...(cookieStr ? {'Cookie': cookieStr} : {}),
+        },
+        timeout: 10000,
+        onload(res) {
+          if (res.status === 400 || res.status === 401 || res.status === 403) {
+            if (HAS_GM_COOKIE) {
+              resolve({
+                date: null,
+                loginRequired: true,
+                loginUrl: 'https://www.fanbox.cc/login',
+              });
+            } else {
+              resolve({date: null});
+            }
+            return;
+          }
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] Fanbox API returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve({date: data.body?.publishedDatetime ?? null});
+          } catch {
+            resolve({date: null});
+          }
+        },
+        onerror() {
+          console.warn('[PostTimeline] Fanbox API request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] Fanbox API request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
+   * Parses a Nico Nico Seiga date string into an ISO 8601 string.
+   * Input format: "2024年03月19日 18:30:17" (timezone fixed at +09:00)
+   * @param {string} dateStr
+   * @return {string|null}
+   */
+  function parseSeigaDate(dateStr) {
+    const m = dateStr.match(
+      /(\d{4})年(\d{2})月(\d{2})日\s+(\d{2}):(\d{2}):(\d{2})/
+    );
+    if (!m) return null;
+    const [, year, month, day, hh, mm, ss] = m;
+    return `${year}-${month}-${day}T${hh}:${mm}:${ss}+09:00`;
+  }
+
+  /**
+   * Fetches the Nico Nico Seiga illustration's upload date by scraping the HTML page.
+   * Explicitly reads cookies via GM_cookie.list to bypass third-party cookie
+   * restrictions in modern browsers.
+   * @param {string} illustId
+   * @return {Promise<SourceDateResult>}
+   */
+  async function fetchSeigaDate(illustId) {
+    const cookieStr = await readCookies('https://seiga.nicovideo.jp');
+
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://seiga.nicovideo.jp/seiga/im${illustId}`,
+        ...(cookieStr ? {headers: {'Cookie': cookieStr}} : {}),
+        timeout: 10000,
+        onload(res) {
+          // Redirect to login page indicates auth required.
+          if (res.status === 401 || res.status === 403 ||
+              (res.finalUrl && res.finalUrl.includes('nicovideo.jp/login'))) {
+            if (HAS_GM_COOKIE) {
+              resolve({
+                date: null,
+                loginRequired: true,
+                loginUrl: 'https://account.nicovideo.jp/login',
+              });
+            } else {
+              resolve({date: null});
+            }
+            return;
+          }
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] Seiga page returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          // Extract date from <span class="created">2024年03月19日 18:30:17</span>
+          const createdMatch = res.responseText.match(
+            /<span[^>]+class="created"[^>]*>([^<]+)<\/span>/
+          );
+          if (!createdMatch) {
+            // Page loaded but no date found — likely redirected to login in body.
+            if (HAS_GM_COOKIE &&
+                (res.responseText.includes('nicovideo.jp/login') ||
+                 res.responseText.includes('account.nicovideo.jp'))) {
+              resolve({
+                date: null,
+                loginRequired: true,
+                loginUrl: 'https://account.nicovideo.jp/login',
+              });
+            } else {
+              resolve({date: null});
+            }
+            return;
+          }
+          resolve({date: parseSeigaDate(createdMatch[1].trim())});
+        },
+        onerror() {
+          console.warn('[PostTimeline] Seiga page request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] Seiga page request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
+   * Fetches an ArtStation project's creation date via the public JSON API.
+   * No authentication required.
+   * @param {string} hash - ArtStation project hash (alphanumeric).
+   * @return {Promise<SourceDateResult>}
+   */
+  function fetchArtStationDate(hash) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://www.artstation.com/projects/${hash}.json`,
+        timeout: 10000,
+        onload(res) {
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] ArtStation API returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve({date: data.published_at ?? null});
+          } catch {
+            resolve({date: null});
+          }
+        },
+        onerror() {
+          console.warn('[PostTimeline] ArtStation API request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] ArtStation API request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
+   * Fetches a Pawoo (Mastodon) status's creation date via the public API.
+   * No authentication required for public posts.
+   * @param {string} statusId
+   * @return {Promise<SourceDateResult>}
+   */
+  function fetchPawooDate(statusId) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://pawoo.net/api/v1/statuses/${statusId}`,
+        timeout: 10000,
+        onload(res) {
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] Pawoo API returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          try {
+            const data = JSON.parse(res.responseText);
+            resolve({date: data.created_at ?? null});
+          } catch {
+            resolve({date: null});
+          }
+        },
+        onerror() {
+          console.warn('[PostTimeline] Pawoo API request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] Pawoo API request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
+   * Fetches the Fantia post's posted_at date via the Fantia API.
+   * Explicitly reads cookies via GM_cookie.list to bypass third-party cookie
+   * restrictions in modern browsers.
+   * @param {string} postId
+   * @return {Promise<SourceDateResult>}
+   */
+  async function fetchFantiaDate(postId) {
+    const cookieStr = await readCookies('https://fantia.jp');
+
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://fantia.jp/api/v1/posts/${postId}`,
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          ...(cookieStr ? {'Cookie': cookieStr} : {}),
+        },
+        timeout: 10000,
+        onload(res) {
+          if (res.status === 401 || res.status === 403) {
+            if (HAS_GM_COOKIE) {
+              resolve({
+                date: null,
+                loginRequired: true,
+                loginUrl: 'https://fantia.jp/sessions/signin',
+              });
+            } else {
+              resolve({date: null});
+            }
+            return;
+          }
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] Fantia API returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          try {
+            const data = JSON.parse(res.responseText);
+            const postedAt = data.post?.posted_at ?? null;
+            if (!postedAt) {
+              resolve({date: null});
+              return;
+            }
+            // posted_at is RFC 2822-like ("Fri, 20 Mar 2026 18:30:17 +0900").
+            // new Date() can parse this in all modern browsers.
+            const parsed = new Date(postedAt);
+            resolve({date: isNaN(parsed.getTime()) ? null : parsed.toISOString()});
+          } catch {
+            resolve({date: null});
+          }
+        },
+        onerror() {
+          console.warn('[PostTimeline] Fantia API request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] Fantia API request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
+   * @typedef {Object} SourceDateResult
+   * @property {string|null} date - ISO 8601 date string, or null on failure.
+   * @property {boolean} [loginRequired] - True when the platform requires login.
+   * @property {string} [loginUrl] - Login page URL shown to the user.
+   */
+
+  /**
    * Dispatches to the appropriate source date fetcher based on source type.
    * @param {{type: string, [key: string]: string}} source
-   * @return {Promise<string|null>}
+   * @return {Promise<SourceDateResult>}
    */
-  function fetchSourceDate(source) {
+  async function fetchSourceDate(source) {
     switch (source.type) {
       case 'pixiv':
-        return fetchPixivDate(source.id);
+        return {date: await fetchPixivDate(source.id)};
       case 'twitter':
-        return Promise.resolve(getTwitterTimestamp(source.id));
+        return {date: getTwitterTimestamp(source.id)};
       case 'bluesky':
-        return fetchBlueskyDate(source.handle, source.rkey);
+        return {date: await fetchBlueskyDate(source.handle, source.rkey)};
+      case 'fanbox':
+        return fetchFanboxDate(source.id);
+      case 'fantia':
+        return fetchFantiaDate(source.id);
+      case 'seiga':
+        return fetchSeigaDate(source.id);
+      case 'pawoo':
+        return fetchPawooDate(source.id);
+      case 'artstation':
+        return fetchArtStationDate(source.id);
       default:
-        return Promise.resolve(null);
+        return {date: null};
     }
   }
 
@@ -479,12 +872,18 @@
   /**
    * Creates the source platform row showing absolute relative time from now.
    * A custom tooltip shows the absolute datetime and an optional colored delta.
-   * @param {string} label - Platform name (Pixiv, X, Bluesky).
+   * When dateString is null and loginOpts.loginRequired is true, renders a
+   * "login required" status text and a "(log in)" link instead.
+   * @param {string} label - Platform name (Pixiv, X, Bluesky, Fanbox, etc.).
    * @param {'loading'|null|string} dateString
    * @param {{deltaText: string|null, color: 'red'|'green'|null}} [tooltipOpts]
+   * @param {{loginRequired: boolean, loginUrl: string}|null} [loginOpts]
    * @return {HTMLLIElement}
    */
-  function createSourceRow(label, dateString, tooltipOpts = {deltaText: null, color: null}) {
+  function createSourceRow(
+      label, dateString,
+      tooltipOpts = {deltaText: null, color: null},
+      loginOpts = null) {
     const li = document.createElement('li');
     li.id = 'pt-source-row';
 
@@ -496,10 +895,27 @@
     li.textContent = `${label}: `;
 
     if (dateString === null) {
-      const span = document.createElement('span');
-      span.textContent = 'unavailable';
-      span.style.opacity = '0.5';
-      li.appendChild(span);
+      if (loginOpts?.loginRequired) {
+        const statusSpan = document.createElement('span');
+        statusSpan.textContent = 'login required';
+        statusSpan.style.opacity = '0.5';
+        li.appendChild(statusSpan);
+
+        if (loginOpts.loginUrl) {
+          li.appendChild(document.createTextNode(' '));
+          const loginLink = document.createElement('a');
+          loginLink.textContent = '(log in)';
+          loginLink.href = loginOpts.loginUrl;
+          loginLink.target = '_blank';
+          loginLink.rel = 'noopener';
+          li.appendChild(loginLink);
+        }
+      } else {
+        const span = document.createElement('span');
+        span.textContent = 'unavailable';
+        span.style.opacity = '0.5';
+        li.appendChild(span);
+      }
       return li;
     }
 
@@ -604,6 +1020,11 @@
     }
   }
 
+  /**
+   * Main orchestrator. Detects the source platform, fetches dates in parallel,
+   * inserts timeline rows, and starts the 60s refresh interval.
+   * Uses a generation counter to discard stale results from Turbo navigation.
+   */
   async function init() {
     cleanup();
 
@@ -632,10 +1053,14 @@
     dateRow.before(sourceLoadingRow, assetLoadingRow);
 
     // Fetch both dates in parallel.
-    const [assetDate, sourceDate] = await Promise.all([
+    const [assetDate, sourceResult] = await Promise.all([
       mediaAssetId ? fetchMediaAssetDate(mediaAssetId) : Promise.resolve(null),
       fetchSourceDate(source),
     ]);
+    const sourceDate = sourceResult.date;
+    const loginOpts = sourceResult.loginRequired
+      ? {loginRequired: true, loginUrl: sourceResult.loginUrl}
+      : null;
 
     // Discard results if a newer init() has started (Turbo navigation during fetch).
     if (gen !== initGeneration) return;
@@ -666,7 +1091,7 @@
     }
 
     // Replace loading placeholders with real data.
-    const newSourceRow = createSourceRow(source.label, sourceDate, sourceTooltipOpts);
+    const newSourceRow = createSourceRow(source.label, sourceDate, sourceTooltipOpts, loginOpts);
     const newAssetRow = createAssetRow(assetDate, assetTooltipOpts);
     sourceLoadingRow.replaceWith(newSourceRow);
     assetLoadingRow.replaceWith(newAssetRow);
@@ -674,7 +1099,7 @@
     // Annotate Danbooru's Date row (rename label + consistent relative time).
     const postWrapper = postDate ? annotateDateRow(dateRow, postDate) : null;
 
-    // Keep all three rows' relative times in sync (all display "ago" in v1.1).
+    // Keep all three rows' relative times in sync (all display "ago").
     const sourceTooltipEl = newSourceRow.querySelector('.pt-tooltip');
     const assetTooltipEl = newAssetRow.querySelector('.pt-tooltip');
 
