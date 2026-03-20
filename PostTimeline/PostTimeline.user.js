@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Post Timeline
 // @namespace    https://github.com/AkaringoP
-// @version      1.0
+// @version      1.1
 // @description  Shows when an illustration was published on its source platform (Pixiv, X/Twitter, Bluesky) and when it was first uploaded to Danbooru as a media asset.
 // @author       AkaringoP
 // @license      MIT
@@ -35,6 +35,34 @@
   /** @const {bigint} Twitter Snowflake epoch (2010-11-04T01:42:54.657Z). */
   const TWITTER_EPOCH = 1288834974657n;
 
+  /** @const {string} CSS for custom tooltip component and delta color classes. */
+  const GLOBAL_CSS = `
+.pt-tooltip { position: relative; }
+.pt-tip {
+  display: none;
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  background: #333; color: #fff; padding: 4px 8px;
+  border-radius: 4px; font-size: 12px;
+  white-space: nowrap; z-index: 1000; pointer-events: none;
+}
+.pt-tooltip:hover .pt-tip { display: block; }
+.pt-tip-delta { margin-left: 0.4em; }
+.pt-tip-delta--red { color: #ff6b6b; }
+.pt-tip-delta--green { color: #51cf66; }
+`;
+
+  /**
+   * Injects the global CSS into the document head.
+   * Skips injection if already present (duplicate-guard via #pt-global-css).
+   */
+  function injectStyles() {
+    if (document.getElementById('pt-global-css')) return;
+    const style = document.createElement('style');
+    style.id = 'pt-global-css';
+    style.textContent = GLOBAL_CSS;
+    document.head.appendChild(style);
+  }
+
   // ---------------------------------------------------------------------------
   // Utility
   // ---------------------------------------------------------------------------
@@ -58,33 +86,63 @@
     if (diffHour < 24) return `about ${diffHour} hour${diffHour !== 1 ? 's' : ''} ago`;
     if (diffDay < 30) return `${diffDay} day${diffDay !== 1 ? 's' : ''} ago`;
     if (diffMonth < 12) return `about ${diffMonth} month${diffMonth !== 1 ? 's' : ''} ago`;
+    if (diffYear < 1) return `about ${diffMonth} month${diffMonth !== 1 ? 's' : ''} ago`;
     return `about ${diffYear} year${diffYear !== 1 ? 's' : ''} ago`;
   }
 
   /**
-   * Formats the duration between two dates as a delta string.
-   * e.g. "1 minute later", "3 hours earlier", "at the same time"
-   * @param {string} fromDateString - The reference (earlier) date.
-   * @param {string} toDateString - The target (later) date.
+   * Formats the duration between two dates as an abbreviated delta string for tooltips.
+   * e.g. "12y", "3mo", "5d", "2h", "30m", "10s"
+   * The direction qualifier ("before"/"after") is added by the caller.
+   * @param {string} fromDateString - The reference date.
+   * @param {string} toDateString - The target date.
    * @return {string}
    */
-  function formatDelta(fromDateString, toDateString) {
-    const diffMs = new Date(toDateString).getTime() - new Date(fromDateString).getTime();
-    const absSec = Math.floor(Math.abs(diffMs) / 1000);
+  function formatDeltaAbbrev(fromDateString, toDateString) {
+    const diffMs = Math.abs(
+      new Date(toDateString).getTime() - new Date(fromDateString).getTime()
+    );
+    const absSec = Math.floor(diffMs / 1000);
     const absMin = Math.floor(absSec / 60);
     const absHour = Math.floor(absMin / 60);
     const absDay = Math.floor(absHour / 24);
-    const absMonth = Math.floor(absDay / 30);
     const absYear = Math.floor(absDay / 365);
-    const dir = diffMs >= 0 ? 'later' : 'earlier';
+    const absMonth = Math.floor(absDay / 30);
 
-    if (absSec < 1) return 'at the same time';
-    if (absSec < 60) return `${absSec} second${absSec !== 1 ? 's' : ''} ${dir}`;
-    if (absMin < 60) return `${absMin} minute${absMin !== 1 ? 's' : ''} ${dir}`;
-    if (absHour < 24) return `about ${absHour} hour${absHour !== 1 ? 's' : ''} ${dir}`;
-    if (absDay < 30) return `${absDay} day${absDay !== 1 ? 's' : ''} ${dir}`;
-    if (absMonth < 12) return `about ${absMonth} month${absMonth !== 1 ? 's' : ''} ${dir}`;
-    return `about ${absYear} year${absYear !== 1 ? 's' : ''} ${dir}`;
+    if (absYear >= 1) return `${absYear}y`;
+    if (absMonth >= 1) return `${absMonth}mo`;
+    if (absDay >= 1) return `${absDay}d`;
+    if (absHour >= 1) return `${absHour}h`;
+    if (absMin >= 1) return `${absMin}m`;
+    return `${absSec}s`;
+  }
+
+  /**
+   * Determines tooltip delta colors for the Source and Asset rows.
+   * RED rule (combined):  Source→Asset < 60s AND Asset→Post < 15s → both red.
+   * GREEN rule (independent): Source→Asset ≥ 30 days → source green only.
+   * Otherwise no color is applied.
+   * @param {string} sourceDate - ISO 8601 source publication date.
+   * @param {string} assetDate  - ISO 8601 media asset creation date.
+   * @param {string} postDate   - ISO 8601 Danbooru post creation date.
+   * @return {{sourceColor: string|null, assetColor: string|null}}
+   */
+  function determineDeltaColors(sourceDate, assetDate, postDate) {
+    const srcToAssetMs =
+      new Date(assetDate).getTime() - new Date(sourceDate).getTime();
+    const assetToPostMs =
+      new Date(postDate).getTime() - new Date(assetDate).getTime();
+
+    const MS_60S = 60 * 1000;
+    const MS_30D = 30 * 24 * 60 * 60 * 1000;
+
+    if (srcToAssetMs < MS_60S && assetToPostMs < 15 * 1000) {
+      return {sourceColor: 'red', assetColor: 'red'};
+    }
+    if (srcToAssetMs >= MS_30D) {
+      return {sourceColor: 'green', assetColor: null};
+    }
+    return {sourceColor: null, assetColor: null};
   }
 
   /**
@@ -367,6 +425,44 @@
   // ---------------------------------------------------------------------------
 
   /**
+   * Creates a custom tooltip wrapper span for a timeline date entry.
+   * The visible text is set as a text node on the wrapper so it can be updated
+   * in place by reassigning `wrapper.firstChild.textContent`.
+   * The tooltip itself is a child `.pt-tip` span containing the absolute time
+   * and an optional colored delta span. The native `title` attribute is NOT used
+   * so that the tooltip can display colored text.
+   * @param {string} text - Visible label text (e.g. "3 years ago").
+   * @param {string} absTime - Absolute datetime string for the tooltip body.
+   * @param {string|null} deltaText - Abbreviated delta string (e.g. "12y before Asset"), or null.
+   * @param {'red'|'green'|null} color - Color class for the delta span, or null.
+   * @return {HTMLSpanElement} The `.pt-tooltip` wrapper element.
+   */
+  function createTooltipSpan(text, absTime, deltaText, color) {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'pt-tooltip';
+    wrapper.style.cursor = CLOCK_CURSOR;
+
+    // Visible text as a raw text node so callers can update it via firstChild.
+    wrapper.appendChild(document.createTextNode(text));
+
+    const tip = document.createElement('span');
+    tip.className = 'pt-tip';
+    tip.textContent = absTime;
+
+    if (deltaText) {
+      const deltaSpan = document.createElement('span');
+      deltaSpan.className = 'pt-tip-delta' +
+        (color === 'red' ? ' pt-tip-delta--red' :
+         color === 'green' ? ' pt-tip-delta--green' : '');
+      deltaSpan.textContent = `(${deltaText})`;
+      tip.appendChild(deltaSpan);
+    }
+
+    wrapper.appendChild(tip);
+    return wrapper;
+  }
+
+  /**
    * Finds the "Date:" list item in the Information section.
    * @return {HTMLLIElement|null}
    */
@@ -381,14 +477,16 @@
   }
 
   /**
-   * Creates the source platform row showing absolute relative time.
-   * This is the timeline's starting point, so no delta is needed.
+   * Creates the source platform row showing absolute relative time from now.
+   * A custom tooltip shows the absolute datetime and an optional colored delta.
    * @param {string} label - Platform name (Pixiv, X, Bluesky).
    * @param {'loading'|null|string} dateString
+   * @param {{deltaText: string|null, color: 'red'|'green'|null}} [tooltipOpts]
    * @return {HTMLLIElement}
    */
-  function createSourceRow(label, dateString) {
+  function createSourceRow(label, dateString, tooltipOpts = {deltaText: null, color: null}) {
     const li = document.createElement('li');
+    li.id = 'pt-source-row';
 
     if (dateString === 'loading') {
       li.textContent = `${label}: loading...`;
@@ -405,23 +503,26 @@
       return li;
     }
 
-    const time = document.createElement('time');
-    time.textContent = formatRelativeTime(dateString);
-    time.title = formatAbsoluteTime(dateString);
-    time.style.cursor = CLOCK_CURSOR;
-    li.appendChild(time);
+    const wrapper = createTooltipSpan(
+      formatRelativeTime(dateString),
+      formatAbsoluteTime(dateString),
+      tooltipOpts.deltaText,
+      tooltipOpts.color
+    );
+    li.appendChild(wrapper);
     return li;
   }
 
   /**
-   * Creates the Asset row showing delta from the source date.
-   * Falls back to absolute relative time if sourceDate is unavailable.
+   * Creates the Asset row showing absolute relative time from now.
+   * A custom tooltip shows the absolute datetime and an optional colored delta.
    * @param {'loading'|null|string} assetDate
-   * @param {string|null} sourceDate - Reference point for delta calculation.
+   * @param {{deltaText: string|null, color: 'red'|'green'|null}} [tooltipOpts]
    * @return {HTMLLIElement}
    */
-  function createAssetRow(assetDate, sourceDate) {
+  function createAssetRow(assetDate, tooltipOpts = {deltaText: null, color: null}) {
     const li = document.createElement('li');
+    li.id = 'pt-asset-row';
 
     if (assetDate === 'loading') {
       li.textContent = 'Asset: loading...';
@@ -438,37 +539,27 @@
       return li;
     }
 
-    const time = document.createElement('time');
-    time.title = formatAbsoluteTime(assetDate);
-    time.style.cursor = CLOCK_CURSOR;
-
-    if (sourceDate) {
-      // Show how long after (or before) source publication the asset was uploaded.
-      time.textContent = `\u21B3 ${formatDelta(sourceDate, assetDate)}`;
-    } else {
-      // Source date unavailable: fall back to absolute relative time.
-      time.textContent = formatRelativeTime(assetDate);
-    }
-
-    li.appendChild(time);
+    const wrapper = createTooltipSpan(
+      formatRelativeTime(assetDate),
+      formatAbsoluteTime(assetDate),
+      tooltipOpts.deltaText,
+      tooltipOpts.color
+    );
+    li.appendChild(wrapper);
     return li;
   }
 
   /**
-   * Appends a delta annotation to Danbooru's existing Date row.
-   * Shows how long after the asset upload the post was created.
-   * Uses the <time title> attribute for the precise timestamp, since
-   * the <time datetime> attribute may be truncated to the minute.
+   * Annotates Danbooru's existing Date row: renames the label to "Post:" and
+   * replaces Danbooru's relative time with our own formatRelativeTime for
+   * consistency with the Source and Asset rows.
    * @param {HTMLLIElement} dateRow
-   * @param {string} assetDate
+   * @param {string} postDate - ISO 8601 post creation date.
+   * @return {HTMLSpanElement|null} The tooltip wrapper, or null if annotation failed.
    */
-  function annotateDateRow(dateRow, assetDate) {
+  function annotateDateRow(dateRow, postDate) {
     const postTimeEl = dateRow.querySelector('time[datetime]');
-    if (!postTimeEl) return;
-
-    const titleStr = postTimeEl.getAttribute('title');
-    const postDate = parseDanbooruTimeTitle(titleStr);
-    if (!postDate) return;
+    if (!postTimeEl) return null;
 
     // Rename Danbooru's "Date:" label to "Post:".
     for (const node of dateRow.childNodes) {
@@ -478,22 +569,49 @@
       }
     }
 
-    // Hide Danbooru's "about X hours ago" text; show tree-indented delta.
+    // Hide Danbooru's <time> to prevent inconsistent relative time display.
     postTimeEl.style.display = 'none';
+    postTimeEl.removeAttribute('title');
 
-    const deltaSpan = document.createElement('span');
-    deltaSpan.textContent = `\u21B3 ${formatDelta(assetDate, postDate)}`;
-    deltaSpan.title = titleStr ?? '';
-    deltaSpan.style.cursor = CLOCK_CURSOR;
-    deltaSpan.style.marginLeft = '1.5em';
-    postTimeEl.after(deltaSpan);
+    // Insert our own tooltip span with consistent formatRelativeTime.
+    const wrapper = createTooltipSpan(
+      formatRelativeTime(postDate),
+      formatAbsoluteTime(postDate),
+      null,  // no delta (Post is the reference point)
+      null
+    );
+    wrapper.style.cursor = 'pointer';
+    postTimeEl.after(wrapper);
+
+    return wrapper;
   }
 
   // ---------------------------------------------------------------------------
   // Main
   // ---------------------------------------------------------------------------
 
+  /** @type {number|null} */
+  let refreshIntervalId = null;
+
+  /** @type {number} Generation counter to discard stale async results. */
+  let initGeneration = 0;
+
+  /** Clears the periodic refresh interval set by init(). */
+  function cleanup() {
+    if (refreshIntervalId !== null) {
+      clearInterval(refreshIntervalId);
+      refreshIntervalId = null;
+    }
+  }
+
   async function init() {
+    cleanup();
+
+    // Guard against duplicate execution (e.g. turbo:load + direct call).
+    if (document.querySelector('#pt-source-row')) return;
+
+    injectStyles();
+
     const source = detectSource();
     if (!source) return;
 
@@ -505,10 +623,12 @@
       return;
     }
 
+    const gen = ++initGeneration;
+
     // Insert loading placeholders BEFORE the Date row to establish chronological order:
     // Source (oldest) -> Asset -> Date (newest, Danbooru's own row)
     const sourceLoadingRow = createSourceRow(source.label, 'loading');
-    const assetLoadingRow = createAssetRow('loading', null);
+    const assetLoadingRow = createAssetRow('loading');
     dateRow.before(sourceLoadingRow, assetLoadingRow);
 
     // Fetch both dates in parallel.
@@ -517,26 +637,67 @@
       fetchSourceDate(source),
     ]);
 
+    // Discard results if a newer init() has started (Turbo navigation during fetch).
+    if (gen !== initGeneration) return;
+
+    // Get post date for tooltip delta calculations.
+    const postTimeEl = dateRow.querySelector('time[datetime]');
+    const postTitleStr = postTimeEl?.getAttribute('title') ?? null;
+    const postDate = parseDanbooruTimeTitle(postTitleStr);
+
+    // Calculate tooltip deltas and colors.
+    /** @type {{deltaText: string|null, color: string|null}} */
+    const sourceTooltipOpts = {deltaText: null, color: null};
+    /** @type {{deltaText: string|null, color: string|null}} */
+    const assetTooltipOpts = {deltaText: null, color: null};
+
+    if (sourceDate && assetDate) {
+      sourceTooltipOpts.deltaText =
+        `${formatDeltaAbbrev(sourceDate, assetDate)} before Asset`;
+    }
+    if (assetDate && postDate) {
+      assetTooltipOpts.deltaText =
+        `${formatDeltaAbbrev(assetDate, postDate)} before Post`;
+    }
+    if (sourceDate && assetDate && postDate) {
+      const colors = determineDeltaColors(sourceDate, assetDate, postDate);
+      sourceTooltipOpts.color = colors.sourceColor;
+      assetTooltipOpts.color = colors.assetColor;
+    }
+
     // Replace loading placeholders with real data.
-    const newSourceRow = createSourceRow(source.label, sourceDate);
-    const newAssetRow = createAssetRow(assetDate, sourceDate);
+    const newSourceRow = createSourceRow(source.label, sourceDate, sourceTooltipOpts);
+    const newAssetRow = createAssetRow(assetDate, assetTooltipOpts);
     sourceLoadingRow.replaceWith(newSourceRow);
     assetLoadingRow.replaceWith(newAssetRow);
 
-    // Append delta annotation to Danbooru's Date row (delta from asset upload).
-    if (assetDate) {
-      annotateDateRow(dateRow, assetDate);
-    }
+    // Annotate Danbooru's Date row (rename label + consistent relative time).
+    const postWrapper = postDate ? annotateDateRow(dateRow, postDate) : null;
 
-    // Keep source row's relative time in sync with Danbooru's live-updating Date field.
-    // Asset and Date deltas are fixed durations and do not need periodic refresh.
-    const sourceTimeEl = newSourceRow.querySelector('time');
-    if (sourceTimeEl && sourceDate) {
-      setInterval(() => {
-        sourceTimeEl.textContent = formatRelativeTime(sourceDate);
+    // Keep all three rows' relative times in sync (all display "ago" in v1.1).
+    const sourceTooltipEl = newSourceRow.querySelector('.pt-tooltip');
+    const assetTooltipEl = newAssetRow.querySelector('.pt-tooltip');
+
+    if ((sourceTooltipEl && sourceDate) || (assetTooltipEl && assetDate) ||
+        (postWrapper && postDate)) {
+      refreshIntervalId = setInterval(() => {
+        if (sourceTooltipEl && sourceDate) {
+          sourceTooltipEl.firstChild.textContent = formatRelativeTime(sourceDate);
+        }
+        if (assetTooltipEl && assetDate) {
+          assetTooltipEl.firstChild.textContent = formatRelativeTime(assetDate);
+        }
+        if (postWrapper && postDate) {
+          postWrapper.firstChild.textContent = formatRelativeTime(postDate);
+        }
       }, 60_000);
     }
   }
 
+  // Turbo lifecycle: clean up interval on navigation, re-init on load.
+  document.addEventListener('turbo:before-visit', cleanup);
+  document.addEventListener('turbo:load', init);
+
+  // Initial execution (direct page load without Turbo).
   init();
 })();
