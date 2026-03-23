@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Next Random Post
 // @namespace    https://github.com/AkaringoP
-// @version      2.1.1
+// @version      2.2
 // @description  Navigates to a random post using the current input context.
 // @author       AkaringoP
 // @license      MIT
