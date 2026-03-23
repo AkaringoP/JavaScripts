@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -33,6 +33,9 @@
 
   /** @const {number} Maximum initial size of the note box in pixels. */
   const MAX_INITIAL_SIZE = 150;
+
+  /** @const {number} Width of the popover UI in pixels. */
+  const POPOVER_WIDTH = 230;
 
   /** @const {number} Duration in ms to trigger long-press actions. */
   const LONG_PRESS_DURATION = 1500;
@@ -95,6 +98,9 @@
   let toastTimer = null;
   let viewportRaf = null;
   let debugFadeTimer = null;
+
+  // Initialization
+  let initialized = false;
 
   // Data
   let allPostTags = new Set();
@@ -185,7 +191,7 @@
       display: none; flex-direction: column; gap: 10px;
       background: #1f232b; padding: 14px; border-radius: 14px;
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-      border: 1px solid #3e4451; width: 230px;
+      border: 1px solid #3e4451; width: ${POPOVER_WIDTH}px;
       --arrow-offset: 0px; color: #fff;
       transition: opacity 0.2s ease; opacity: 1;
       transform-origin: top center;
@@ -270,13 +276,9 @@
     body.dmna-active #image { cursor: crosshair !important; }
   `;
 
-  if (typeof GM_addStyle !== 'undefined') {
-    GM_addStyle(STYLES);
-  } else {
-    const style = document.createElement('style');
-    style.innerHTML = STYLES;
-    document.head.appendChild(style);
-  }
+  const styleElement = document.createElement('style');
+  styleElement.textContent = STYLES;
+  document.head.appendChild(styleElement);
 
   // --------------------------------------------------------------------------
   // Core Functions
@@ -296,7 +298,9 @@
     toastElement.textContent = msg;
     void toastElement.offsetWidth; // Trigger reflow
     toastElement.className = 'show';
-    if (toastTimer) clearTimeout(toastTimer);
+    if (toastTimer) {
+      clearTimeout(toastTimer);
+    }
     toastTimer = setTimeout(() => {
       toastElement.className = '';
     }, 2500);
@@ -349,6 +353,11 @@
    * Initializes the script, binding global events and creating UI.
    */
   function init() {
+    if (initialized) {
+      return;
+    }
+    initialized = true;
+
     loadTagsFromDOM();
     fetchPostData(true);
 
@@ -385,7 +394,9 @@
 
     // Bind creation interactions (Click/Drag)
     const img = document.querySelector('#image');
-    if (img) setupCreationInteraction(img);
+    if (img) {
+      setupCreationInteraction(img);
+    }
   }
 
   /**
@@ -396,7 +407,9 @@
         document.body.dataset.tags || '';
     if (!tagString) {
       const postDiv = document.querySelector('#image-container');
-      if (postDiv && postDiv.dataset.tags) tagString = postDiv.dataset.tags;
+      if (postDiv && postDiv.dataset.tags) {
+        tagString = postDiv.dataset.tags;
+      }
     }
     allPostTags = new Set(tagString.split(' ').filter((t) => t.trim() !== ''));
 
@@ -414,15 +427,21 @@
   async function fetchPostData(shouldUpdateUI = false) {
     const postIdMatch = location.pathname.match(/\/posts\/(\d+)/);
     const postId = postIdMatch ? postIdMatch[1] : document.body.dataset.postId;
-    if (!postId) return null;
+    if (!postId) {
+      return null;
+    }
 
     try {
       const res = await fetch(
           `/posts/${postId}.json?only=tag_string,image_width,image_height`);
       if (res.ok) {
         const data = await res.json();
-        if (data.image_width) postOriginalWidth = data.image_width;
-        if (data.image_height) postOriginalHeight = data.image_height;
+        if (data.image_width) {
+          postOriginalWidth = data.image_width;
+        }
+        if (data.image_height) {
+          postOriginalHeight = data.image_height;
+        }
 
         if (data && typeof data.tag_string === 'string') {
           const freshSet = new Set(
@@ -465,7 +484,9 @@
   function updateToggleStates() {
     const setCheck = (id, tag) => {
       const el = document.getElementById(`dmna-tag-${id}`);
-      if (el) el.checked = allPostTags.has(tag);
+      if (el) {
+        el.checked = allPostTags.has(tag);
+      }
     };
     setCheck('translated', TAG_MAP.translated);
     setCheck('request', TAG_MAP.request);
@@ -518,9 +539,15 @@
     if (tTranslated) {
       tTranslated.addEventListener('change', () => {
         if (tTranslated.checked) {
-          if (tRequest) tRequest.checked = false;
-          if (tCheck) tCheck.checked = false;
-          if (tPartial) tPartial.checked = false;
+          if (tRequest) {
+            tRequest.checked = false;
+          }
+          if (tCheck) {
+            tCheck.checked = false;
+          }
+          if (tPartial) {
+            tPartial.checked = false;
+          }
         }
       });
     }
@@ -531,7 +558,9 @@
       if (el) {
         el.addEventListener('change', () => {
           if (el.checked) {
-            if (tTranslated) tTranslated.checked = false;
+            if (tTranslated) {
+              tTranslated.checked = false;
+            }
           }
         });
       }
@@ -543,9 +572,13 @@
    * @param {number} [duration=0] Duration in ms to show the zones. 0 keeps them shown.
    */
   function showDebugZones(duration = 0) {
-    if (!boxElement) return;
+    if (!boxElement) {
+      return;
+    }
     boxElement.classList.add('show-debug');
-    if (debugFadeTimer) clearTimeout(debugFadeTimer);
+    if (debugFadeTimer) {
+      clearTimeout(debugFadeTimer);
+    }
 
     if (duration > 0) {
       debugFadeTimer = setTimeout(() => {
@@ -558,16 +591,36 @@
    * Hides the visual debug zones.
    */
   function hideDebugZones() {
-    if (!boxElement) return;
-    if (debugFadeTimer) clearTimeout(debugFadeTimer);
+    if (!boxElement) {
+      return;
+    }
+    if (debugFadeTimer) {
+      clearTimeout(debugFadeTimer);
+    }
     boxElement.classList.remove('show-debug');
+  }
+
+  /**
+   * Checks whether the given element is a text-input element.
+   * @param {?Element} el The element to check.
+   * @return {boolean} True if the element is a text input or textarea.
+   */
+  function isTextInputElement(el) {
+    if (!el) {
+      return false;
+    }
+    return el.tagName === 'TEXTAREA' ||
+        (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button',
+          'submit', 'image', 'file', 'range', 'color'].includes(el.type));
   }
 
   /**
    * Creates all UI elements (Floating Button, Box, Popover).
    */
   function createUI() {
-    if (document.getElementById('dmna-box')) return;
+    if (document.getElementById('dmna-box')) {
+      return;
+    }
 
     const floatBtn = document.createElement('div');
     floatBtn.id = 'dmna-float-btn';
@@ -647,9 +700,8 @@
       // Use capture to detect focus/blur on ANY input element in the document
       document.addEventListener('focus', (e) => {
         const target = e.target;
-        const isTextInput = target.tagName === 'TEXTAREA' ||
-            (target.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'image', 'file', 'range', 'color'].includes(target.type));
-        
+        const isTextInput = isTextInputElement(target);
+
         if (isTextInput && floatBtn) {
           floatBtn.classList.add('dmna-hidden');
         }
@@ -660,8 +712,7 @@
           setTimeout(() => {
             // Check if focus moved to another text input
             const active = document.activeElement;
-            const isTextInput = active && (active.tagName === 'TEXTAREA' ||
-                (active.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'image', 'file', 'range', 'color'].includes(active.type)));
+            const isTextInput = isTextInputElement(active);
             
             if (!isTextInput) {
               floatBtn.classList.remove('dmna-hidden');
@@ -701,7 +752,9 @@
    */
   function setupButtonInteractions(btn) {
     const handleStart = (e) => {
-      if (e.type === 'touchstart') e.preventDefault();
+      if (e.type === 'touchstart') {
+        e.preventDefault();
+      }
       isDraggingBtn = false;
       isPressing = true;
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
@@ -712,7 +765,9 @@
         if (isPressing) {
           isDraggingBtn = true;
           btn.classList.add('dragging');
-          if (navigator.vibrate) navigator.vibrate(50);
+          if (navigator.vibrate) {
+            navigator.vibrate(50);
+          }
           showToast('↕️ Reposition Mode');
         }
       }, LONG_PRESS_DURATION);
@@ -723,7 +778,9 @@
         e.preventDefault();
         e.stopPropagation();
       }
-      if (!isPressing) return;
+      if (!isPressing) {
+        return;
+      }
 
       const clientY = e.type.startsWith('touch') ? e.touches[0].clientY : e.clientY;
       if (isDraggingBtn) {
@@ -742,7 +799,9 @@
     };
 
     const handleEnd = (e) => {
-      if (e.type === 'touchend') e.preventDefault();
+      if (e.type === 'touchend') {
+        e.preventDefault();
+      }
       clearTimeout(longPressTimer);
       isPressing = false;
       if (isDraggingBtn) {
@@ -760,7 +819,11 @@
     btn.addEventListener('touchmove', handleMove, {passive: false});
     btn.addEventListener('touchend', handleEnd);
     btn.addEventListener('mousedown', handleStart);
-    document.addEventListener('mousemove', (e) => { if (isPressing) handleMove(e); });
+    document.addEventListener('mousemove', (e) => {
+      if (isPressing) {
+        handleMove(e);
+      }
+    });
     btn.addEventListener('mouseup', handleEnd);
   }
 
@@ -785,6 +848,9 @@
    */
   function updateStateUI() {
     const floatBtn = document.getElementById('dmna-float-btn');
+    if (!floatBtn) {
+      return;
+    }
     const sidebarLink = document.getElementById('dmna-sidebar-link');
     if (isEnabled) {
       floatBtn.classList.add('active');
@@ -811,9 +877,15 @@
   function setupCreationInteraction(img) {
     // 1. PC Drag-to-Create
     img.addEventListener('mousedown', (e) => {
-      if (!isEnabled || e.button !== 0) return;
-      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover')) return;
-      if (e.type.startsWith('touch')) return;
+      if (!isEnabled || e.button !== 0) {
+        return;
+      }
+      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover')) {
+        return;
+      }
+      if (e.type.startsWith('touch')) {
+        return;
+      }
 
       e.preventDefault();
       isCreatingBox = true;
@@ -829,11 +901,18 @@
 
     // 2. Click (Touch & Mouse Click fallthrough)
     img.addEventListener('click', (e) => {
-      if (!isEnabled) return;
-      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') || e.target.closest('#dmna-float-btn')) return;
-      if (isCreatingBox) return; // Prevent double trigger
+      if (!isEnabled) {
+        return;
+      }
+      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') || e.target.closest('#dmna-float-btn')) {
+        return;
+      }
+      if (isCreatingBox) {
+        return; // Prevent double trigger
+      }
 
-      e.preventDefault(); e.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
 
       // Toggle Logic
       if (boxElement.style.display === 'block') {
@@ -850,7 +929,9 @@
    * @param {MouseEvent} e
    */
   function onCreateMove(e) {
-    if (!isCreatingBox) return;
+    if (!isCreatingBox) {
+      return;
+    }
     e.preventDefault();
 
     const currentX = e.pageX;
@@ -863,7 +944,9 @@
       // If we just started dragging, ensure UI is reset
       if (boxElement.style.display === 'none' || createWasVisible) {
         boxElement.style.display = 'block';
-        if (popoverElement) popoverElement.style.display = 'none'; // Hide popover during drag
+        if (popoverElement) {
+          popoverElement.style.display = 'none'; // Hide popover during drag
+        }
       }
 
       const width = Math.abs(currentX - createStartX);
@@ -883,7 +966,9 @@
    * @param {MouseEvent} e
    */
   function onCreateEnd(e) {
-    if (!isCreatingBox) return;
+    if (!isCreatingBox) {
+      return;
+    }
     isCreatingBox = false;
     document.removeEventListener('mousemove', onCreateMove);
     document.removeEventListener('mouseup', onCreateEnd);
@@ -892,7 +977,9 @@
 
     if (dist > 5) {
       // Valid drag: Show full UI
-      if (inputElement) inputElement.value = '';
+      if (inputElement) {
+        inputElement.value = '';
+      }
       updateToggleStates();
       captureInitialToggleState();
       updatePopoverPosition();
@@ -929,10 +1016,18 @@
     let startX = pageX - (size / 2);
     let startY = pageY - (size / 2);
 
-    if (startX < absLeft) startX = absLeft;
-    if (startY < absTop) startY = absTop;
-    if (startX + size > absRight) startX = absRight - size;
-    if (startY + size > absBottom) startY = absBottom - size;
+    if (startX < absLeft) {
+      startX = absLeft;
+    }
+    if (startY < absTop) {
+      startY = absTop;
+    }
+    if (startX + size > absRight) {
+      startX = absRight - size;
+    }
+    if (startY + size > absBottom) {
+      startY = absBottom - size;
+    }
 
     showBox(startX, startY, size, size);
   }
@@ -951,7 +1046,9 @@
     boxElement.style.height = `${h}px`;
     boxElement.style.display = 'block';
 
-    if (inputElement) inputElement.value = '';
+    if (inputElement) {
+      inputElement.value = '';
+    }
 
     showDebugZones(1500);
 
@@ -977,7 +1074,7 @@
     const boxCenterX = rect.left + window.scrollX + (rect.width / 2);
     const boxBottomY = rect.top + window.scrollY + rect.height;
 
-    const popoverWidth = 230;
+    const popoverWidth = POPOVER_WIDTH;
 
     const screenW = window.innerWidth;
     const minX = (popoverWidth / 2) + 10;
@@ -1015,14 +1112,20 @@
     let startH;
 
     const onStart = (e) => {
-      if (!isEnabled) return;
+      if (!isEnabled) {
+        return;
+      }
       const target = e.target;
-      if (target === handleSE) mode = 'se';
-      else if (target === handleNW) mode = 'nw';
-      else if (target === handleSW || target === handleNE ||
+      if (target === handleSE) {
+        mode = 'se';
+      } else if (target === handleNW) {
+        mode = 'nw';
+      } else if (target === handleSW || target === handleNE ||
                target === boxElement) {
         mode = 'drag';
-      } else return;
+      } else {
+        return;
+      }
 
       e.preventDefault();
       boxElement.classList.add('interacting');
@@ -1043,7 +1146,9 @@
     };
 
     const onMove = (e) => {
-      if (!mode) return;
+      if (!mode) {
+        return;
+      }
       e.preventDefault();
       const img = document.querySelector('#image');
       const imgRect = img.getBoundingClientRect();
@@ -1059,8 +1164,12 @@
       if (mode === 'se') {
         let newW = Math.max(MIN_BOX_SIZE, startW + dx);
         let newH = Math.max(MIN_BOX_SIZE, startH + dy);
-        if (startLeft + newW > boundRight) newW = boundRight - startLeft;
-        if (startTop + newH > boundBottom) newH = boundBottom - startTop;
+        if (startLeft + newW > boundRight) {
+          newW = boundRight - startLeft;
+        }
+        if (startTop + newH > boundBottom) {
+          newH = boundBottom - startTop;
+        }
         boxElement.style.width = `${newW}px`;
         boxElement.style.height = `${newH}px`;
       } else if (mode === 'nw') {
@@ -1068,8 +1177,12 @@
         let deltaH = -dy;
         const attemptW = startW + deltaW;
         const attemptH = startH + deltaH;
-        if (attemptW < MIN_BOX_SIZE) deltaW = MIN_BOX_SIZE - startW;
-        if (attemptH < MIN_BOX_SIZE) deltaH = MIN_BOX_SIZE - startH;
+        if (attemptW < MIN_BOX_SIZE) {
+          deltaW = MIN_BOX_SIZE - startW;
+        }
+        if (attemptH < MIN_BOX_SIZE) {
+          deltaH = MIN_BOX_SIZE - startH;
+        }
         let newLeft = startLeft - deltaW;
         let newTop = startTop - deltaH;
         let newW = startW + deltaW;
@@ -1118,7 +1231,9 @@
    */
   async function submitNote() {
     const img = document.querySelector('#image');
-    if (!img) return;
+    if (!img) {
+      return;
+    }
 
     const boxRect = boxElement.getBoundingClientRect();
     const btn = document.getElementById('dmna-ok');
@@ -1154,7 +1269,9 @@
     }
 
     let noteBody = inputElement.value.trim();
-    if (!noteBody) noteBody = 'Translation requested';
+    if (!noteBody) {
+      noteBody = 'Translation requested';
+    }
 
     const noteFormData = new FormData();
     noteFormData.append('authenticity_token', csrfToken);
@@ -1181,8 +1298,11 @@
         const latestTagSet = await fetchPostData(false);
         if (latestTagSet) {
           const processTag = (id, tagName) => {
-            if (getChecked(id)) latestTagSet.add(tagName);
-            else latestTagSet.delete(tagName);
+            if (getChecked(id)) {
+              latestTagSet.add(tagName);
+            } else {
+              latestTagSet.delete(tagName);
+            }
           };
           processTag('translated', TAG_MAP.translated);
           processTag('request', TAG_MAP.request);
@@ -1201,8 +1321,6 @@
             body: tagFormData,
           }));
         }
-      } else {
-        console.log('No tag changes detected. Skipping tag update.');
       }
 
       const results = await Promise.all(promises);
