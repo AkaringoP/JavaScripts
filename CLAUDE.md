@@ -30,6 +30,17 @@ GitHub repository: `AkaringoP/JavaScripts`
 - **One task at a time**: Do not mix multiple tasks in a single session
 - **Preserve UserScript headers**: Do not arbitrarily modify metadata blocks such as `@version`, `@match`, `@grant`
 
+## Multi-Model Workflow
+When multiple tasks are queued, use a two-model pipeline:
+1. **Opus** — Algorithms, core logic, architectural decisions, and code review after each task
+2. **Sonnet** — Straightforward implementation (dead code removal, refactoring, mechanical changes)
+
+Process per task:
+1. Opus or Sonnet implements (based on complexity)
+2. Opus reviews the result
+3. If issues found → Sonnet fixes → Opus re-reviews
+4. Move to next task once review passes
+
 ## Git Branching Strategy
 - `main` — Stable releases only. Always deployable.
 - `feature/*` — New features and improvements. Branch off from `main`, merge back to `main`.
