@@ -42,7 +42,6 @@
    */
   let isFetching = false;
 
-
   // --- Core Logic ---
 
   /**
@@ -68,16 +67,25 @@
    * Handles API errors gracefully and ensures only one fetch runs at a time.
    *
    * @param {string} tags The search tags to use for filtering the random post.
+   * @param {number=} excludeId Post ID to exclude from results (typically the
+   *     current post to avoid navigating to the same page).
    * @return {!Promise<?number>} A promise that resolves to the random post ID,
    * or null if no post is found or an error occurs.
    */
-  const fetchRandomId = async (tags) => {
-    if (isFetching) return null;
+  const fetchRandomId = async (tags, excludeId) => {
+    if (isFetching) {
+      return null;
+    }
     isFetching = true;
 
     try {
       // Strip existing 'order:...' tags to avoid conflicts with 'random' sorting.
-      const apiQuery = tags.replace(/order:[^\s]+/, '').trim();
+      let apiQuery = tags.replace(/order:[^\s]+/gi, '').trim();
+
+      // Exclude the specified post ID from results.
+      if (excludeId) {
+        apiQuery += ` -id:${excludeId}`;
+      }
 
       const apiUrl = `/posts.json?tags=${encodeURIComponent(apiQuery)}&random=true&limit=1&only=id`;
       const response = await fetch(apiUrl);
@@ -104,31 +112,25 @@
    */
   const performPrefetch = async () => {
     const currentTags = getCurrentQuery();
-    try {
-      const id = await fetchRandomId(currentTags);
-      if (id) {
-        cachedNextId = id;
-        cachedQuerySource = currentTags;
-      }
-    } catch (e) {
-      // Silently ignore prefetch errors to avoid disrupting user experience.
+    const match = window.location.pathname.match(/\/posts\/(\d+)/);
+    const currentId = match ? parseInt(match[1], 10) : undefined;
+    const id = await fetchRandomId(currentTags, currentId);
+    if (id) {
+      cachedNextId = id;
+      cachedQuerySource = currentTags;
     }
   };
 
   /**
-   * Navigates the browser to the specified post ID while maintaining active tags.
+   * Navigates the browser to the specified post ID while maintaining search tags.
    *
    * @param {number} postId The ID of the post to navigate to.
    * @param {string} activeTags The tags to maintain in the URL query parameters.
    */
   const navigateToPost = (postId, activeTags) => {
     const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('tags')) {
-      urlParams.set('tags', activeTags);
-    } else {
-      urlParams.set('q', activeTags);
-    }
-    window.location.href = `/posts/${postId}?${urlParams.toString()}`;
+    const paramKey = urlParams.has('tags') ? 'tags' : 'q';
+    window.location.href = `/posts/${postId}?${paramKey}=${encodeURIComponent(activeTags)}`;
   };
 
   /**
@@ -143,7 +145,9 @@
    * @return {!Promise<void>}
    */
   const executeNavigation = async () => {
-    if (isNavigating) return;
+    if (isNavigating) {
+      return;
+    }
     isNavigating = true;
 
     const currentTags = getCurrentQuery();
@@ -172,7 +176,6 @@
     cachedNextId = null;
     performPrefetch();
   };
-
 
   // --- Initialization ---
 
@@ -216,7 +219,9 @@
       const isInput = ['INPUT', 'TEXTAREA'].includes(target.tagName) ||
           target.isContentEditable;
 
-      if (isInput) return;
+      if (isInput) {
+        return;
+      }
 
       if (event.altKey && event.shiftKey && event.key === 'ArrowRight') {
         event.preventDefault();
