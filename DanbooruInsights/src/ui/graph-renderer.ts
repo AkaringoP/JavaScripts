@@ -1,8 +1,10 @@
 import * as d3 from 'd3';
 import {CONFIG} from '../config';
-import {DataManager} from '../core/data-manager';
+import type {DataManager} from '../core/data-manager';
 import type {TargetUser, MetricData, CalHeatmapDatum} from '../types';
 import {SettingsManager} from '../core/settings';
+import {createSettingsPopover} from './settings-popover';
+import {showApprovalsDetail} from './approval-detail-popover';
 
 /**
  * GraphRenderer: Handles rendering of the contribution heatmap graph.
@@ -1000,42 +1002,9 @@ export class GraphRenderer {
             <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.292.028 1.555.563l.566 1.142c.27.547.106 1.181-.394 1.524l-.904.621c-.056.038-.076.104-.076.17a8.7 8.7 0 0 0 0 1.018c0 .066.02.132.076.17l.904.62c.5.344.664.978.394 1.524l-.566 1.142c-.263.535-.91.74-1.555.563l-1.103-.303c-.066-.019-.176-.011-.299.071a6.8 6.8 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.646-.716 1.196-1.461 1.26a8.2 8.2 0 0 1-.701.031 8.2 8.2 0 0 1-.701-.031c-.745-.064-1.29-.614-1.461-1.26l-.288-1.106c-.018-.066-.079-.158-.212-.224a6.8 6.8 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.292-.028-1.555-.563l-.566-1.142c-.27-.547-.106-1.181.394-1.524l.904-.621c.056-.038.076-.104.076-.17a8.7 8.7 0 0 0 0-1.018c0-.066-.02-.132-.076-.17l-.904-.62c-.5-.344-.664-.978-.394-1.524l.566-1.142c.263-.535.91-.74 1.555-.563l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.71.645 7.256.095 8.001.031A8.2 8.2 0 0 1 8 0Zm-.571 1.525c-.036.003-.108.036-.123.098l-.289 1.106c-.17.643-.64 1.103-1.246 1.218a5.2 5.2 0 0 0-1.157.669c-.53.411-1.192.427-1.748.046l-.904-.621c-.055-.038-.135-.04-.158.006l-.566 1.142c-.023.047.013.109.055.137l.904.621a1.9 1.9 0 0 1 0 3.23l-.904.621c-.042.029-.078.09-.055.137l.566 1.142c.023.047.103.044.158.006l.904-.621c.556-.38 1.218-.365 1.748.046.348.27.753.496 1.157.669.606.115 1.076.575 1.246 1.218l.289 1.106c.015.062.087.095.123.098.36.031.725.031 1.082 0 .036-.003.108-.036.123-.098l.289-1.106c.17-.643.64-1.103 1.246-1.218.404-.173.809-.399 1.157-.669.53-.411 1.192-.427 1.748-.046l.904.621c.055.038.135.04.158-.006l.566-1.142c.023-.047-.013-.109-.055-.137l-.904-.621a1.9 1.9 0 0 1 0-3.23l.904-.621c.042-.029.078-.09.055-.137l-.566-1.142c-.023-.047-.103-.044-.158-.006l-.904.621c-.556.38-1.218.365-1.748-.046a5.2 5.2 0 0 0-1.157-.669c-.606-.115-1.076-.575-1.246-1.218l-.289-1.106c-.015-.062-.087-.095-.123-.098a6.5 6.5 0 0 0-1.082 0ZM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"></path>
           </svg>
         `;
-      let settingsChanged = false;
-
-      const validateThresholds = (): {valid: boolean; msg?: string} => {
-        const modes: import('../types').Metric[] = ['uploads', 'approvals', 'notes'];
-        for (const m of modes) {
-          const vals = this.settingsManager.getThresholds(m);
-          for (let i = 0; i < vals.length - 1; i++) {
-            if (vals[i] >= vals[i + 1]) {
-              return {
-                valid: false,
-                msg: `Invalid in [${m}]: Level ${i + 1} (${vals[i]}) must be smaller than Level ${i + 2} (${vals[i + 1]})`,
-              };
-            }
-          }
-        }
-        return { valid: true };
-      };
-
-      const closeSettings = (): void => {
-        const pop = document.getElementById('danbooru-grass-settings-popover');
-        if (pop) {
-          // Validation Check
-          const check = validateThresholds();
-          if (!check.valid) {
-            alert(check.msg);
-            return; // Do NOT close
-          }
-
-          pop.style.display = 'none';
-          if (settingsChanged) {
-
-            settingsChanged = false; // Reset
-            if (typeof onYearChange === 'function') {
-              onYearChange(year);
-            }
-          }
+      const onSettingsClose = (): void => {
+        if (typeof onYearChange === 'function') {
+          onYearChange(year);
         }
       };
 
@@ -1044,18 +1013,6 @@ export class GraphRenderer {
       };
       settingsBtn.onmouseout = () => {
         settingsBtn.style.backgroundColor = '#f6f8fa';
-      };
-      settingsBtn.onclick = (e) => {
-        const pop = document.getElementById('danbooru-grass-settings-popover');
-        if (pop) {
-          const current = pop.style.display;
-          if (current === 'block') {
-            closeSettings();
-          } else {
-            pop.style.display = 'block';
-          }
-          e.stopPropagation();
-        }
       };
       footerLeft.appendChild(settingsBtn);
 
@@ -1163,241 +1120,23 @@ export class GraphRenderer {
       };
 
       // 3.1.5 Settings Popover
-      const popover = document.createElement('div');
-      popover.id = 'danbooru-grass-settings-popover';
-
-      // Close on click outside
-      document.addEventListener('click', (e) => {
-        if (popover && popover.style.display === 'block') {
-          if (
-            !popover.contains(e.target as Node) &&
-            !settingsBtn.contains(e.target as Node)
-          ) {
-            closeSettings();
-          }
-        }
+      const {popover, close: closeSettings} = createSettingsPopover({
+        settingsManager: this.settingsManager,
+        db: this.db,
+        metric,
+        settingsBtn,
+        closeSettings: onSettingsClose,
+        onRefresh,
       });
 
-      // --- 1. Color Themes Section ---
-      const themeHeader = document.createElement('div');
-      themeHeader.className = 'popover-header';
-      themeHeader.textContent = 'Color Themes';
-      popover.appendChild(themeHeader);
-
-      const grid = document.createElement('div');
-      grid.className = 'theme-grid';
-
-      const currentTheme = this.settingsManager.getTheme();
-
-      Object.entries(CONFIG.THEMES).forEach(([key, theme]) => {
-        const icon = document.createElement('div');
-        icon.className = 'theme-icon';
-        if (key === currentTheme) icon.classList.add('active'); // Highlight active theme
-        icon.title = (theme as any).name;
-        icon.style.background = (theme as any).bg;
-
-        // Inner Circle (Empty Cell Color)
-        const inner = document.createElement('div');
-        inner.className = 'theme-icon-inner';
-        inner.style.background = (theme as any).empty;
-        icon.appendChild(inner);
-
-        icon.onclick = () => {
-          this.settingsManager.applyTheme(key);
-          // Update active state visual
-          document.querySelectorAll('.theme-icon').forEach((el) => el.classList.remove('active'));
-          icon.classList.add('active');
-        };
-        grid.appendChild(icon);
-      });
-      popover.appendChild(grid);
-
-      // --- 2. Thresholds Section ---
-      const threshHeader = document.createElement('div');
-      threshHeader.className = 'popover-header';
-      threshHeader.textContent = 'Set thresholds';
-      threshHeader.style.marginTop = '15px';
-      popover.appendChild(threshHeader);
-
-      // Mode Selector
-      const modeSelect = document.createElement('select');
-      modeSelect.className = 'popover-select';
-      ['uploads', 'approvals', 'notes'].forEach((m) => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-        if (m === metric.toLowerCase() || (m === 'uploads' && !metric)) opt.selected = true;
-        modeSelect.appendChild(opt);
-      });
-      popover.appendChild(modeSelect);
-
-      // Editor Container
-      const editor = document.createElement('div');
-      popover.appendChild(editor);
-
-      const renderEditor = (mode: string): void => {
-        editor.innerHTML = '';
-        const vals = this.settingsManager.getThresholds(mode as import('../types').Metric);
-        const inputColors = ['#9be9a8', '#40c463', '#30a14e', '#216e39'];
-
-        vals.forEach((val, idx) => {
-          const row = document.createElement('div');
-          row.className = 'threshold-row';
-
-          const label = document.createElement('span');
-          label.textContent = `Level ${idx + 1}:`;
-          label.style.width = '50px';
-
-          const input = document.createElement('input');
-          input.type = 'number';
-          input.className = 'threshold-input';
-          input.value = String(val);
-
-          // Styling
-          input.style.backgroundColor = inputColors[idx];
-          input.style.color = '#ffffff';
-          input.style.textShadow = '0px 1px 2px rgba(0,0,0,0.8)';
-          input.style.fontWeight = 'bold';
-          input.style.border = '1px solid #d0d7de';
-          input.style.borderRadius = '4px';
-
-          input.onchange = () => {
-            const newVals = [...vals];
-            newVals[idx] = parseInt(input.value);
-            // Update Settings directly (Validation deferred to close)
-            this.settingsManager.setThresholds(mode as import('../types').Metric, newVals);
-            settingsChanged = true;
-            vals[idx] = newVals[idx];
-          };
-
-          row.appendChild(label);
-          row.appendChild(input);
-          editor.appendChild(row);
-        });
-      };
-
-      modeSelect.addEventListener('change', () => renderEditor(modeSelect.value));
-      renderEditor(modeSelect.value); // Initial Render
-
-      // --- 3.1.5 Cache Info Section ---
-      const cacheSection = document.createElement('div');
-      cacheSection.style.marginTop = '15px';
-      cacheSection.style.borderTop = '1px solid #d0d7de';
-      cacheSection.style.paddingTop = '10px';
-
-      // Header with Purge Button
-      const cacheHeader = document.createElement('div');
-      cacheHeader.style.display = 'flex';
-      cacheHeader.style.justifyContent = 'space-between';
-      cacheHeader.style.alignItems = 'center';
-      cacheHeader.style.marginBottom = '5px';
-      cacheHeader.innerHTML = `
-          <div style="font-weight:bold; color:#24292f;">Cache Info</div>
-          <button id="grass-purge-btn" title="Purge Cache" style="
-            padding: 2px 6px;
-            background-color: #ffebe9;
-            border: 1px solid #ff818266;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            color: #cf222e;
-            line-height: 1;
-          ">↺</button>
-        `;
-      cacheSection.appendChild(cacheHeader);
-
-      // Stats Container (Toggleable)
-      const cacheStatsContainer = document.createElement('div');
-      cacheStatsContainer.id = 'grass-cache-container';
-      cacheStatsContainer.innerHTML = `
-          <div style="font-size:12px; margin-bottom:10px;">
-            <a href="#" id="grass-cache-trigger" style="color:#0969da; text-decoration:none;">[ Show Stats ]</a>
-          </div>
-          <div id="grass-cache-content" style="display:none;"></div>
-        `;
-      cacheSection.appendChild(cacheStatsContainer);
-      popover.appendChild(cacheSection);
-
-      // Logic
-      const trigger = cacheSection.querySelector('#grass-cache-trigger');
-      const contentDiv = cacheSection.querySelector('#grass-cache-content');
-      const purgeBtn = cacheSection.querySelector('#grass-purge-btn');
-
-      const formatBytes = (bytes: number, decimals: number = 2): string => {
-        if (!+bytes) return '0 B';
-        const k = 1024;
-        const dm = decimals < 0 ? 0 : decimals;
-        const sizes = ['B', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
-      };
-
-      let isStatsVisible = false;
-      let statsInterval: ReturnType<typeof setInterval> | null = null;
-
-      const updateMyStats = async (): Promise<void> => {
-        const dataManager = new DataManager(this.db);
-        const stats = await dataManager.getCacheStats();
-        (contentDiv as HTMLElement).innerHTML = `
-            <table style="width:100%; border-collapse:collapse; font-size:11px;">
-              <tr style="border-bottom:1px solid #eee;">
-                <th style="text-align:left; padding:2px;">Source</th>
-                <th style="text-align:right; padding:2px;">Items</th>
-                <th style="text-align:right; padding:2px;">Size</th>
-              </tr>
-              <tr>
-                <td style="padding:2px;">IndexedDB</td>
-                <td style="text-align:right; padding:2px;">${stats.indexedDB.count}</td>
-                <td style="text-align:right; padding:2px;">${formatBytes(stats.indexedDB.size)}</td>
-              </tr>
-              <tr>
-                <td style="padding:2px;">Settings</td>
-                <td style="text-align:right; padding:2px;">${stats.localStorage.count}</td>
-                <td style="text-align:right; padding:2px;">${formatBytes(stats.localStorage.size)}</td>
-              </tr>
-            </table>
-          `;
-      };
-
-      (trigger as HTMLElement).onclick = async (e) => {
-        e.preventDefault();
-
-        if (isStatsVisible) {
-          // Hide
-          (contentDiv as HTMLElement).style.display = 'none';
-          (trigger as HTMLElement).textContent = '[ Show Stats ]';
-          isStatsVisible = false;
-          if (statsInterval) {
-            clearInterval(statsInterval);
-            statsInterval = null;
-          }
+      settingsBtn.onclick = (e) => {
+        const current = popover.style.display;
+        if (current === 'block') {
+          closeSettings();
         } else {
-          // Show
-          (trigger as HTMLElement).textContent = 'Calculating...';
-          (contentDiv as HTMLElement).style.display = 'block';
-          await updateMyStats(); // Initial load
-          (trigger as HTMLElement).textContent = '[ Hide Stats ]';
-          isStatsVisible = true;
-
-          // Start Polling (Real-time updates)
-          if (statsInterval) clearInterval(statsInterval);
-          statsInterval = setInterval(() => {
-            if (isStatsVisible && popover.style.display === 'block') {
-              updateMyStats();
-            } else {
-              // Safety clear
-              if (statsInterval) clearInterval(statsInterval);
-            }
-          }, 100);
+          popover.style.display = 'block';
         }
-      };
-
-      (purgeBtn as HTMLElement).onclick = () => {
-        if (confirm(
-          'Are you sure you want to clear all cached data? This will trigger a full re-fetch.'
-        )) {
-          onRefresh();
-        }
+        e.stopPropagation();
       };
 
       footer.appendChild(popover); // Append to footer so it's relative
@@ -1647,114 +1386,10 @@ export class GraphRenderer {
   /**
    * Shows a paginated popover list of post IDs for approval metric.
    * @param {string} dateStr YYYY-MM-DD
-   * @param {string} userId
-   * @param {MouseEvent} event
+   * @param {string|number} userId The user's ID.
+   * @param {MouseEvent} event The triggering mouse event.
    */
   async showApprovalsDetail(dateStr: string, userId: string | number, event: MouseEvent): Promise<void> {
-    const popoverId = 'danbooru-approvals-popover';
-    let pop = document.getElementById(popoverId);
-    if (!pop) {
-      pop = document.createElement('div');
-      pop.id = popoverId;
-      document.body.appendChild(pop);
-    }
-
-    const detailId = `${userId}_${dateStr}`;
-    const detail = await this.db.approvals_detail.get(detailId);
-
-    if (!detail) {
-      console.warn(`[Danbooru Grass] No entry found in approvals_detail for ID: ${detailId}. Did you clear cache?`);
-      return;
-    }
-    if (!detail.post_list || detail.post_list.length === 0) {
-      console.warn(`[Danbooru Grass] Entry found but post_list is empty:`, detail);
-      return;
-    }
-
-    const posts = detail.post_list;
-    const total = posts.length;
-    const limit = 100;
-    let currentPage = 1;
-    const totalPages = Math.ceil(total / limit);
-
-    const renderPage = (page: number): void => {
-      currentPage = page;
-      const start = (page - 1) * limit;
-      const end = Math.min(start + limit, total);
-      const pagePosts = posts.slice(start, end);
-
-      pop.innerHTML = `
-          <div class="header">
-            <div class="header-title">${dateStr} Approvals (${total})</div>
-            <div style="display:flex; align-items:center; gap:8px;">
-              <a href="/posts?tags=id:${pagePosts.join(',')}" target="_blank" class="gallery-btn" title="View Current Page as Gallery">
-                <svg aria-hidden="true" height="18" viewBox="0 0 16 16" version="1.1" width="18" data-view-component="true" style="fill: currentColor;">
-                  <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.75.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-1.19l-4.22 4.22a.75.75 0 1 1-1.06-1.06L12.44 3.5h-1.19a.75.75 0 0 1-.75-.75Z"></path>
-                </svg>
-              </a>
-              <div class="close-btn">&times;</div>
-            </div>
-          </div>
-          <div class="post-grid">
-            ${pagePosts.map((id: number) => `<a href="/posts/${id}" target="_blank" class="post-link">#${id}</a>`).join('')}
-          </div>
-          <div class="pagination">
-            <button class="page-btn" id="popover-prev" ${page === 1 ? 'disabled' : ''}>&lt;</button>
-            <span>${page} / ${totalPages}</span>
-            <button class="page-btn" id="popover-next" ${page === totalPages ? 'disabled' : ''}>&gt;</button>
-          </div>
-        `;
-
-      (pop.querySelector('.close-btn') as HTMLElement).onclick = () => { pop.style.display = 'none'; };
-      (pop.querySelector('#popover-prev') as HTMLElement).onclick = (e) => {
-        e.stopPropagation();
-        renderPage(currentPage - 1);
-      };
-      (pop.querySelector('#popover-next') as HTMLElement).onclick = (e) => {
-        e.stopPropagation();
-        renderPage(currentPage + 1);
-      };
-    };
-
-    renderPage(1);
-
-    // Positioning
-    pop.style.setProperty('display', 'block', 'important');
-    const rect = pop.getBoundingClientRect();
-
-    let left = event.pageX + 10;
-    let top = event.pageY - 20; // Start slightly below mouse
-
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const scrollX = window.scrollX || window.pageXOffset;
-    const scrollY = window.scrollY || window.pageYOffset;
-
-    // Flip if overflow right
-    if (left + rect.width > scrollX + viewportWidth - 20) {
-      left = event.pageX - rect.width - 10;
-    }
-    // Flip if overflow bottom
-    if (top + rect.height > scrollY + viewportHeight - 20) {
-      top = event.pageY - rect.height - 10;
-    }
-    // Safety: Don't overflow left or top of document
-    if (left < scrollX + 10) left = scrollX + 10;
-    if (top < scrollY + 10) top = scrollY + 10;
-
-    pop.style.left = `${left}px`;
-    pop.style.top = `${top}px`;
-
-    // Close on outside click
-    const closeHandler = (e: MouseEvent) => {
-      if (!pop.contains(e.target as Node)) {
-        pop.style.setProperty('display', 'none', 'important');
-        document.removeEventListener('mousedown', closeHandler);
-      }
-    };
-    // Delay attachment to avoid immediate close from current click
-    setTimeout(() => {
-      document.addEventListener('mousedown', closeHandler);
-    }, 100);
+    return showApprovalsDetail(this.db, dateStr, userId, event);
   }
 }
