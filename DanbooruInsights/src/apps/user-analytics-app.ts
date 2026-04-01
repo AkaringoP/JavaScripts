@@ -3,9 +3,10 @@ import {CONFIG} from '../config';
 import {AnalyticsDataManager} from '../core/analytics-data-manager';
 import {RateLimitedFetch} from '../core/rate-limiter';
 import {SettingsManager} from '../core/settings';
+import {getLevelClass, getBestThumbnailUrl} from '../utils';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
-import type {DistributionItem, ScatterDataPoint} from '../types';
+import type {ScatterDataPoint} from '../types';
 
 /** Processed pie chart slice used for D3 rendering. */
 interface PieSlice {
@@ -29,7 +30,6 @@ export class UserAnalyticsApp {
     this.db = db;
     this.settings = settings;
     this.context = context;
-    // Initialize RateLimiter: 
     const rl = CONFIG.RATE_LIMITER;
     this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
 
@@ -38,7 +38,8 @@ export class UserAnalyticsApp {
     this.modalId = 'danbooru-grass-modal';
     this.btnId = 'danbooru-grass-analytics-btn';
 
-    this.isFullySynced = false; // State to track sync status
+    this.isFullySynced = false;
+    this.isRendering = false;
   }
 
   /**
@@ -234,7 +235,7 @@ export class UserAnalyticsApp {
     };
 
     try {
-      const MAX_QUICK_SYNC_POSTS = 1200;
+      const MAX_QUICK_SYNC_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
       const syncTotal = await this.dataManager.getTotalPostCount(this.context.targetUser);
       if (syncTotal > 0 && syncTotal <= MAX_QUICK_SYNC_POSTS) {
         await this.dataManager.quickSyncAllPosts(this.context.targetUser, onProgress);
@@ -606,19 +607,6 @@ export class UserAnalyticsApp {
     });
   }
 
-  getLevelClass(level: string | null) {
-    if (!level) return 'user-member';
-    const l = level.toLowerCase();
-    if (l.includes('admin') || l.includes('owner')) return 'user-admin';
-    if (l.includes('moderator')) return 'user-moderator';
-    if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
-    if (l.includes('platinum')) return 'user-platinum';
-    if (l.includes('gold')) return 'user-gold';
-    if (l.includes('janitor')) return 'user-janitor';
-    if (l.includes('member')) return 'user-member';
-    return 'user-member';
-  }
-
   async fetchDashboardData() {
     const dataManager = new AnalyticsDataManager(this.db);
     const user = this.context.targetUser;
@@ -705,7 +693,7 @@ export class UserAnalyticsApp {
 
       // Quick Sync Pre-Check: If total posts ≤ MAX_QUICK_SYNC_POSTS and DB is incomplete,
       // fetch all posts inline (no sync UI required) before rendering the dashboard.
-      const MAX_QUICK_SYNC_POSTS = 1200;
+      const MAX_QUICK_SYNC_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
       {
         const [preStats, preTotal] = await Promise.all([
           this.dataManager.getSyncStats(this.context.targetUser),
@@ -769,7 +757,7 @@ export class UserAnalyticsApp {
       header.innerHTML = `
       <div>
          <h2 style="margin-top:0; color:#333; margin-bottom:4px;">Analytics Dashboard</h2>
-         <p style="color:#555; margin:0;">Detailed statistics and history for <span class="${this.getLevelClass(this.context.targetUser.level_string)}">${this.context.targetUser.name}</span></p>
+         <p style="color:#555; margin:0;">Detailed statistics and history for <span class="${getLevelClass(this.context.targetUser.level_string)}">${this.context.targetUser.name}</span></p>
       </div>
        <div id="analytics-header-controls" style="display:none; align-items:center;">
          <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
@@ -987,27 +975,6 @@ export class UserAnalyticsApp {
 
           await this.dataManager.syncAllPosts(this.context.targetUser, null); // Pass null, let internal broadcast handle it
 
-          // --- Bubble Chart Data Collection ---
-          try {
-            const dist = await this.dataManager.getCopyrightDistribution(this.context.targetUser);
-            const topCopyrights = dist.slice(0, 10).map((d: DistributionItem) => d.tagName).filter((n: string | undefined) => n && n !== 'Other') as string[];
-
-            if (topCopyrights.length > 0) {
-              const bar = syncDiv.querySelector('#analytics-main-bar') as HTMLElement;
-              const percent = syncDiv.querySelector('#analytics-main-percent') as HTMLElement;
-              const countText = syncDiv.querySelector('#analytics-main-count') as HTMLElement;
-
-              await this.dataManager.fetchBubbleData(this.context.targetUser, topCopyrights, (c: number, t: number, _msg: string) => {
-                const p = t > 0 ? Math.round((c / t) * 100) : 0;
-                bar.style.width = `${p}%`;
-                percent.textContent = `${p}%`;
-                countText.textContent = `Fetching Analytics: ${c} / ${t}`;
-              });
-            }
-          } catch (err) {
-            console.error('[Danbooru Grass] Bubble Data Fetch Failed:', err);
-          }
-
           // Done
           this.updateHeaderStatus();
           this.renderDashboard();
@@ -1209,8 +1176,8 @@ export class UserAnalyticsApp {
         const icon = lc.isPromotion ? '⬆️' : '⬇️';
         const dateStr = lc.date.toISOString().split('T')[0];
         const daysAgo = Math.floor((today.getTime() - lc.date.getTime()) / oneDay);
-        const fromLevelClass = this.getLevelClass(lc.fromLevel);
-        const toLevelClass = this.getLevelClass(lc.toLevel);
+        const fromLevelClass = getLevelClass(lc.fromLevel);
+        const toLevelClass = getLevelClass(lc.toLevel);
         tlEvents.push({
           date: lc.date,
           icon,
@@ -1917,7 +1884,7 @@ export class UserAnalyticsApp {
           return;
         }
 
-        const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(data);
+        const thumbUrl = getBestThumbnailUrl(data);
         const dateStr = data.created_at ? new Date(data.created_at).toISOString().split('T')[0] : 'N/A';
         const link = `/posts/${data.id}`;
         const ratingMap: Record<string, string> = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -2154,7 +2121,7 @@ export class UserAnalyticsApp {
         milestones.forEach(m => {
           const p = m.post;
           const isSafe = (p.rating === 's' || p.rating === 'g');
-          const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(p);
+          const thumbUrl = getBestThumbnailUrl(p);
           const showThumb = isNsfwEnabled || isSafe;
 
           msHtml += `

@@ -1,8 +1,7 @@
 import * as d3 from 'd3';
-import {CONFIG} from '../config';
-import {AnalyticsDataManager} from '../core/analytics-data-manager';
+import {CONFIG, DAY_MS} from '../config';
 import {RateLimitedFetch} from '../core/rate-limiter';
-import {isTopLevelTag, escapeHtml} from '../utils';
+import {isTopLevelTag, escapeHtml, getLevelClass, getBestThumbnailUrl} from '../utils';
 import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 
@@ -12,6 +11,8 @@ export class TagAnalyticsApp {
   db: Database;
   settings: SettingsManager;
   tagName: string;
+  rateLimiter: RateLimitedFetch;
+  isFetching: boolean;
   isMilestoneExpanded: boolean;
   resizeObserver: ResizeObserver | null;
   resizeTimeout: ReturnType<typeof setTimeout> | null;
@@ -52,7 +53,7 @@ export class TagAnalyticsApp {
       if (cached) {
         // Check expiry (e.g. 24 hours)
         const age = Date.now() - cached.updatedAt;
-        if (age < 24 * 60 * 60 * 1000) {
+        if (age < CONFIG.CACHE_EXPIRY_MS) {
           return {
             ...cached.data,
             updatedAt: cached.updatedAt,
@@ -136,7 +137,7 @@ export class TagAnalyticsApp {
     if (!this.db || !this.db.tag_analytics) return;
 
     const retentionDays = this.getRetentionDays();
-    const cutoff = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+    const cutoff = Date.now() - (retentionDays * DAY_MS);
 
     try {
       await this.db.tag_analytics.where('updatedAt').below(cutoff).delete();
@@ -194,7 +195,7 @@ export class TagAnalyticsApp {
 
       if (rawCache) {
         const age = Date.now() - rawCache.updatedAt;
-        const isStale = age >= 24 * 60 * 60 * 1000;
+        const isStale = age >= CONFIG.CACHE_EXPIRY_MS;
         const date = new Date(rawCache.updatedAt).toLocaleDateString();
 
         if (isStale) {
@@ -260,7 +261,7 @@ export class TagAnalyticsApp {
         // 2. Count-based: New posts >= Threshold
 
         const age = Date.now() - cachedData.updatedAt;
-        const isTimeExpired = age >= 24 * 60 * 60 * 1000;
+        const isTimeExpired = age >= CONFIG.CACHE_EXPIRY_MS;
 
         let postCountDiff = 0;
         try {
@@ -322,13 +323,7 @@ export class TagAnalyticsApp {
       // 1. Fetch Initial Stats (Top 100, Metadata, First/Last Date)
       const t0 = performance.now();
       this.rateLimiter.requestCounter = 0; // Reset counter
-      const startReq = this.rateLimiter.getRequestCount();
-
       const initialStats = await this.fetchInitialStats(tagName, baseData);
-
-      void performance.now();
-      void (this.rateLimiter.getRequestCount() - startReq);
-
 
       if (!initialStats || initialStats.totalCount === 0) {
         console.warn(`[TagAnalyticsApp] Could not fetch initial stats for tag: "${tagName}"`);
@@ -353,9 +348,6 @@ export class TagAnalyticsApp {
       // Check Category & Inject Button
       // 0=General, 1=Artist, 3=Copyright, 4=Character, 5=Meta
       const validCategories = [1, 3, 4];
-      const categoryMap: Record<number, string> = { 0: 'General', 1: 'Artist', 3: 'Copyright', 4: 'Character', 5: 'Meta' };
-      void (categoryMap[meta.category] || `Unknown(${meta.category})`);
-
       if (validCategories.includes(meta.category)) {
         this.injectAnalyticsButton(meta);
       } else {
@@ -370,7 +362,7 @@ export class TagAnalyticsApp {
 
 
       // OPTIMIZATION: Small Tag Handling (<= 1200 posts)
-      const MAX_OPTIMIZED_POSTS = 1200;
+      const MAX_OPTIMIZED_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
       if (initialPosts && totalCount <= MAX_OPTIMIZED_POSTS && initialPosts.length >= totalCount) {
 
         this.injectAnalyticsButton(null, 0, "Calculating history... (0%)");
@@ -522,9 +514,6 @@ export class TagAnalyticsApp {
 
       // 2. Fetch Monthly Counts (History) & Milestones & Status/Rating Counts in parallel
 
-
-      void performance.now();
-      const startReq2 = this.rateLimiter.getRequestCount();
 
       const milestoneTargets = this.getMilestoneTargets(totalCount);
 
@@ -805,8 +794,6 @@ export class TagAnalyticsApp {
       // The historyData and milestones returned from Promise.all are already fully corrected.
 
       console.timeEnd('TagAnalytics:Total');
-      void performance.now();
-      void (this.rateLimiter.getRequestCount() - startReq2);
 
 
       // Conditional Fetch for Copyright/Character - REMOVED (Moved to Start)
@@ -893,7 +880,7 @@ export class TagAnalyticsApp {
     }
 
     let posts: any[] = [];
-    const MAX_OPTIMIZED_POSTS = 1200;
+    const MAX_OPTIMIZED_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
     const isSmallTag = tagData.post_count <= MAX_OPTIMIZED_POSTS;
     const targetFetchCount = Math.min(tagData.post_count, MAX_OPTIMIZED_POSTS);
     const limit = isSmallTag ? 200 : 100; // Small tag = batch up to 200, Large tag = only need first 100
@@ -1005,12 +992,6 @@ export class TagAnalyticsApp {
    * @param {string} tagName - The tag to analyze.
    * @return {Promise<number>} - Count of posts created in the last 24 hours.
    */
-  async _fetchNewPostCountV1(tagName: string): Promise<number> {
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+date:>=${yesterday}`;
-    return this.rateLimiter.fetch(url).then((r: Response) => r.json()).then((d: any) => d.counts.posts).catch(() => 0);
-  }
-
   async fetchCountWithRetry(url: string, retries: number = 1): Promise<number> {
     for (let i = 0; i <= retries; i++) {
       try {
@@ -1178,7 +1159,7 @@ export class TagAnalyticsApp {
           const cResp = await this.rateLimiter.fetch(cUrl).then((r: Response) => r.json());
           const c = (cResp && cResp.counts ? cResp.counts.posts : (cResp ? cResp.posts : 0)) || 0;
           obj.count = c;
-        } catch (e) { }
+        } catch (e) { console.debug('[DI] Failed to fetch combined tag count', e); }
       }));
 
       // 5. Accumulate Frequency for Cutoff
@@ -1483,9 +1464,6 @@ export class TagAnalyticsApp {
     const startMonth = startDateObj.getMonth(); // 0-based
 
     const now = new Date();
-    void now.getFullYear();
-    void now.getMonth();
-
     const monthlyData: any[] = [];
     let cumulative = 0;
 
@@ -1511,7 +1489,6 @@ export class TagAnalyticsApp {
       nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
       const nextY = nextMonth.getUTCFullYear();
       const nextM = nextMonth.getUTCMonth() + 1;
-      void `${nextY}-${String(nextM).padStart(2, '0')}`;
 
       // Danbooru counts API needs the date filter INSIDE the tags parameter
       let rangeEnd = `${nextY}-${String(nextM).padStart(2, '0')}-01`;
@@ -1547,12 +1524,13 @@ export class TagAnalyticsApp {
           const count = (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
           return {
             date: task.dateStr,
-            count: count
+            count: count,
+            cumulative: 0,
           };
         })
         .catch((e: unknown) => {
           console.warn(`[TagAnalyticsApp] Failed month ${task.dateStr}`, e);
-          return { date: task.dateStr, count: 0 };
+          return { date: task.dateStr, count: 0, cumulative: 0 };
         });
     });
 
@@ -2372,7 +2350,7 @@ export class TagAnalyticsApp {
                <div class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                   <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
                      <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                         <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.latestPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                         <img src="${getBestThumbnailUrl(tagData.latestPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                      </a>
                   </div>
                   <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
@@ -2385,7 +2363,7 @@ export class TagAnalyticsApp {
                    <div id="trending-post-sfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                       <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
                          <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                               <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                               <img src="${getBestThumbnailUrl(tagData.trendingPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                          </a>
                       </div>
                       <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
@@ -2398,7 +2376,7 @@ export class TagAnalyticsApp {
                    <div id="trending-post-nsfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
                       <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
                          <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
-                               <img src="${AnalyticsDataManager.getBestThumbnailUrl(tagData.trendingPostNSFW)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                               <img src="${getBestThumbnailUrl(tagData.trendingPostNSFW)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
                          </a>
                       </div>
                       <div style="font-size: 0.75em; font-weight: bold; color: #cc0000; margin-top: 5px;">Trending(NSFW)</div>
@@ -3013,7 +2991,7 @@ export class TagAnalyticsApp {
       }
 
       const dateStr = new Date(p.created_at).toISOString().slice(0, 10);
-      const thumbUrl = AnalyticsDataManager.getBestThumbnailUrl(p);
+      const thumbUrl = getBestThumbnailUrl(p);
       const uploaderName = p.uploader_name || `User ${p.uploader_id}`;
 
       const card = document.createElement('div');
@@ -3040,7 +3018,7 @@ export class TagAnalyticsApp {
                 </a>
             </div>
             <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
-                <a href="/users/${p.uploader_id}" target="_blank" class="${this.getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
+                <a href="/users/${p.uploader_id}" target="_blank" class="${getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
             </div>
         `;
 
@@ -3601,7 +3579,7 @@ export class TagAnalyticsApp {
       // Level Lookup: Check object first, then instance cache (ID -> Object), then instance cache (Name -> Object)
       const userCached = this.userNames[String(u.id)] || this.userNames[name];
       const level = u.level || (userCached && typeof userCached === 'object' ? userCached.level : null);
-      const userClass = this.getLevelClass(level);
+      const userClass = getLevelClass(level);
 
       let query = '';
       if (role && tagName) {
@@ -3639,19 +3617,6 @@ export class TagAnalyticsApp {
           <h4 style="margin: 0 0 10px 0; font-size: 0.9em; color: #555; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${title}</h4>
           <div>${list}</div>
       </div>`;
-  }
-
-  getLevelClass(level: string | null): string {
-    if (!level) return 'user-member';
-    const l = level.toLowerCase();
-    if (l.includes('admin') || l.includes('owner')) return 'user-admin';
-    if (l.includes('moderator')) return 'user-moderator';
-    if (l.includes('builder') || l.includes('contributor') || l.includes('approver')) return 'user-builder';
-    if (l.includes('platinum')) return 'user-platinum';
-    if (l.includes('gold')) return 'user-gold';
-    if (l.includes('janitor')) return 'user-janitor';
-    if (l.includes('member')) return 'user-member';
-    return 'user-member';
   }
 
   updateRankingTabs(role: string, tagData: any): void {

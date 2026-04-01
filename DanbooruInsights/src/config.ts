@@ -1,15 +1,30 @@
 import type {Theme} from './types';
 
 // --- Configuration & Constants ---
+/** One day in milliseconds. */
+export const DAY_MS = 86_400_000;
+
 export const CONFIG: {
   STORAGE_PREFIX: string;
   CLEANUP_THRESHOLD_MS: number;
+  MAX_OPTIMIZED_POSTS: number;
+  REPORT_COOLDOWN_MS: number;
+  ANALYTICS_CLEANUP_THRESHOLD_MS: number;
+  CACHE_EXPIRY_MS: number;
   RATE_LIMITER: {concurrency: number; jitter: [number, number]; rps: number};
   SELECTORS: {STATISTICS_SECTION: string};
   THEMES: Record<string, Theme>;
 } = {
   STORAGE_PREFIX: 'danbooru_contrib_',
-  CLEANUP_THRESHOLD_MS: 7 * 24 * 60 * 60 * 1000, // 7 Days
+  CLEANUP_THRESHOLD_MS: 7 * DAY_MS, // 7 Days
+  /** Max posts for small-tag/quick-sync optimization path. */
+  MAX_OPTIMIZED_POSTS: 1200,
+  /** Cooldown between report queue requests (ms). */
+  REPORT_COOLDOWN_MS: 3000,
+  /** Retention threshold for analytics-data-manager cleanup (14 days). */
+  ANALYTICS_CLEANUP_THRESHOLD_MS: 14 * DAY_MS,
+  /** Cache expiry for tag_analytics and piestats (24 hours). */
+  CACHE_EXPIRY_MS: DAY_MS,
   RATE_LIMITER: {concurrency: 6, jitter: [0, 50], rps: 6},
   SELECTORS: {
     STATISTICS_SECTION: 'div.user-statistics',

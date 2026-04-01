@@ -1,6 +1,7 @@
 import {DataManager} from './data-manager';
 import type {ApiItem} from './data-manager';
-import {isTopLevelTag} from '../utils';
+import {CONFIG} from '../config';
+import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
 import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint} from '../types';
 
 /** Summary statistics for a user's upload history. */
@@ -74,30 +75,6 @@ export class AnalyticsDataManager extends DataManager {
    * @param {Object} post The post data object from Danbooru API.
    * @return {string} The selected thumbnail URL.
    */
-  static getBestThumbnailUrl(post: any): string {
-    if (!post) return '';
-
-    // 1. Try modern variants
-    if (post.variants && Array.isArray(post.variants) && post.variants.length > 0) {
-      const preferredTypes = ['720x720', '360x360'];
-      // 1a. Try preferred variants in WebP
-      for (const type of preferredTypes) {
-        const variant = post.variants.find((v: ApiItem) => v['type'] === type && v['file_ext'] === 'webp');
-        if (variant) return variant.url;
-      }
-      // 1b. Try preferred variants in any format
-      for (const type of preferredTypes) {
-        const variant = post.variants.find((v: ApiItem) => v['type'] === type);
-        if (variant) return variant.url;
-      }
-      // 1c. Last resort: any variant
-      if (post.variants[0] && post.variants[0].url) return post.variants[0].url;
-    }
-
-    // 2. Fallback to legacy fields (if still present in object or for non-variant posts)
-    return post.preview_file_url || post.file_url || post.large_file_url || '';
-  }
-
   /**
    * Fetches a thumbnail URL with built-in retry logic for handling rate limits.
    * Implements exponential backoff on 429 status codes.
@@ -120,7 +97,7 @@ export class AnalyticsDataManager extends DataManager {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (Array.isArray(data) && data.length > 0) {
-          return AnalyticsDataManager.getBestThumbnailUrl(data[0]);
+          return getBestThumbnailUrl(data[0]);
         }
         return '';
       } catch (e: unknown) {
@@ -639,7 +616,7 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (_e: unknown) { }
+        } catch (_e: unknown) { console.debug('[DI] Failed to fetch user tag count', _e); }
         delete obj._item;
       });
 
@@ -725,7 +702,7 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (_e: unknown) { }
+        } catch (_e: unknown) { console.debug('[DI] Failed to fetch user tag count', _e); }
         delete obj._item;
       });
 
@@ -1317,7 +1294,7 @@ export class AnalyticsDataManager extends DataManager {
           count = resp.counts.posts;
         }
         obj.count = count;
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch breasts count', e); }
     });
 
     // Filter out zero counts
@@ -1383,7 +1360,7 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch count', e); }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
@@ -1447,7 +1424,7 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch count', e); }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
@@ -1552,7 +1529,7 @@ export class AnalyticsDataManager extends DataManager {
       if (profile && typeof profile.post_upload_count === 'number') {
         return profile.post_upload_count;
       }
-    } catch (_e2: unknown) { }
+    } catch (_e2: unknown) { console.debug('[DI] Failed to fetch user profile', _e2); }
 
     // Method C: DOM Fallback
     try {
@@ -1562,7 +1539,7 @@ export class AnalyticsDataManager extends DataManager {
       if (statsLink) {
         return parseInt((statsLink.textContent ?? '').replace(/,/g, ''), 10);
       }
-    } catch (_e3: unknown) { }
+    } catch (_e3: unknown) { console.debug('[DI] Failed to parse DOM stats', _e3); }
 
     return 0; // Failed
   }
@@ -1920,7 +1897,7 @@ export class AnalyticsDataManager extends DataManager {
    */
   async cleanupStaleData(currentUserId: number | string): Promise<void> {
     const currentId = typeof currentUserId === 'number' ? currentUserId : parseInt(currentUserId);
-    const THRESHOLD = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
+    const THRESHOLD = CONFIG.ANALYTICS_CLEANUP_THRESHOLD_MS;
     const now = new Date().getTime();
 
     try {
