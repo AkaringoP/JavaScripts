@@ -1,8 +1,8 @@
 import {describe, it, expect, vi, beforeAll} from 'vitest';
 
-// Mock all heavy dependencies so we can instantiate TagAnalyticsApp cheaply
+// Mock all heavy dependencies so we can instantiate TagAnalyticsDataService cheaply
 vi.mock('d3', () => ({}));
-vi.mock('../src/config', () => ({CONFIG: {RATE_LIMITER: {}}}));
+vi.mock('../src/config', () => ({CONFIG: {RATE_LIMITER: {}, MAX_OPTIMIZED_POSTS: 1200, CACHE_EXPIRY_MS: 86400000}}));
 vi.mock('../src/core/analytics-data-manager', () => ({
   AnalyticsDataManager: vi.fn(),
 }));
@@ -14,13 +14,13 @@ vi.mock('../src/utils', () => ({
   escapeHtml: vi.fn((s: string) => s),
 }));
 
-let app: InstanceType<typeof import('../src/apps/tag-analytics-app').TagAnalyticsApp>;
+let dataService: InstanceType<typeof import('../src/apps/tag-analytics-data').TagAnalyticsDataService>;
 
 beforeAll(async () => {
-  const {TagAnalyticsApp} = await import('../src/apps/tag-analytics-app');
-  app = new TagAnalyticsApp(
+  const {TagAnalyticsDataService} = await import('../src/apps/tag-analytics-data');
+  dataService = new TagAnalyticsDataService(
     {} as any, // db
-    {} as any, // settings
+    {} as any, // rateLimiter
     'test_tag'
   );
 });
@@ -30,19 +30,19 @@ beforeAll(async () => {
 // ---------------------------------------------------------------------------
 describe('getMilestoneTargets', () => {
   it('always includes 1', () => {
-    expect(app.getMilestoneTargets(0)).toContain(1);
-    expect(app.getMilestoneTargets(50)).toContain(1);
+    expect(dataService.getMilestoneTargets(0)).toContain(1);
+    expect(dataService.getMilestoneTargets(50)).toContain(1);
   });
 
   it('returns sorted ascending', () => {
-    const targets = app.getMilestoneTargets(5000);
+    const targets = dataService.getMilestoneTargets(5000);
     for (let i = 1; i < targets.length; i++) {
       expect(targets[i]).toBeGreaterThan(targets[i - 1]);
     }
   });
 
   it('includes round milestones for small total', () => {
-    const targets = app.getMilestoneTargets(350);
+    const targets = dataService.getMilestoneTargets(350);
     expect(targets).toContain(100);
     expect(targets).toContain(200);
     expect(targets).toContain(300);
@@ -50,14 +50,14 @@ describe('getMilestoneTargets', () => {
   });
 
   it('includes 1000 and 10000 for large total', () => {
-    const targets = app.getMilestoneTargets(15000);
+    const targets = dataService.getMilestoneTargets(15000);
     expect(targets).toContain(1000);
     expect(targets).toContain(10000);
   });
 
   it('step scales with total', () => {
     // total=500 → step=100
-    const small = app.getMilestoneTargets(500);
+    const small = dataService.getMilestoneTargets(500);
     expect(small).toContain(100);
     expect(small).toContain(200);
     expect(small).toContain(300);
@@ -65,7 +65,7 @@ describe('getMilestoneTargets', () => {
     expect(small).toContain(500);
 
     // total=60000 → step=5000
-    const large = app.getMilestoneTargets(60000);
+    const large = dataService.getMilestoneTargets(60000);
     expect(large).toContain(5000);
     expect(large).toContain(10000);
     expect(large).toContain(55000);
@@ -73,7 +73,7 @@ describe('getMilestoneTargets', () => {
   });
 
   it('has no duplicates', () => {
-    const targets = app.getMilestoneTargets(1200);
+    const targets = dataService.getMilestoneTargets(1200);
     expect(new Set(targets).size).toBe(targets.length);
   });
 });
@@ -83,7 +83,7 @@ describe('getMilestoneTargets', () => {
 // ---------------------------------------------------------------------------
 describe('calculateLocalStats', () => {
   it('returns zero counts for empty array', () => {
-    const stats = app.calculateLocalStats([]);
+    const stats = dataService.calculateLocalStats([]);
     expect(stats.ratingCounts).toEqual({g: 0, s: 0, q: 0, e: 0});
     expect(stats.uploaderRanking).toEqual([]);
     expect(stats.approverRanking).toEqual([]);
@@ -96,7 +96,7 @@ describe('calculateLocalStats', () => {
       {rating: 's', uploader_id: 2},
       {rating: 'e', uploader_id: 3},
     ];
-    const stats = app.calculateLocalStats(posts);
+    const stats = dataService.calculateLocalStats(posts);
     expect(stats.ratingCounts).toEqual({g: 2, s: 1, q: 0, e: 1});
   });
 
@@ -107,7 +107,7 @@ describe('calculateLocalStats', () => {
       {rating: 'g', uploader_id: 10},
       {rating: 'g', uploader_id: 20},
     ];
-    const stats = app.calculateLocalStats(posts);
+    const stats = dataService.calculateLocalStats(posts);
     expect(stats.uploaderRanking[0].id).toBe('10');
     expect(stats.uploaderRanking[0].count).toBe(3);
     expect(stats.uploaderRanking[0].rank).toBe(1);
@@ -121,14 +121,14 @@ describe('calculateLocalStats', () => {
       {rating: 'g', uploader_id: 1, approver_id: 100},
       {rating: 'g', uploader_id: 1, approver_id: 200},
     ];
-    const stats = app.calculateLocalStats(posts);
+    const stats = dataService.calculateLocalStats(posts);
     expect(stats.approverRanking[0].id).toBe('100');
     expect(stats.approverRanking[0].count).toBe(2);
   });
 
   it('ignores unknown ratings', () => {
     const posts = [{rating: 'x', uploader_id: 1}];
-    const stats = app.calculateLocalStats(posts);
+    const stats = dataService.calculateLocalStats(posts);
     expect(stats.ratingCounts).toEqual({g: 0, s: 0, q: 0, e: 0});
   });
 
@@ -137,7 +137,7 @@ describe('calculateLocalStats', () => {
       rating: 'g',
       uploader_id: i,
     }));
-    const stats = app.calculateLocalStats(posts);
+    const stats = dataService.calculateLocalStats(posts);
     expect(stats.uploaderRanking.length).toBe(100);
   });
 });
@@ -147,8 +147,8 @@ describe('calculateLocalStats', () => {
 // ---------------------------------------------------------------------------
 describe('calculateHistoryFromPosts', () => {
   it('returns empty array for empty input', () => {
-    expect(app.calculateHistoryFromPosts([])).toEqual([]);
-    expect(app.calculateHistoryFromPosts(null as any)).toEqual([]);
+    expect(dataService.calculateHistoryFromPosts([])).toEqual([]);
+    expect(dataService.calculateHistoryFromPosts(null as any)).toEqual([]);
   });
 
   it('groups posts by month and computes cumulative', () => {
@@ -157,7 +157,7 @@ describe('calculateHistoryFromPosts', () => {
       {created_at: '2024-01-20T00:00:00Z'},
       {created_at: '2024-03-10T00:00:00Z'},
     ];
-    const history = app.calculateHistoryFromPosts(posts);
+    const history = dataService.calculateHistoryFromPosts(posts);
 
     // Should have entries from 2024-01 through at least 2024-03
     const jan = history.find((h: any) => h.date === '2024-01-01');
@@ -181,7 +181,7 @@ describe('calculateHistoryFromPosts', () => {
       {created_at: '2024-06-01T00:00:00Z'},
       {created_at: '2024-01-01T00:00:00Z'},
     ];
-    const history = app.calculateHistoryFromPosts(posts);
+    const history = dataService.calculateHistoryFromPosts(posts);
     expect(history[0].date).toBe('2024-01-01');
   });
 
@@ -190,7 +190,7 @@ describe('calculateHistoryFromPosts', () => {
       {created_at: '2024-05-01T00:00:00Z'},
       {created_at: 'not-a-date'},
     ];
-    const history = app.calculateHistoryFromPosts(posts);
+    const history = dataService.calculateHistoryFromPosts(posts);
     const may = history.find((h: any) => h.date === '2024-05-01');
     expect(may!.count).toBe(1);
   });
@@ -200,7 +200,7 @@ describe('calculateHistoryFromPosts', () => {
       {created_at: '2024-01-01T00:00:00Z'},
       {created_at: '2024-04-01T00:00:00Z'},
     ];
-    const history = app.calculateHistoryFromPosts(posts);
+    const history = dataService.calculateHistoryFromPosts(posts);
     const feb = history.find((h: any) => h.date === '2024-02-01');
     const mar = history.find((h: any) => h.date === '2024-03-01');
     expect(feb!.count).toBe(0);
@@ -214,14 +214,14 @@ describe('calculateHistoryFromPosts', () => {
 describe('mergeHistory', () => {
   it('returns newHistory when oldHistory is empty', () => {
     const newH = [{date: '2024-01-01', count: 5, cumulative: 5}];
-    expect(app.mergeHistory([], newH)).toEqual(newH);
-    expect(app.mergeHistory(null as any, newH)).toEqual(newH);
+    expect(dataService.mergeHistory([], newH)).toEqual(newH);
+    expect(dataService.mergeHistory(null as any, newH)).toEqual(newH);
   });
 
   it('returns oldHistory when newHistory is empty', () => {
     const oldH = [{date: '2024-01-01', count: 5, cumulative: 5}];
-    expect(app.mergeHistory(oldH, [])).toEqual(oldH);
-    expect(app.mergeHistory(oldH, null as any)).toEqual(oldH);
+    expect(dataService.mergeHistory(oldH, [])).toEqual(oldH);
+    expect(dataService.mergeHistory(oldH, null as any)).toEqual(oldH);
   });
 
   it('merges without duplicating overlapping months', () => {
@@ -235,7 +235,7 @@ describe('mergeHistory', () => {
       {date: '2024-04-01', count: 3, cumulative: 0},
     ];
 
-    const merged = app.mergeHistory(oldH, newH);
+    const merged = dataService.mergeHistory(oldH, newH);
     const dates = merged.map((h: any) => h.date);
 
     // No duplicate months
@@ -257,7 +257,7 @@ describe('mergeHistory', () => {
       {date: '2024-03-01', count: 7, cumulative: 999}, // wrong cumulative
     ];
 
-    const merged = app.mergeHistory(oldH, newH);
+    const merged = dataService.mergeHistory(oldH, newH);
     expect(merged[0].cumulative).toBe(10);
     expect(merged[1].cumulative).toBe(15);
     expect(merged[2].cumulative).toBe(22);
@@ -270,8 +270,8 @@ describe('mergeHistory', () => {
 describe('mergeMilestones', () => {
   it('returns old milestones when new is empty', () => {
     const old = [{milestone: 100, post_id: 1}];
-    expect(app.mergeMilestones(old, [])).toEqual(old);
-    expect(app.mergeMilestones(old, null as any)).toEqual(old);
+    expect(dataService.mergeMilestones(old, [])).toEqual(old);
+    expect(dataService.mergeMilestones(old, null as any)).toEqual(old);
   });
 
   it('merges and sorts by milestone number', () => {
@@ -280,12 +280,12 @@ describe('mergeMilestones', () => {
       {milestone: 1000, post_id: 10},
     ];
     const newM = [{milestone: 500, post_id: 5}];
-    const merged = app.mergeMilestones(old, newM);
+    const merged = dataService.mergeMilestones(old, newM);
 
     expect(merged.map((m: any) => m.milestone)).toEqual([100, 500, 1000]);
   });
 
   it('handles both empty arrays', () => {
-    expect(app.mergeMilestones([], [])).toEqual([]);
+    expect(dataService.mergeMilestones([], [])).toEqual([]);
   });
 });

@@ -179,6 +179,16 @@ export const GLOBAL_CSS = `
     .di-flex-col-between { display: flex; flex-direction: column; justify-content: space-between; }
     .di-flex-row-between { display: flex; justify-content: space-between; align-items: center; }
     .di-flex-center { display: flex; justify-content: center; align-items: center; }
+
+    /* -- User Analytics Charts -- */
+    .month-column .column-overlay { transition: fill 0.2s; }
+    .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
+    .month-column:hover .monthly-bar { fill: #216e39; }
+    .star-shiny {
+        font-size: 15px;
+        stroke-width: 0.1px !important;
+        filter: drop-shadow(0 0 5px #ffd700);
+    }
   `;
 
 /**
