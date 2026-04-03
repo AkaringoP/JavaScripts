@@ -52,7 +52,8 @@ export class UserAnalyticsDataService {
       milestones1k,
       scatterData,
       levelChanges,
-      timelineMilestones
+      timelineMilestones,
+      tagCloudGeneral
     ] = await Promise.all([
       dataManager.getSyncStats(user),
       dataManager.getTotalPostCount(user),
@@ -74,7 +75,8 @@ export class UserAnalyticsDataService {
       dataManager.getMilestones(user, isNsfwEnabled, 1000),
       dataManager.getScatterData(user),
       dataManager.getLevelChangeHistory(user),
-      dataManager.getTimelineMilestones(user)
+      dataManager.getTimelineMilestones(user),
+      dataManager.getTagCloudData(user, 0) // General category pre-fetch
     ]);
 
     return {
@@ -88,7 +90,8 @@ export class UserAnalyticsDataService {
       milestones1k,
       scatterData,
       levelChanges,
-      timelineMilestones
+      timelineMilestones,
+      tagCloudGeneral
     };
   }
 }

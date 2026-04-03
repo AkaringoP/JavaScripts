@@ -6,6 +6,7 @@ import {UserAnalyticsDataService} from './user-analytics-data';
 import {getLevelClass} from '../utils';
 import {renderPieWidget, renderTopPostsWidget, renderMilestonesWidget, renderHistoryChart} from './user-analytics-charts';
 import {renderScatterPlot} from './user-analytics-scatter';
+import {renderTagCloudWidget} from './tag-cloud-widget';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
 
@@ -681,7 +682,7 @@ export class UserAnalyticsApp {
 
       // Pre-fetch all data!
       const dashboardData = await this.dataService.fetchDashboardData(this.context);
-      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones } = dashboardData;
+      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral } = dashboardData;
       const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
       const today = new Date();
       const oneDay = 1000 * 60 * 60 * 24;
@@ -1226,13 +1227,28 @@ export class UserAnalyticsApp {
       await renderHistoryChart(dashboardDiv, this.db, this.context, milestones1k, levelChanges);
 
 
-      // 5. Scatter Plot Widget
+      // 5. Tag Cloud Widget
+      const tagCloudContainer = document.createElement('div');
+      tagCloudContainer.style.marginTop = '35px';
+      dashboardDiv.appendChild(tagCloudContainer);
+      renderTagCloudWidget(tagCloudContainer, {
+        initialData: tagCloudGeneral,
+        fetchData: (catId: number) => this.dataManager.getTagCloudData(
+          this.context.targetUser, catId
+        ),
+        userName: this.context.targetUser.normalizedName,
+        categories: [
+          {id: 0, label: 'General', color: '#0075f8'},
+          {id: 1, label: 'Artist', color: '#a00'},
+          {id: 3, label: 'Copy', color: '#a800aa'},
+          {id: 4, label: 'Char', color: '#00ab2c'},
+        ],
+      });
+
+      // 6. Scatter Plot Widget
       if (scatterData.length > 0) {
         renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges);
       }
-
-
-
 
 
 
