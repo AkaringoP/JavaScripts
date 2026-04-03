@@ -2,7 +2,7 @@ import {DataManager} from './data-manager';
 import type {ApiItem} from './data-manager';
 import {CONFIG} from '../config';
 import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
-import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint} from '../types';
+import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem} from '../types';
 
 /** Summary statistics for a user's upload history. */
 export interface SummaryStats {
@@ -561,6 +561,61 @@ export class AnalyticsDataManager extends DataManager {
       return results;
     } catch (e: unknown) {
       console.error('[Danbooru Grass] Failed to fetch rating distribution', e);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches tag cloud data for a user from the related tags API.
+   * Selects top 30 tags by cosine similarity (relevance to the user),
+   * then sorts by frequency for font size mapping.
+   * Results are cached in the piestats table with a `tag_cloud_` prefix.
+   *
+   * @param userInfo The target user.
+   * @param categoryId Danbooru tag category (0=General, 1=Artist, 3=Copyright, 4=Character).
+   * @return Tag cloud items sorted by frequency descending.
+   */
+  async getTagCloudData(userInfo: TargetUser, categoryId: number): Promise<TagCloudItem[]> {
+    if (!userInfo.name) return [];
+
+    const categoryNames: Record<number, string> = {0: 'general', 1: 'artist', 3: 'copyright', 4: 'character'};
+    const catName = categoryNames[categoryId] || `cat${categoryId}`;
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = `tag_cloud_${catName}`;
+
+    // Check cache
+    if (uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as TagCloudItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    // General: select by Cosine similarity (user-characteristic tags)
+    // Others: select by Frequency (most common tags)
+    const order = categoryId === 0 ? 'Cosine' : 'Frequency';
+    const url = `/related_tag.json?commit=Search&search[category]=${categoryId}&search[order]=${order}&search[query]=user:${encodeURIComponent(normalizedName)}`;
+
+    try {
+      const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+
+      const queryPostCount: number = resp.post_count || 0;
+
+      // Select top 30, then sort by frequency for font size mapping
+      const items: TagCloudItem[] = resp.related_tags
+        .slice(0, 30)
+        .map((item: any) => ({
+          name: item.tag.name.replace(/_/g, ' '),
+          tagName: item.tag.name,
+          frequency: item.frequency,
+          count: Math.round(item.frequency * queryPostCount),
+        }))
+        .sort((a: TagCloudItem, b: TagCloudItem) => b.frequency - a.frequency);
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+      return items;
+    } catch (e: unknown) {
+      console.debug('[DI] Failed to fetch tag cloud data', e);
       return [];
     }
   }

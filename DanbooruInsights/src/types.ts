@@ -207,6 +207,18 @@ export interface MilestoneEntry {
   };
 }
 
+/** A single tag cloud entry with name and frequency. */
+export interface TagCloudItem {
+  /** Display name (underscores replaced with spaces). */
+  name: string;
+  /** Raw tag name for URL construction. */
+  tagName: string;
+  /** Co-occurrence frequency (0..1) from related_tag API. */
+  frequency: number;
+  /** Estimated post count (frequency × total query posts). */
+  count: number;
+}
+
 /** Cached tag analytics report stored in the `tag_analytics` table. */
 export interface TagAnalyticsReport {
   tagName: string;

@@ -180,6 +180,27 @@ export const GLOBAL_CSS = `
     .di-flex-row-between { display: flex; justify-content: space-between; align-items: center; }
     .di-flex-center { display: flex; justify-content: center; align-items: center; }
 
+    /* -- Tag Cloud Widget -- */
+    .di-tag-cloud-word {
+        cursor: pointer;
+        transition: opacity 0.2s, font-size 0.15s ease;
+    }
+    .di-tag-cloud-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 200px;
+    }
+    .di-tag-cloud-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.75em;
+        color: #888;
+        padding-top: 8px;
+        border-top: 1px solid #eee;
+    }
+
     /* -- User Analytics Charts -- */
     .month-column .column-overlay { transition: fill 0.2s; }
     .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
