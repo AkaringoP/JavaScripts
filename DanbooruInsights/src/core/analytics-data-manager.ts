@@ -912,7 +912,7 @@ export class AnalyticsDataManager extends DataManager {
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
 
       // Lazy Load Thumbnails
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -998,7 +998,7 @@ export class AnalyticsDataManager extends DataManager {
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
 
       // Lazy Load
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -1161,7 +1161,7 @@ export class AnalyticsDataManager extends DataManager {
       // We will need to pass the `onDataUpdate` callback from the UI layer.
       // For this refactor, I will add `onDataUpdate` to arguments.
 
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -1577,8 +1577,7 @@ export class AnalyticsDataManager extends DataManager {
 
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1641,8 +1640,7 @@ export class AnalyticsDataManager extends DataManager {
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1705,8 +1703,7 @@ export class AnalyticsDataManager extends DataManager {
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1725,7 +1722,7 @@ export class AnalyticsDataManager extends DataManager {
     // Process in background
 
 
-    await this.mapConcurrent(toFetch, 3, async (item) => {
+    await this.mapConcurrent(toFetch, 2, async (item) => {
       // Re-construct query based on cacheKey or item data?
       // "item" doesn't have the full query info derived in the parent function (e.g. hair_color map).
       // But we stored `tagName` or `originalTag` or `color`?
