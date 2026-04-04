@@ -4,7 +4,75 @@ All notable changes to Danbooru Insights are documented here.
 
 ---
 
-## v7.0.0 — TypeScript Migration
+## v8.0.0 — New Widgets, Theme System Overhaul & UX Improvements
+
+### New Widgets
+- **Tag Cloud**: d3-cloud word cloud visualizing user's most-used tags across 4 categories (General/Artist/Copyright/Character). Log-scale font sizing, crossfade tab transitions, layout caching. General tags selected by Cosine similarity for user-characteristic results.
+- **Created Tags**: Discovers general tags created by the user via NNTBot forum report parsing. Auto-detects previous usernames, shows current status (Active/Aliased/Deprecated/Empty) with alias post counts. Lazy-loaded with progress indicator.
+
+### Pie Chart Enhancements
+- **Gender Tab**: Girl/Boy/Other/No Humans distribution via OR queries.
+- **Commentary Tab**: Commentary/Requested/Untagged distribution.
+- **Translation Tab**: Translated/Requested/Untagged distribution.
+- **2-Row Tab Layout**: Top row (Copy, Char, Fav_Copy, Status, Rate, Cmnt, Tran), bottom row (Gender, Boobs, Hair_L, Hair_C).
+- **Tab Tooltips**: Hover for full name (e.g., "Copy" → "Copyright").
+- **Thumbnail Fix**: `enrichThumbnails()` now awaited — thumbnails fully loaded before dashboard opens.
+
+### Theme System
+- **3 New Themes**: Lavender (Light), Monokai (Dark), Ember (Dark gradient). Sunset removed.
+- **Grass Color Picker**: 4 selectable grass palettes per theme (48 total). Flyout UI appears on theme icon click. d3-scale-chromatic inspired palettes (Viridis, Inferno, Plasma, etc.).
+- **Live Preview**: CalHeatmap destroy+repaint on theme/grass change with scroll position preserved.
+- **ThemeChanged Event**: Cross-component reactivity for instant color updates.
+
+### Scatter Plot
+- **Drag Range Display**: Shows date range, score/tag count range, and post count during drag selection. Dark tooltip above selection box, debounced (50ms).
+- **Crosshair Cursor**: Visual indication of drag capability.
+
+### Milestones
+- **Repdigit Option**: Milestones at repdigit numbers (11, 111, 222, ..., 9999, 11111+).
+- **Every 10k Option**: For large uploaders.
+
+### Architecture & Quality
+- **Architecture Fitness Tests** (5): Dependency direction enforcement, `[key: string]: any` ban, raw `fetch()` ban. Found and fixed 2 existing raw fetch violations.
+- **Git Pre-commit Hook**: Auto-runs `npm run build` on DanbooruInsights changes.
+- **Rate Limit Fix**: `enrichThumbnails` concurrency reduced from 3 to 2 to prevent 429 errors.
+- **Settings Popover**: Moved to `document.body` (position:fixed) for correct z-index stacking. Scroll-anchored to settings button.
+- **Hourly Panel Sync**: Follows heatmap container position on resize/move.
+- **Bug Fix**: `has:comments` → `has:commentary` in TagAnalytics commentary pie chart.
+
+### Stats
+- **112 automated tests** (up from 86)
+- **12 themes** with 48 grass color options
+- **~15,000 lines of TypeScript**
+
+---
+
+## v7.x — Architecture Refinement & Incremental Features
+
+### v7.5.0
+- **Pie Chart**: Added Gender, Commentary, Translation tabs. 2-row tab layout. Title tooltips on hover.
+- **Scatter Plot**: Drag range display (date + score/tag count + post count), crosshair cursor.
+- **Milestones**: Repdigit (111, 222, ...) and Every 10k options.
+- **Bug Fix**: TagAnalytics `has:comments` → `has:commentary`.
+
+### v7.4.0
+- **Created Tags Widget**: NNTBot forum report parsing to discover tags created by user.
+- Auto-detect previous usernames via `user_name_change_requests` API.
+- Optimized alias checking: only post_count=0 tags + parallel (concurrency 5).
+- Lazy loading with real-time progress indicator.
+
+### v7.3.0
+- **Tag Cloud Widget**: d3-cloud word cloud with 4 category tabs (General/Artist/Copyright/Character).
+- Log-scale font sizing, crossfade transitions, layout caching.
+- General tags selected by Cosine similarity for user-characteristic results.
+
+### v7.2.2
+- **Architecture Separation (Phase 5)**: Split monolithic TagAnalyticsApp and UserAnalyticsApp into data/charts/app modules.
+- **Type Safety**: Added core interfaces (TagCloudItem, CreatedTagItem, PostRecord, etc.), removed `[key: string]: any` index signatures.
+- **Code Cleanup**: Extracted shared utilities, centralized magic numbers, added debug logging to empty catch blocks.
+- **Test Coverage**: 86 tests (up from 55).
+
+### v7.0.0
 
 > Developer release — no user-facing changes. Functionally identical to v6.5.2.
 
