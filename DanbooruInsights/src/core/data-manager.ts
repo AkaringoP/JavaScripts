@@ -716,7 +716,7 @@ export class DataManager {
       const encodedName = encodeURIComponent(userName);
       const url = `${this.baseUrl}/user_feedbacks.json?search[body_matches]=to+Approver&search[category]=neutral&search[hide_bans]=No&search[user_name]=${encodedName}&limit=1`;
 
-      const resp = await fetch(url);
+      const resp = await this.rateLimiter.fetch(url);
       if (!resp.ok) return null;
       const json: ApiItem[] = await resp.json();
 

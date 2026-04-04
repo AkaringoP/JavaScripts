@@ -1257,7 +1257,7 @@ export class TagAnalyticsDataService {
     try {
       // use name_matches to find the exact tag
       const url = `/tags.json?search[name_matches]=${encodeURIComponent(tagName)}`;
-      const resp = await fetch(url).then(r => r.json());
+      const resp = await this.rateLimiter.fetch(url).then((r: Response) => r.json());
 
       if (Array.isArray(resp) && resp.length > 0) {
         // Find exact match to be safe
