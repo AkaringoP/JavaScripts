@@ -45,17 +45,19 @@ export function renderPieWidget(
   let renderPending = false;
   let isNsfwEnabled = initialNsfwEnabled;
 
-  // Pre-process special distributions
-  if (pieData.breasts) {
-    const data = pieData.breasts;
-    const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
-    pieData.breasts = data.map((d: any) => ({
-      ...d,
-      frequency: total > 0 ? d.count / total : 0,
-      value: total > 0 ? d.count / total : 0,
-      label: d.name,
-      details: {...d, thumb: null},
-    }));
+  // Pre-process special distributions (count-based → frequency/value)
+  for (const key of ['breasts', 'gender', 'commentary', 'translation']) {
+    if (pieData[key]) {
+      const data = pieData[key];
+      const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
+      pieData[key] = data.map((d: any) => ({
+        ...d,
+        frequency: total > 0 ? d.count / total : 0,
+        value: total > 0 ? d.count / total : 0,
+        label: d.name,
+        details: {...d, thumb: null},
+      }));
+    }
   }
 
   const requestRender = () => {
@@ -122,7 +124,7 @@ export function renderPieWidget(
       return;
     } else if (currentPieTab === 'status') {
       query = `status:${details.name}`;
-    } else if (currentPieTab === 'breasts' || currentPieTab === 'hair_length' || currentPieTab === 'hair_color') {
+    } else if (['breasts', 'hair_length', 'hair_color', 'gender', 'commentary', 'translation'].includes(currentPieTab)) {
       if (details.originalTag) query = details.originalTag;
       else query = d.data.label.toLowerCase().replace(/ /g, '_');
     } else {
@@ -181,7 +183,7 @@ export function renderPieWidget(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const processedData: PieSlice[] = data.map((d: any, i: number) => {
-      if (['rating', 'status', 'breasts', 'hair_length', 'hair_color'].includes(currentPieTab)) {
+      if (['rating', 'status', 'breasts', 'hair_length', 'hair_color', 'gender', 'commentary', 'translation'].includes(currentPieTab)) {
         return {
           value: d.count,
           label: (currentPieTab === 'rating') ? (ratingLabels[d.rating as keyof typeof ratingLabels] || d.rating) : d.label || d.name,
@@ -379,6 +381,9 @@ export function renderPieWidget(
       else if (currentPieTab === 'hair_length') legendTitle = 'HAIR LENGTH';
       else if (currentPieTab === 'hair_color') legendTitle = 'HAIR COLOR';
       else if (currentPieTab === 'breasts') legendTitle = 'BREASTS';
+      else if (currentPieTab === 'gender') legendTitle = 'GENDER';
+      else if (currentPieTab === 'commentary') legendTitle = 'COMMENTARY';
+      else if (currentPieTab === 'translation') legendTitle = 'TRANSLATION';
 
       const styleTag = legendDiv.querySelector('style')?.outerHTML ?? '';
 
@@ -446,15 +451,22 @@ export function renderPieWidget(
   container.innerHTML = `
      <div style="width:100%; display:flex; flex-direction:column;">
          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; width:100%;">
-             <div style="display:flex; flex-wrap:wrap; gap:4px; max-width:100%;">
-                 <button class="di-pie-tab" data-mode="copyright">Copy</button>
-                 <button class="di-pie-tab" data-mode="character">Char</button>
-                 <button class="di-pie-tab" data-mode="fav_copyright">Fav_Copy</button>
-                 <button class="di-pie-tab" data-mode="status">Status</button>
-                 <button class="di-pie-tab" data-mode="rating">Rate</button>
-                 <button class="di-pie-tab" data-mode="hair_length">Hair_L</button>
-                 <button class="di-pie-tab" data-mode="hair_color">Hair_C</button>
-                 <button class="di-pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'};">Boobs</button>
+             <div style="display:flex; flex-direction:column; gap:4px; max-width:100%;">
+                 <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                     <button class="di-pie-tab" data-mode="copyright" title="Copyright">Copy</button>
+                     <button class="di-pie-tab" data-mode="character" title="Character">Char</button>
+                     <button class="di-pie-tab" data-mode="fav_copyright" title="Favorite Copyright">Fav_Copy</button>
+                     <button class="di-pie-tab" data-mode="status" title="Post Status">Status</button>
+                     <button class="di-pie-tab" data-mode="rating" title="Content Rating">Rate</button>
+                     <button class="di-pie-tab" data-mode="commentary" title="Commentary">Cmnt</button>
+                     <button class="di-pie-tab" data-mode="translation" title="Translation">Tran</button>
+                 </div>
+                 <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                     <button class="di-pie-tab" data-mode="gender" title="Gender Distribution">Gender</button>
+                     <button class="di-pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? 'block' : 'none'};" title="Breast Size">Boobs</button>
+                     <button class="di-pie-tab" data-mode="hair_length" title="Hair Length">Hair_L</button>
+                     <button class="di-pie-tab" data-mode="hair_color" title="Hair Color">Hair_C</button>
+                 </div>
              </div>
          </div>
          <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
@@ -503,6 +515,38 @@ export function renderPieWidget(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data = data.map((d: any) => ({
+          ...d,
+          frequency: total > 0 ? d.count / total : 0,
+          value: total > 0 ? d.count / total : 0,
+          label: d.name,
+          details: {...d, thumb: null},
+        }));
+      } else if (tabName === 'gender') {
+        data = await dataManager.getGenderDistribution(context.targetUser as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data = data.map((d: any) => ({
+          ...d,
+          frequency: total > 0 ? d.count / total : 0,
+          value: total > 0 ? d.count / total : 0,
+          label: d.name,
+          details: {...d, thumb: null},
+        }));
+      } else if (tabName === 'commentary') {
+        data = await dataManager.getCommentaryDistribution(context.targetUser as any);
+        const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
+        data = data.map((d: any) => ({
+          ...d,
+          frequency: total > 0 ? d.count / total : 0,
+          value: total > 0 ? d.count / total : 0,
+          label: d.name,
+          details: {...d, thumb: null},
+        }));
+      } else if (tabName === 'translation') {
+        data = await dataManager.getTranslationDistribution(context.targetUser as any);
+        const total = data.reduce((acc: number, c: any) => acc + c.count, 0);
         data = data.map((d: any) => ({
           ...d,
           frequency: total > 0 ? d.count / total : 0,

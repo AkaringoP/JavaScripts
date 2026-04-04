@@ -1524,6 +1524,169 @@ export class AnalyticsDataManager extends DataManager {
    * @param {boolean} [forceRefresh=false] Whether to bypass cache.
    * @return {Promise<Array>}
    */
+  async getCommentaryDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Commentary Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'commentary_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const categories = [
+      {name: 'Commentary', tagName: 'commentary', query: `user:${normalizedName} commentary`, color: '#007bff'},
+      {name: 'Requested', tagName: 'commentary_request', query: `user:${normalizedName} commentary_request`, color: '#ffc107'},
+      {name: 'Untagged', tagName: 'untagged_commentary', query: `user:${normalizedName} has:commentary -commentary -commentary_request`, color: '#6c757d'},
+    ];
+
+    const results: DistributionItem[] = categories.map(cat => ({
+      name: cat.name, tagName: cat.tagName, count: 0, frequency: 0, thumb: null, isOther: false, color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      categories.map((cat, i) => ({...cat, idx: i})), 3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Commentary: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch commentary count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches translation distribution.
+   */
+  async getTranslationDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Translation Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'translation_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const categories = [
+      {name: 'Translated', tagName: 'translated', query: `user:${normalizedName} translated`, color: '#28a745'},
+      {name: 'Requested', tagName: 'translation_request', query: `user:${normalizedName} translation_request`, color: '#ffc107'},
+      {name: 'Untagged', tagName: 'untagged_translation', query: `user:${normalizedName} *_text -english_text -translation_request -translated`, color: '#6c757d'},
+    ];
+
+    const results: DistributionItem[] = categories.map(cat => ({
+      name: cat.name, tagName: cat.tagName, count: 0, frequency: 0, thumb: null, isOther: false, color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      categories.map((cat, i) => ({...cat, idx: i})), 3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Translation: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch translation count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches gender distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getGenderDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Gender Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'gender_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+
+    const genderCategories = [
+      {
+        name: 'Girl',
+        tagName: 'girl',
+        query: `user:${normalizedName} ~1girl ~2girls ~3girls ~4girls ~5girls ~6+girls`,
+        color: '#e91e63',
+      },
+      {
+        name: 'Boy',
+        tagName: 'boy',
+        query: `user:${normalizedName} ~1boy ~2boys ~3boys ~4boys ~5boys ~6+boys`,
+        color: '#2196f3',
+      },
+      {
+        name: 'Other',
+        tagName: 'other',
+        query: `user:${normalizedName} ~1other ~2others ~3others ~4others ~5others ~6+others`,
+        color: '#9c27b0',
+      },
+      {
+        name: 'No Humans',
+        tagName: 'no_humans',
+        query: `user:${normalizedName} no_humans`,
+        color: '#607d8b',
+      },
+    ];
+
+    const results: DistributionItem[] = genderCategories.map(cat => ({
+      name: cat.name,
+      tagName: cat.tagName,
+      count: 0,
+      frequency: 0,
+      thumb: null,
+      isOther: false,
+      color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      genderCategories.map((cat, i) => ({...cat, idx: i})),
+      3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Gender: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+            results[item.idx].count = resp.counts.posts;
+          }
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch gender count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches breasts size distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
   async getBreastsDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
     if (!userInfo.name) return [];
     if (reportSubStatus) reportSubStatus(`Fetching Breasts Distribution...`);
