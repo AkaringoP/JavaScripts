@@ -126,6 +126,9 @@ export function renderPieWidget(
       query = `status:${details.name}`;
     } else if (['breasts', 'hair_length', 'hair_color', 'gender', 'commentary', 'translation'].includes(currentPieTab)) {
       if (details.originalTag) query = details.originalTag;
+      else if (details.tagName === 'untagged_commentary') query = 'has:commentary -commentary -commentary_request';
+      else if (details.tagName === 'untagged_translation') query = '*_text -english_text -translation_request -translated';
+      else if (details.tagName) query = details.tagName;
       else query = d.data.label.toLowerCase().replace(/ /g, '_');
     } else {
       query = details.tagName || d.data.label;
