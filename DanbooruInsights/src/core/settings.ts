@@ -120,6 +120,34 @@ export class SettingsManager {
   }
 
   /**
+   * Gets the current grass color palette index (0-3).
+   */
+  getGrassIndex(): number {
+    const idx = (this.settings as any).grassIndex;
+    return typeof idx === 'number' && idx >= 0 && idx <= 3 ? idx : 0;
+  }
+
+  /**
+   * Sets the grass color palette index and saves.
+   */
+  setGrassIndex(index: number): void {
+    this.save({grassIndex: Math.max(0, Math.min(3, index))} as any);
+  }
+
+  /**
+   * Resolves the active levels array for a theme, considering grassOptions and grassIndex.
+   */
+  resolveLevels(theme: any): string[] {
+    const defaultLevels = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
+    if (theme.grassOptions && theme.grassOptions.length > 0) {
+      const idx = this.getGrassIndex();
+      const option = theme.grassOptions[idx] || theme.grassOptions[0];
+      return option.levels;
+    }
+    return theme.levels || defaultLevels;
+  }
+
+  /**
    * Applies the selected theme to CSS variables on the document root.
    * Updates background, text colors, and contribution graph levels.
    * @param {string} themeKey The key of the theme to apply (e.g., 'midnight').
@@ -135,8 +163,8 @@ export class SettingsManager {
         '--grass-scrollbar-thumb',
         theme.scrollbar || '#d0d7de'
       );
-      // Apply Level Colors
-      const levels = theme.levels || ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
+      // Apply Level Colors using grassOptions
+      const levels = this.resolveLevels(theme);
       levels.forEach((color, i) => {
         root.style.setProperty(`--grass-level-${i}`, color);
       });
@@ -144,6 +172,11 @@ export class SettingsManager {
     this.save({
       theme: themeKey
     });
+
+    // Notify listeners (e.g. graph-renderer) to re-render with new colors
+    window.dispatchEvent(new CustomEvent('DanbooruInsights:ThemeChanged', {
+      detail: {themeKey}
+    }));
   }
 
   /**

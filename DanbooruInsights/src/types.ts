@@ -1,5 +1,12 @@
 // Shared interfaces and type aliases for DanbooruInsights.
 
+/** A named grass (heatmap level) color palette. */
+export interface GrassOption {
+  name: string;
+  /** Five-step color ramp [empty, level1, level2, level3, level4]. */
+  levels: string[];
+}
+
 /** A color theme definition for the contribution graph. */
 export interface Theme {
   name: string;
@@ -10,6 +17,8 @@ export interface Theme {
   levels?: string[];
   /** Custom scrollbar thumb color. */
   scrollbar?: string;
+  /** Selectable grass color palettes (4 options per theme). */
+  grassOptions?: GrassOption[];
 }
 
 /** Threshold values for each contribution metric. */
@@ -105,4 +114,168 @@ export interface ScatterDataPoint {
   t: number;
   /** Rating (g/s/q/e). */
   r: string;
+}
+
+/** Danbooru rating code. */
+export type Rating = 'g' | 's' | 'q' | 'e';
+
+/** Daily count record for uploads/approvals/notes tables. */
+export interface DailyCountRecord {
+  /** Composite key: `${userId}_${date}`. */
+  id: string;
+  userId: string;
+  date: string;
+  count: number;
+}
+
+/** Completed year cache record. */
+export interface CompletedYearRecord {
+  id: string;
+  userId: string;
+  metric: string;
+  year: number;
+}
+
+/** Approval detail record. */
+export interface ApprovalDetailRecord {
+  id: number;
+  userId: string;
+}
+
+/** Hourly stats cache record. */
+export interface HourlyStatRecord {
+  id: string;
+  userId: string;
+  metric: string;
+  year: number;
+}
+
+/** Full post record stored in the `posts` IndexedDB table. */
+export interface PostRecord {
+  id: number;
+  uploader_id: number;
+  /** User-scoped sequence number (1-based, per uploader_id). */
+  no: number;
+  created_at: string;
+  score: number;
+  rating: string;
+  tag_count_general: number;
+  approver_id?: number;
+  uploader_name?: string;
+  uploader_level?: string;
+  approver_name?: string;
+  approver_level?: string;
+  variants?: PostVariant[];
+  preview_file_url?: string;
+  file_url?: string;
+  tag_string_copyright?: string;
+  tag_string_character?: string;
+}
+
+/** Cached pie chart statistics record in the `piestats` table. */
+export interface PieStatRecord {
+  key: string;
+  userId: string | number;
+  data: unknown;
+  updated_at: string;
+}
+
+/** Monthly post count history entry. */
+export interface HistoryEntry {
+  /** Date string in YYYY-MM-DD format (always first of month). */
+  date: string;
+  count: number;
+  cumulative: number;
+}
+
+/** User ranking entry for tag analytics leaderboards. */
+export interface UserRanking {
+  id: string | number;
+  count: number;
+  rank?: number;
+  name?: string;
+  level?: string | null;
+}
+
+/** Milestone post entry. */
+export interface MilestoneEntry {
+  milestone: number;
+  post: {
+    id: number;
+    created_at: string;
+    uploader_id: number;
+    uploader_name?: string;
+    uploader_level?: string;
+    approver_id?: number;
+    approver_name?: string;
+    rating: string;
+    score: number;
+    variants?: PostVariant[];
+    preview_file_url?: string;
+    file_url?: string;
+  };
+}
+
+/** A single tag cloud entry with name and frequency. */
+export interface TagCloudItem {
+  /** Display name (underscores replaced with spaces). */
+  name: string;
+  /** Raw tag name for URL construction. */
+  tagName: string;
+  /** Co-occurrence frequency (0..1) from related_tag API. */
+  frequency: number;
+  /** Estimated post count (frequency × total query posts). */
+  count: number;
+}
+
+/** A tag created by a user, parsed from NNTBot forum reports. */
+export interface CreatedTagItem {
+  /** Raw tag name (underscore format). */
+  tagName: string;
+  /** Display name (underscores replaced with spaces). */
+  displayName: string;
+  /** Current post count on Danbooru. */
+  postCount: number;
+  /** Whether the tag is deprecated. */
+  isDeprecated: boolean;
+  /** Alias target tag name, or null if not aliased. */
+  aliasedTo: string | null;
+  /** Date when the tag first appeared in the NNTBot report (YYYY-MM-DD). */
+  reportDate: string;
+}
+
+/** Cached tag analytics report stored in the `tag_analytics` table. */
+export interface TagAnalyticsReport {
+  tagName: string;
+  updatedAt: number;
+  data: TagAnalyticsMeta;
+}
+
+/** Complete tag analytics metadata. */
+export interface TagAnalyticsMeta {
+  name: string;
+  /** Category ID: 1=Artist, 3=Copyright, 4=Character. */
+  category: number;
+  post_count: number;
+  created_at: string;
+  updatedAt: number;
+  _isCached?: boolean;
+  firstPost?: PostRecord;
+  hundredthPost?: PostRecord;
+  timeToHundred?: number;
+  historyData: HistoryEntry[];
+  precalculatedMilestones: MilestoneEntry[];
+  rankings: {
+    uploader: {allTime: UserRanking[]; year: UserRanking[]; first100: UserRanking[]};
+    approver: {allTime: UserRanking[]; year: UserRanking[]; first100: UserRanking[]};
+  };
+  statusCounts: Record<string, number>;
+  ratingCounts: Record<string, number>;
+  commentaryCounts?: Record<string, number>;
+  copyrightCounts?: Record<string, number>;
+  characterCounts?: Record<string, number>;
+  latestPost?: PostRecord;
+  trendingPost?: PostRecord;
+  trendingPostNSFW?: PostRecord;
+  newPostCount?: number;
 }

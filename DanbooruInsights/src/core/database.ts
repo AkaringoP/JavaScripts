@@ -1,4 +1,14 @@
 import Dexie, {type Table} from 'dexie';
+import type {
+  DailyCountRecord,
+  PostRecord,
+  PieStatRecord,
+  CompletedYearRecord,
+  ApprovalDetailRecord,
+  HourlyStatRecord,
+  TagAnalyticsReport,
+  GrassSettings,
+} from '../types';
 
 // --- 1.5 Database (Dexie.js) ---
 /**
@@ -7,16 +17,16 @@ import Dexie, {type Table} from 'dexie';
  * @extends Dexie
  */
 export class Database extends Dexie {
-  uploads!: Table<any>;
-  approvals!: Table<any>;
-  notes!: Table<any>;
-  posts!: Table<any>;
-  piestats!: Table<any>;
-  completed_years!: Table<any>;
-  approvals_detail!: Table<any>;
-  hourly_stats!: Table<any>;
-  tag_analytics!: Table<any>;
-  grass_settings!: Table<any>;
+  uploads!: Table<DailyCountRecord, string>;
+  approvals!: Table<DailyCountRecord, string>;
+  notes!: Table<DailyCountRecord, string>;
+  posts!: Table<PostRecord, number>;
+  piestats!: Table<PieStatRecord, [string, string | number]>;
+  completed_years!: Table<CompletedYearRecord, string>;
+  approvals_detail!: Table<ApprovalDetailRecord, number>;
+  hourly_stats!: Table<HourlyStatRecord, string>;
+  tag_analytics!: Table<TagAnalyticsReport, string>;
+  grass_settings!: Table<GrassSettings, string>;
 
   /**
    * Initializes the database with defined schemas.

@@ -1,7 +1,8 @@
 import {DataManager} from './data-manager';
 import type {ApiItem} from './data-manager';
-import {isTopLevelTag} from '../utils';
-import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint} from '../types';
+import {CONFIG} from '../config';
+import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
+import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem, CreatedTagItem} from '../types';
 
 /** Summary statistics for a user's upload history. */
 export interface SummaryStats {
@@ -74,30 +75,6 @@ export class AnalyticsDataManager extends DataManager {
    * @param {Object} post The post data object from Danbooru API.
    * @return {string} The selected thumbnail URL.
    */
-  static getBestThumbnailUrl(post: any): string {
-    if (!post) return '';
-
-    // 1. Try modern variants
-    if (post.variants && Array.isArray(post.variants) && post.variants.length > 0) {
-      const preferredTypes = ['720x720', '360x360'];
-      // 1a. Try preferred variants in WebP
-      for (const type of preferredTypes) {
-        const variant = post.variants.find((v: ApiItem) => v['type'] === type && v['file_ext'] === 'webp');
-        if (variant) return variant.url;
-      }
-      // 1b. Try preferred variants in any format
-      for (const type of preferredTypes) {
-        const variant = post.variants.find((v: ApiItem) => v['type'] === type);
-        if (variant) return variant.url;
-      }
-      // 1c. Last resort: any variant
-      if (post.variants[0] && post.variants[0].url) return post.variants[0].url;
-    }
-
-    // 2. Fallback to legacy fields (if still present in object or for non-variant posts)
-    return post.preview_file_url || post.file_url || post.large_file_url || '';
-  }
-
   /**
    * Fetches a thumbnail URL with built-in retry logic for handling rate limits.
    * Implements exponential backoff on 429 status codes.
@@ -120,7 +97,7 @@ export class AnalyticsDataManager extends DataManager {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (Array.isArray(data) && data.length > 0) {
-          return AnalyticsDataManager.getBestThumbnailUrl(data[0]);
+          return getBestThumbnailUrl(data[0]);
         }
         return '';
       } catch (e: unknown) {
@@ -272,7 +249,7 @@ export class AnalyticsDataManager extends DataManager {
    * @param {(string|number)=} customStep Step interval ('auto' or a number).
    * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
    */
-  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | number = 'auto'): Promise<MilestoneEntry[]> {
+  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
     const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return [];
 
@@ -282,7 +259,17 @@ export class AnalyticsDataManager extends DataManager {
     // Define Milestones based on Total Count logic
     let targets: number[] = [];
 
-    if (customStep !== 'auto' && typeof customStep === 'number') {
+    if (customStep === 'repdigit') {
+      // Repdigit milestones: 111, 222, ..., 999, 1111, ..., 9999, 11111, ...
+      targets.push(1);
+      if (total >= 11) targets.push(11);
+      for (let digits = 3; digits <= 6; digits++) {
+        for (let d = 1; d <= 9; d++) {
+          const num = parseInt(String(d).repeat(digits));
+          if (num <= total) targets.push(num);
+        }
+      }
+    } else if (customStep !== 'auto' && typeof customStep === 'number') {
       const step = customStep as number;
       targets.push(1);
       for (let i = step; i <= total; i += step) {
@@ -403,8 +390,11 @@ export class AnalyticsDataManager extends DataManager {
       const p = map.get(t);
       if (p) {
         // Label logic
-        let label = `#${t} `;
+        let label = `#${t.toLocaleString()}`;
         if (t >= 1000 && t % 1000 === 0) label = `${t / 1000} k`;
+        // Repdigit label: show the number itself (e.g. "111", "2222")
+        const tStr = String(t);
+        if (tStr.length >= 3 && tStr.split('').every(c => c === tStr[0])) label = tStr;
         if (t === 1) label = 'First';
 
         results.push({ type: label, post: p, index: t });
@@ -589,6 +579,281 @@ export class AnalyticsDataManager extends DataManager {
   }
 
   /**
+   * Fetches tag cloud data for a user from the related tags API.
+   * Selects top 30 tags by cosine similarity (relevance to the user),
+   * then sorts by frequency for font size mapping.
+   * Results are cached in the piestats table with a `tag_cloud_` prefix.
+   *
+   * @param userInfo The target user.
+   * @param categoryId Danbooru tag category (0=General, 1=Artist, 3=Copyright, 4=Character).
+   * @return Tag cloud items sorted by frequency descending.
+   */
+  async getTagCloudData(userInfo: TargetUser, categoryId: number): Promise<TagCloudItem[]> {
+    if (!userInfo.name) return [];
+
+    const categoryNames: Record<number, string> = {0: 'general', 1: 'artist', 3: 'copyright', 4: 'character'};
+    const catName = categoryNames[categoryId] || `cat${categoryId}`;
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = `tag_cloud_${catName}`;
+
+    // Check cache
+    if (uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as TagCloudItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    // General: select by Cosine similarity (user-characteristic tags)
+    // Others: select by Frequency (most common tags)
+    const order = categoryId === 0 ? 'Cosine' : 'Frequency';
+    const url = `/related_tag.json?commit=Search&search[category]=${categoryId}&search[order]=${order}&search[query]=user:${encodeURIComponent(normalizedName)}`;
+
+    try {
+      const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+      if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+
+      const queryPostCount: number = resp.post_count || 0;
+
+      // Select top 30, then sort by frequency for font size mapping
+      const items: TagCloudItem[] = resp.related_tags
+        .slice(0, 30)
+        .map((item: any) => ({
+          name: item.tag.name.replace(/_/g, ' '),
+          tagName: item.tag.name,
+          frequency: item.frequency,
+          count: Math.round(item.frequency * queryPostCount),
+        }))
+        .sort((a: TagCloudItem, b: TagCloudItem) => b.frequency - a.frequency);
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+      return items;
+    } catch (e: unknown) {
+      console.debug('[DI] Failed to fetch tag cloud data', e);
+      return [];
+    }
+  }
+
+  /**
+   * Parses NNTBot forum post body to extract "New General Tags" created by a target user.
+   * Exported as static for testability.
+   *
+   * DText format:
+   *   [td][[tag name]] "»":[/posts?tags=...] [/td]
+   *   [td]"Username":[/users/12345][/td]
+   *
+   * @param body The DText body of a forum post.
+   * @param targetUser The username to filter by (case-insensitive).
+   * @param reportDate The date of the report (YYYY-MM-DD).
+   * @return Array of {tagName, reportDate} for tags created by the target user.
+   */
+  static parseNewGeneralTags(
+    body: string,
+    targetUser: string,
+    reportDate: string,
+  ): {tagName: string; reportDate: string}[] {
+    const results: {tagName: string; reportDate: string}[] = [];
+    const userLower = targetUser.toLowerCase();
+
+    // Find "New General Tags" section
+    const sectionStart = body.indexOf('New General Tags');
+    if (sectionStart === -1) return results;
+
+    // Find next section header (h4. or h5.) to limit scope
+    const afterSection = body.slice(sectionStart);
+    const nextSectionMatch = afterSection.slice(20).search(/\bh[45]\.\s/);
+    const sectionBody = nextSectionMatch >= 0
+      ? afterSection.slice(0, nextSectionMatch + 20)
+      : afterSection;
+
+    // Extract rows: look for [td][[tag_name]]...[/td] followed by [td]"Username":...
+    // Match pairs of consecutive [tr]...[/tr] blocks
+    const rowRegex = /\[td\]\[\[(.+?)\]\].*?\[\/td\]\s*\[td\](.*?)\[\/td\]/g;
+    let match;
+    while ((match = rowRegex.exec(sectionBody)) !== null) {
+      const tagDisplay = match[1]; // e.g. "gyaru v" or "mite (idolmaster)"
+      const updaterCell = match[2]; // e.g. "AkaringoP":[/users/701499]
+
+      // Check if target user is in the updater cell (case-insensitive)
+      if (updaterCell.toLowerCase().includes(userLower)) {
+        // Convert display name to raw tag name (spaces → underscores)
+        const tagName = tagDisplay.trim().replace(/ /g, '_');
+        results.push({tagName, reportDate});
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Fetches tags created by a user from NNTBot forum reports.
+   * Automatically searches previous usernames via user_name_change_requests API.
+   * Results are enriched with current tag status and alias info.
+   *
+   * @param userInfo The target user.
+   * @param onProgress Optional progress callback for UI updates.
+   * @return Created tag items sorted by post count descending.
+   */
+  async getCreatedTags(
+    userInfo: TargetUser,
+    onProgress?: (message: string) => void,
+  ): Promise<CreatedTagItem[]> {
+    if (!userInfo.name) return [];
+
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'created_tags';
+
+    // Check cache
+    if (uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as CreatedTagItem[];
+    }
+
+    const report = onProgress || (() => {});
+
+    try {
+      // Step 0: Collect all usernames (current + previous)
+      const userNames: string[] = [userInfo.name];
+      if (uploaderId) {
+        report('Checking previous usernames...');
+        try {
+          const ncUrl = `/user_name_change_requests.json?search[user_id]=${uploaderId}&limit=500`;
+          const ncResp = await this.rateLimiter.fetch(ncUrl).then(r => r.json());
+          if (Array.isArray(ncResp)) {
+            for (const nc of ncResp) {
+              if (nc.original_name && !userNames.includes(nc.original_name)) {
+                userNames.push(nc.original_name);
+              }
+            }
+          }
+        } catch { /* proceed with current name only */ }
+      }
+
+      // Step 1: Fetch forum posts for each username
+      const rawTags: {tagName: string; reportDate: string}[] = [];
+      const seenTags = new Set<string>();
+
+      for (let ni = 0; ni < userNames.length; ni++) {
+        const name = userNames[ni];
+        report(`Searching reports for ${name}... (${ni + 1}/${userNames.length})`);
+
+        const searchQuery = `tag report ${name}`;
+        const url = `/forum_posts.json?search[body_matches]=${encodeURIComponent(searchQuery)}&limit=500`;
+        const posts = await this.rateLimiter.fetch(url).then(r => r.json());
+
+        if (!Array.isArray(posts)) continue;
+
+        for (const post of posts) {
+          const body: string = post.body || '';
+          const dateMatch = body.match(/Daily Report \((\d{4}-\d{2}-\d{2})\)/);
+          const reportDate = dateMatch ? dateMatch[1] : (post.created_at || '').slice(0, 10);
+
+          const parsed = AnalyticsDataManager.parseNewGeneralTags(body, name, reportDate);
+          for (const tag of parsed) {
+            if (!seenTags.has(tag.tagName)) {
+              seenTags.add(tag.tagName);
+              rawTags.push(tag);
+            }
+          }
+        }
+      }
+
+      if (rawTags.length === 0) return [];
+
+      report(`Found ${rawTags.length} tags. Fetching current status...`);
+
+      // Step 2: Batch fetch current tag status
+      const tagNames = rawTags.map(t => t.tagName);
+      const tagStatusMap = new Map<string, {postCount: number; isDeprecated: boolean}>();
+
+      for (let i = 0; i < tagNames.length; i += 100) {
+        const batch = tagNames.slice(i, i + 100);
+        report(`Fetching tag status... (${Math.min(i + 100, tagNames.length)}/${tagNames.length})`);
+        const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(','))}&only=name,post_count,is_deprecated&limit=500`;
+        const tagsResp = await this.rateLimiter.fetch(tagsUrl).then(r => r.json());
+        if (Array.isArray(tagsResp)) {
+          for (const t of tagsResp) {
+            tagStatusMap.set(t.name, {
+              postCount: t.post_count || 0,
+              isDeprecated: t.is_deprecated || false,
+            });
+          }
+        }
+      }
+
+      // Step 3: Check aliases (only for post_count=0 tags — aliased tags have posts moved)
+      const emptyTagNames = tagNames.filter(name => {
+        const status = tagStatusMap.get(name);
+        return !status || status.postCount === 0;
+      });
+
+      report(`Checking aliases for ${emptyTagNames.length} empty tags...`);
+      const aliasMap = new Map<string, string>();
+      let aliasChecked = 0;
+
+      await this.mapConcurrent(emptyTagNames, 5, async (name: string) => {
+        try {
+          const aliasUrl = `/tag_aliases.json?search[antecedent_name]=${encodeURIComponent(name)}&search[status]=active&limit=1`;
+          const aliasResp = await this.rateLimiter.fetch(aliasUrl).then(r => r.json());
+          if (Array.isArray(aliasResp) && aliasResp.length > 0) {
+            aliasMap.set(name, aliasResp[0].consequent_name);
+          }
+        } catch { /* skip */ }
+        aliasChecked++;
+        if (aliasChecked % 10 === 0 || aliasChecked === emptyTagNames.length) {
+          report(`Checking aliases... (${aliasChecked}/${emptyTagNames.length})`);
+        }
+        return null;
+      });
+
+      // Step 4: Fetch post counts for aliased tags (consequent tag's count)
+      const aliasedNames = Array.from(aliasMap.values());
+      const aliasPostCounts = new Map<string, number>();
+      if (aliasedNames.length > 0) {
+        report(`Fetching aliased tag counts...`);
+        for (let i = 0; i < aliasedNames.length; i += 100) {
+          const batch = aliasedNames.slice(i, i + 100);
+          const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(','))}&only=name,post_count&limit=500`;
+          const tagsResp = await this.rateLimiter.fetch(tagsUrl).then(r => r.json());
+          if (Array.isArray(tagsResp)) {
+            for (const t of tagsResp) {
+              aliasPostCounts.set(t.name, t.post_count || 0);
+            }
+          }
+        }
+      }
+
+      report('Finalizing...');
+
+      // Step 5: Assemble results
+      const items: CreatedTagItem[] = rawTags.map(raw => {
+        const status = tagStatusMap.get(raw.tagName);
+        const alias = aliasMap.get(raw.tagName) || null;
+        // For aliased tags, show the consequent tag's post count
+        const postCount = alias
+          ? (aliasPostCounts.get(alias) ?? 0)
+          : (status?.postCount ?? 0);
+        return {
+          tagName: raw.tagName,
+          displayName: raw.tagName.replace(/_/g, ' '),
+          postCount,
+          isDeprecated: status?.isDeprecated ?? false,
+          aliasedTo: alias,
+          reportDate: raw.reportDate,
+        };
+      });
+
+      // Sort by post count descending
+      items.sort((a, b) => b.postCount - a.postCount);
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+      return items;
+    } catch (e: unknown) {
+      console.debug('[DI] Failed to fetch created tags', e);
+      return [];
+    }
+  }
+
+  /**
    * Fetches character distribution using Danbooru's related tags API.
    * Processes top 10 characters and fetches their specific uploader counts concurrently.
    * @param {!Object} userInfo The user's information object.
@@ -639,7 +904,7 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (_e: unknown) { }
+        } catch (_e: unknown) { console.debug('[DI] Failed to fetch user tag count', _e); }
         delete obj._item;
       });
 
@@ -660,7 +925,7 @@ export class AnalyticsDataManager extends DataManager {
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
 
       // Lazy Load Thumbnails
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -725,7 +990,7 @@ export class AnalyticsDataManager extends DataManager {
           const countResp = await this.rateLimiter.fetch(countUrl).then(r => r.json());
           const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
           obj.count = c || obj._item.tag.post_count;
-        } catch (_e: unknown) { }
+        } catch (_e: unknown) { console.debug('[DI] Failed to fetch user tag count', _e); }
         delete obj._item;
       });
 
@@ -746,7 +1011,7 @@ export class AnalyticsDataManager extends DataManager {
       if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
 
       // Lazy Load
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -909,7 +1174,7 @@ export class AnalyticsDataManager extends DataManager {
       // We will need to pass the `onDataUpdate` callback from the UI layer.
       // For this refactor, I will add `onDataUpdate` to arguments.
 
-      this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+      await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
 
       return top10;
 
@@ -1272,6 +1537,169 @@ export class AnalyticsDataManager extends DataManager {
    * @param {boolean} [forceRefresh=false] Whether to bypass cache.
    * @return {Promise<Array>}
    */
+  async getCommentaryDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Commentary Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'commentary_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const categories = [
+      {name: 'Commentary', tagName: 'commentary', query: `user:${normalizedName} commentary`, color: '#007bff'},
+      {name: 'Requested', tagName: 'commentary_request', query: `user:${normalizedName} commentary_request`, color: '#ffc107'},
+      {name: 'Untagged', tagName: 'untagged_commentary', query: `user:${normalizedName} has:commentary -commentary -commentary_request`, color: '#6c757d'},
+    ];
+
+    const results: DistributionItem[] = categories.map(cat => ({
+      name: cat.name, tagName: cat.tagName, count: 0, frequency: 0, thumb: null, isOther: false, color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      categories.map((cat, i) => ({...cat, idx: i})), 3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Commentary: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch commentary count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches translation distribution.
+   */
+  async getTranslationDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Translation Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'translation_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const categories = [
+      {name: 'Translated', tagName: 'translated', query: `user:${normalizedName} translated`, color: '#28a745'},
+      {name: 'Requested', tagName: 'translation_request', query: `user:${normalizedName} translation_request`, color: '#ffc107'},
+      {name: 'Untagged', tagName: 'untagged_translation', query: `user:${normalizedName} *_text -english_text -translation_request -translated`, color: '#6c757d'},
+    ];
+
+    const results: DistributionItem[] = categories.map(cat => ({
+      name: cat.name, tagName: cat.tagName, count: 0, frequency: 0, thumb: null, isOther: false, color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      categories.map((cat, i) => ({...cat, idx: i})), 3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Translation: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch translation count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches gender distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
+  async getGenderDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
+    if (!userInfo.name) return [];
+    if (reportSubStatus) reportSubStatus(`Fetching Gender Distribution...`);
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'gender_dist';
+
+    if (!forceRefresh && uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as DistributionItem[];
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+
+    const genderCategories = [
+      {
+        name: 'Girl',
+        tagName: 'girl',
+        query: `user:${normalizedName} ~1girl ~2girls ~3girls ~4girls ~5girls ~6+girls`,
+        color: '#e91e63',
+      },
+      {
+        name: 'Boy',
+        tagName: 'boy',
+        query: `user:${normalizedName} ~1boy ~2boys ~3boys ~4boys ~5boys ~6+boys`,
+        color: '#2196f3',
+      },
+      {
+        name: 'Other',
+        tagName: 'other',
+        query: `user:${normalizedName} ~1other ~2others ~3others ~4others ~5others ~6+others`,
+        color: '#9c27b0',
+      },
+      {
+        name: 'No Humans',
+        tagName: 'no_humans',
+        query: `user:${normalizedName} no_humans`,
+        color: '#607d8b',
+      },
+    ];
+
+    const results: DistributionItem[] = genderCategories.map(cat => ({
+      name: cat.name,
+      tagName: cat.tagName,
+      count: 0,
+      frequency: 0,
+      thumb: null,
+      isOther: false,
+      color: cat.color,
+    }));
+
+    await this.mapConcurrent(
+      genderCategories.map((cat, i) => ({...cat, idx: i})),
+      3,
+      async (item) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Gender: ${item.name}`);
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+            results[item.idx].count = resp.counts.posts;
+          }
+        } catch (e: unknown) { console.debug('[DI] Failed to fetch gender count', e); }
+      },
+    );
+
+    const filtered = results.filter(r => r.count > 0);
+    if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+    return filtered;
+  }
+
+  /**
+   * Fetches breasts size distribution.
+   * @param {Object} userInfo The user's info object.
+   * @param {boolean} [forceRefresh=false] Whether to bypass cache.
+   * @return {Promise<Array>}
+   */
   async getBreastsDistribution(userInfo: TargetUser, forceRefresh: boolean = false, reportSubStatus: ((msg: string) => void) | null = null): Promise<DistributionItem[]> {
     if (!userInfo.name) return [];
     if (reportSubStatus) reportSubStatus(`Fetching Breasts Distribution...`);
@@ -1317,7 +1745,7 @@ export class AnalyticsDataManager extends DataManager {
           count = resp.counts.posts;
         }
         obj.count = count;
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch breasts count', e); }
     });
 
     // Filter out zero counts
@@ -1325,8 +1753,7 @@ export class AnalyticsDataManager extends DataManager {
 
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1383,14 +1810,13 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch count', e); }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1447,14 +1873,13 @@ export class AnalyticsDataManager extends DataManager {
         if (resp && resp.counts && typeof resp.counts.posts === 'number') {
           obj.count = resp.counts.posts;
         }
-      } catch (e: unknown) { }
+      } catch (e: unknown) { console.debug('[DI] Failed to fetch count', e); }
     });
 
     const filtered = results.filter(r => r.count > 0).sort((a, b) => b.count - a.count);
     if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
 
-    // Lazy Load
-    this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+    await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
 
     return filtered;
   }
@@ -1473,7 +1898,7 @@ export class AnalyticsDataManager extends DataManager {
     // Process in background
 
 
-    await this.mapConcurrent(toFetch, 3, async (item) => {
+    await this.mapConcurrent(toFetch, 2, async (item) => {
       // Re-construct query based on cacheKey or item data?
       // "item" doesn't have the full query info derived in the parent function (e.g. hair_color map).
       // But we stored `tagName` or `originalTag` or `color`?
@@ -1552,7 +1977,7 @@ export class AnalyticsDataManager extends DataManager {
       if (profile && typeof profile.post_upload_count === 'number') {
         return profile.post_upload_count;
       }
-    } catch (_e2: unknown) { }
+    } catch (_e2: unknown) { console.debug('[DI] Failed to fetch user profile', _e2); }
 
     // Method C: DOM Fallback
     try {
@@ -1562,7 +1987,7 @@ export class AnalyticsDataManager extends DataManager {
       if (statsLink) {
         return parseInt((statsLink.textContent ?? '').replace(/,/g, ''), 10);
       }
-    } catch (_e3: unknown) { }
+    } catch (_e3: unknown) { console.debug('[DI] Failed to parse DOM stats', _e3); }
 
     return 0; // Failed
   }
@@ -1920,7 +2345,7 @@ export class AnalyticsDataManager extends DataManager {
    */
   async cleanupStaleData(currentUserId: number | string): Promise<void> {
     const currentId = typeof currentUserId === 'number' ? currentUserId : parseInt(currentUserId);
-    const THRESHOLD = 14 * 24 * 60 * 60 * 1000; // 14 days in ms
+    const THRESHOLD = CONFIG.ANALYTICS_CLEANUP_THRESHOLD_MS;
     const now = new Date().getTime();
 
     try {

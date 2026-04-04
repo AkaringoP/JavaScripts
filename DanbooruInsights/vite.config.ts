@@ -9,7 +9,7 @@ export default defineConfig({
       userscript: {
         name: 'Danbooru Insights',
         namespace: 'http://tampermonkey.net/',
-        version: '7.2.2',
+        version: '8.0.0',
         description:
           'Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.',
         author: 'AkaringoP with Claude Code',
@@ -29,6 +29,7 @@ export default defineConfig({
           'https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js',
         require: [
           'https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js',
+          'https://cdn.jsdelivr.net/npm/d3-cloud@1.2.7/build/d3.layout.cloud.min.js',
           'https://cdn.jsdelivr.net/npm/cal-heatmap@4.2.4/dist/cal-heatmap.min.js',
           'https://cdn.jsdelivr.net/npm/dexie@3.2.7/dist/dexie.min.js',
         ],

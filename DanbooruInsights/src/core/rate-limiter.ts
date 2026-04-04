@@ -1,3 +1,5 @@
+import {CONFIG} from '../config';
+
 /* --- Helper: Rate Limited Fetch --- */
 
 /** Internal task queued for rate-limited dispatch. */
@@ -93,7 +95,7 @@ export class RateLimitedFetch {
       task.reject(e);
     } finally {
       // Strict 3s cooldown for reports
-      await new Promise(r => setTimeout(r, 3000));
+      await new Promise(r => setTimeout(r, CONFIG.REPORT_COOLDOWN_MS));
       this.isProcessingReport = false;
       this.processReportQueue();
     }

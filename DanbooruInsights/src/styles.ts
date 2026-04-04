@@ -179,6 +179,75 @@ export const GLOBAL_CSS = `
     .di-flex-col-between { display: flex; flex-direction: column; justify-content: space-between; }
     .di-flex-row-between { display: flex; justify-content: space-between; align-items: center; }
     .di-flex-center { display: flex; justify-content: center; align-items: center; }
+
+    /* -- Tag Cloud Widget -- */
+    .di-tag-cloud-word {
+        cursor: pointer;
+        transition: opacity 0.2s, font-size 0.15s ease;
+    }
+    .di-tag-cloud-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 200px;
+    }
+    .di-tag-cloud-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.75em;
+        color: #888;
+        padding-top: 8px;
+        border-top: 1px solid #eee;
+    }
+
+    /* -- Created Tags Widget -- */
+    .di-created-tags-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85em;
+    }
+    .di-created-tags-table th {
+        text-align: left;
+        color: #666;
+        font-weight: 600;
+        padding: 6px 8px;
+        border-bottom: 2px solid #e1e4e8;
+        font-size: 0.85em;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .di-created-tags-table td {
+        padding: 5px 8px;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    .di-created-tags-row:hover {
+        background: #f6f8fa;
+    }
+    .di-created-tags-row a {
+        text-decoration: none;
+    }
+    .di-created-tags-row a:hover {
+        text-decoration: underline;
+    }
+    .di-created-tags-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 0.85em;
+        padding: 1px 6px;
+        border-radius: 8px;
+    }
+
+    /* -- User Analytics Charts -- */
+    .month-column .column-overlay { transition: fill 0.2s; }
+    .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
+    .month-column:hover .monthly-bar { fill: #216e39; }
+    .star-shiny {
+        font-size: 15px;
+        stroke-width: 0.1px !important;
+        filter: drop-shadow(0 0 5px #ffd700);
+    }
   `;
 
 /**
