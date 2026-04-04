@@ -7,6 +7,7 @@ import {getLevelClass} from '../utils';
 import {renderPieWidget, renderTopPostsWidget, renderMilestonesWidget, renderHistoryChart} from './user-analytics-charts';
 import {renderScatterPlot} from './user-analytics-scatter';
 import {renderTagCloudWidget} from './tag-cloud-widget';
+import {renderCreatedTagsWidget} from './created-tags-widget';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
 
@@ -1226,8 +1227,13 @@ export class UserAnalyticsApp {
       // 4. Monthly Activity Chart
       await renderHistoryChart(dashboardDiv, this.db, this.context, milestones1k, levelChanges);
 
+      // 5. Created Tags Widget (lazy load) — after Monthly Activity
+      const createdTagsContainer = document.createElement('div');
+      createdTagsContainer.style.marginTop = '35px';
+      dashboardDiv.appendChild(createdTagsContainer);
+      renderCreatedTagsWidget(createdTagsContainer, this.dataManager, this.context.targetUser);
 
-      // 5. Tag Cloud Widget
+      // 6. Tag Cloud Widget
       const tagCloudContainer = document.createElement('div');
       tagCloudContainer.style.marginTop = '35px';
       dashboardDiv.appendChild(tagCloudContainer);
