@@ -699,10 +699,7 @@ export class GraphRenderer {
 
           /* Settings Popover */
           #danbooru-grass-settings-popover {
-            position: absolute;
-            top: 0;
-            left: 45px;
-            bottom: auto;
+            position: fixed;
             background: #fff;
             color: #24292f;
             border: 1px solid #d0d7de;
@@ -1134,13 +1131,16 @@ export class GraphRenderer {
         if (current === 'block') {
           closeSettings();
         } else {
+          // Position popover near the settings button
+          const btnRect = settingsBtn.getBoundingClientRect();
+          popover.style.left = btnRect.left + 'px';
+          popover.style.top = (btnRect.bottom + 4) + 'px';
           popover.style.display = 'block';
         }
         e.stopPropagation();
       };
 
-      footer.appendChild(popover); // Append to footer so it's relative
-      footer.style.position = 'relative'; // Ensure popover positions correctly
+      document.body.appendChild(popover); // Append to body for correct stacking
 
       // 3.2 Legend (Right)
       const legend = document.createElement('div');
@@ -1154,7 +1154,7 @@ export class GraphRenderer {
 
       // Custom Thresholds Logic (Empty + 4 Levels)
       const colors = [
-        'var(--grass-empty-cell)', '#9be9a8', '#40c463', '#30a14e', '#216e39'
+        'var(--grass-level-0)', 'var(--grass-level-1)', 'var(--grass-level-2)', 'var(--grass-level-3)', 'var(--grass-level-4)'
       ];
       // const thresholds = this.settingsManager.getThresholds(metric); // Unused local var
 
@@ -1188,48 +1188,53 @@ export class GraphRenderer {
 
     const currentThresholds = this.settingsManager.getThresholds(metric as import('../types').Metric);
 
-    (window as any).cal.paint({
-      itemSelector: scrollWrapper, // Pass element directly
+    // Reusable paint config (for theme-change re-paints)
+    const buildPaintConfig = () => ({
+      itemSelector: scrollWrapper,
       range: 12,
       domain: {
         type: 'month',
         gutter: 3,
-        label: {
-          position: 'top',
-          text: 'MMM',
-          height: 20,
-          textAlign: 'start'
-        },
+        label: { position: 'top', text: 'MMM', height: 20, textAlign: 'start' },
       },
-      subDomain: {
-        type: 'day',
-        radius: 2,
-        width: 11,
-        height: 11,
-        gutter: 2,
-      },
-      // Align start date to Local Jan 1st 00:00, represented as UTC to match data
+      subDomain: { type: 'day', radius: 2, width: 11, height: 11, gutter: 2 },
       date: {
         start: new Date(
-          new Date(year, 0, 1).getTime() -
-          (new Date().getTimezoneOffset() * 60000)
+          new Date(year, 0, 1).getTime() - (new Date().getTimezoneOffset() * 60000)
         )
       },
-      data: {
-        source: source,
-        x: 'date',
-        y: 'value'
-      },
+      data: { source: source, x: 'date', y: 'value' },
       scale: {
         color: {
-          range: ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'],
+          range: this.settingsManager.resolveLevels(
+            CONFIG.THEMES[this.settingsManager.getTheme()] || CONFIG.THEMES.light
+          ),
           domain: currentThresholds,
           type: 'threshold',
         },
       },
       theme: 'light',
-    })
+    });
+
+    (window as any).cal.paint(buildPaintConfig())
       .then(() => {
+
+        // Listen for theme/grass changes — destroy + re-paint CalHeatmap
+        const onThemeChange = () => {
+          try {
+            // Preserve scroll position
+            const sw = document.getElementById('cal-heatmap-scroll');
+            const savedScroll = sw ? sw.scrollLeft : 0;
+
+            (window as any).cal.destroy();
+            (window as any).cal.paint(buildPaintConfig()).then(() => {
+              // Restore scroll position after paint
+              if (sw) sw.scrollLeft = savedScroll;
+            });
+          } catch (e) { console.debug('[DI] CalHeatmap re-paint failed', e); }
+          this.updateSummaryGrid(hourlyData, metric);
+        };
+        window.addEventListener('DanbooruInsights:ThemeChanged', onThemeChange);
 
         // Render Summary Grid Heatmap
         this.updateSummaryGrid(hourlyData, metric);
