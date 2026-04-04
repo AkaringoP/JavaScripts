@@ -256,6 +256,14 @@ export function renderScatterPlot(
   selectionDiv.style.pointerEvents = 'none';
   canvasContainer.appendChild(selectionDiv);
 
+  // Range label shown during drag
+  const rangeLabel = document.createElement('div');
+  rangeLabel.style.cssText = 'position:absolute;top:-38px;left:0;right:0;text-align:center;font-size:11px;color:#fff;background:rgba(0,0,0,0.75);padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;display:none;width:fit-content;margin:0 auto;line-height:1.5;';
+  selectionDiv.appendChild(rangeLabel);
+
+  // Crosshair cursor for canvas
+  canvas.style.cursor = 'crosshair';
+
   // Popover UI
   const popover = document.createElement('div');
   popover.id = 'scatter-popover-ui';
@@ -522,7 +530,7 @@ export function renderScatterPlot(
       }
     }
 
-    canvas.style.cursor = isHand ? 'pointer' : 'default';
+    canvas.style.cursor = isHand ? 'pointer' : 'crosshair';
   });
 
   // Drag Event Listeners
@@ -549,6 +557,32 @@ export function renderScatterPlot(
     selectionDiv.style.display = 'block';
   });
 
+  // Debounced range label updater
+  let rangeLabelTimer: ReturnType<typeof setTimeout> | null = null;
+  const updateRangeLabel = (x1: number, x2: number, y1: number, y2: number) => {
+    if (rangeLabelTimer) clearTimeout(rangeLabelTimer);
+    rangeLabelTimer = setTimeout(() => {
+      const dateMin = ((Math.min(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+      const dateMax = ((Math.max(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+      const valMin = ((currentScale.padT + currentScale.drawH - Math.max(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
+      const valMax = ((currentScale.padT + currentScale.drawH - Math.min(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
+
+      const d1 = new Date(dateMin).toISOString().slice(0, 10);
+      const d2 = new Date(dateMax).toISOString().slice(0, 10);
+      const valLabel = currentScale.mode === 'tags' ? 'Tags' : 'Score';
+
+      // Count posts in selection
+      const count = scatterData.filter(d => {
+        if (!activeFilters[d.r]) return false;
+        const val = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
+        return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
+      }).length;
+
+      rangeLabel.innerHTML = `${d1} ~ ${d2}<br>${valLabel}: ${Math.round(valMin)} ~ ${Math.round(valMax)} · ${count.toLocaleString()} posts`;
+      rangeLabel.style.display = 'block';
+    }, 50);
+  };
+
   window.addEventListener('mousemove', (e) => {
     if (!dragStart) return;
     const rect = canvasContainer.getBoundingClientRect();
@@ -571,6 +605,8 @@ export function renderScatterPlot(
     selectionDiv.style.top = y + 'px';
     selectionDiv.style.width = w + 'px';
     selectionDiv.style.height = h + 'px';
+
+    updateRangeLabel(dragStart.x, currentX, dragStart.y, currentY);
   });
 
   window.addEventListener('mouseup', (e) => {
@@ -578,6 +614,8 @@ export function renderScatterPlot(
     const ds = dragStart;
     dragStart = null;
     selectionDiv.style.display = 'none';
+    rangeLabel.style.display = 'none';
+    if (rangeLabelTimer) { clearTimeout(rangeLabelTimer); rangeLabelTimer = null; }
 
     const rect = canvasContainer.getBoundingClientRect();
     const endX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
