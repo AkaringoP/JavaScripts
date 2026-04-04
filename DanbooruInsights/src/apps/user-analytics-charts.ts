@@ -860,7 +860,7 @@ export async function renderMilestonesWidget(
   initialNsfwEnabled: boolean,
 ): Promise<{onNsfwChange: (enabled: boolean) => Promise<void>}> {
   let isNsfwEnabled = initialNsfwEnabled;
-  let currentMilestoneStep: 'auto' | number = 'auto';
+  let currentMilestoneStep: 'auto' | 'repdigit' | number = 'auto';
   let isMilestoneExpanded = false;
 
   const renderMilestones = async () => {
@@ -875,6 +875,8 @@ export async function renderMilestonesWidget(
       <option value="1000" ${currentMilestoneStep === 1000 || String(currentMilestoneStep) === '1000' ? 'selected' : ''}>Every 1k</option>
       <option value="2500" ${currentMilestoneStep === 2500 || String(currentMilestoneStep) === '2500' ? 'selected' : ''}>Every 2.5k</option>
       <option value="5000" ${currentMilestoneStep === 5000 || String(currentMilestoneStep) === '5000' ? 'selected' : ''}>Every 5k</option>
+      <option value="10000" ${currentMilestoneStep === 10000 || String(currentMilestoneStep) === '10000' ? 'selected' : ''}>Every 10k</option>
+      <option value="repdigit" ${currentMilestoneStep === 'repdigit' ? 'selected' : ''}>Repdigit</option>
     </select>`;
 
     msHtml += '<button id="analytics-milestone-toggle" style="background:none; border:none; color:#0969da; cursor:pointer; font-size:0.9em; display:none;">Show More</button>';
@@ -887,7 +889,7 @@ export async function renderMilestonesWidget(
       if (sel) {
         sel.onchange = (e) => {
           const v = (e.target as HTMLSelectElement).value;
-          currentMilestoneStep = v === 'auto' ? 'auto' : parseInt(v);
+          currentMilestoneStep = v === 'auto' ? 'auto' : v === 'repdigit' ? 'repdigit' : parseInt(v);
           renderMilestones();
         };
       }
@@ -925,7 +927,7 @@ export async function renderMilestonesWidget(
     if (stepSelect) {
       stepSelect.onchange = (e) => {
         const v = (e.target as HTMLSelectElement).value;
-        currentMilestoneStep = v === 'auto' ? 'auto' : parseInt(v);
+        currentMilestoneStep = v === 'auto' ? 'auto' : v === 'repdigit' ? 'repdigit' : parseInt(v);
         renderMilestones();
       };
     }

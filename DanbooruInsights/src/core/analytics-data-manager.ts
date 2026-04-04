@@ -249,7 +249,7 @@ export class AnalyticsDataManager extends DataManager {
    * @param {(string|number)=} customStep Step interval ('auto' or a number).
    * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
    */
-  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | number = 'auto'): Promise<MilestoneEntry[]> {
+  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
     const uploaderId = parseInt(userInfo.id ?? '0');
     if (!uploaderId) return [];
 
@@ -259,7 +259,17 @@ export class AnalyticsDataManager extends DataManager {
     // Define Milestones based on Total Count logic
     let targets: number[] = [];
 
-    if (customStep !== 'auto' && typeof customStep === 'number') {
+    if (customStep === 'repdigit') {
+      // Repdigit milestones: 111, 222, ..., 999, 1111, ..., 9999, 11111, ...
+      targets.push(1);
+      if (total >= 11) targets.push(11);
+      for (let digits = 3; digits <= 6; digits++) {
+        for (let d = 1; d <= 9; d++) {
+          const num = parseInt(String(d).repeat(digits));
+          if (num <= total) targets.push(num);
+        }
+      }
+    } else if (customStep !== 'auto' && typeof customStep === 'number') {
       const step = customStep as number;
       targets.push(1);
       for (let i = step; i <= total; i += step) {
@@ -380,8 +390,11 @@ export class AnalyticsDataManager extends DataManager {
       const p = map.get(t);
       if (p) {
         // Label logic
-        let label = `#${t} `;
+        let label = `#${t.toLocaleString()}`;
         if (t >= 1000 && t % 1000 === 0) label = `${t / 1000} k`;
+        // Repdigit label: show the number itself (e.g. "111", "2222")
+        const tStr = String(t);
+        if (tStr.length >= 3 && tStr.split('').every(c => c === tStr[0])) label = tStr;
         if (t === 1) label = 'First';
 
         results.push({ type: label, post: p, index: t });
