@@ -219,6 +219,22 @@ export interface TagCloudItem {
   count: number;
 }
 
+/** A tag created by a user, parsed from NNTBot forum reports. */
+export interface CreatedTagItem {
+  /** Raw tag name (underscore format). */
+  tagName: string;
+  /** Display name (underscores replaced with spaces). */
+  displayName: string;
+  /** Current post count on Danbooru. */
+  postCount: number;
+  /** Whether the tag is deprecated. */
+  isDeprecated: boolean;
+  /** Alias target tag name, or null if not aliased. */
+  aliasedTo: string | null;
+  /** Date when the tag first appeared in the NNTBot report (YYYY-MM-DD). */
+  reportDate: string;
+}
+
 /** Cached tag analytics report stored in the `tag_analytics` table. */
 export interface TagAnalyticsReport {
   tagName: string;

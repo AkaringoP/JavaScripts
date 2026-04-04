@@ -2,7 +2,7 @@ import {DataManager} from './data-manager';
 import type {ApiItem} from './data-manager';
 import {CONFIG} from '../config';
 import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
-import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem} from '../types';
+import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem, CreatedTagItem} from '../types';
 
 /** Summary statistics for a user's upload history. */
 export interface SummaryStats {
@@ -616,6 +616,226 @@ export class AnalyticsDataManager extends DataManager {
       return items;
     } catch (e: unknown) {
       console.debug('[DI] Failed to fetch tag cloud data', e);
+      return [];
+    }
+  }
+
+  /**
+   * Parses NNTBot forum post body to extract "New General Tags" created by a target user.
+   * Exported as static for testability.
+   *
+   * DText format:
+   *   [td][[tag name]] "»":[/posts?tags=...] [/td]
+   *   [td]"Username":[/users/12345][/td]
+   *
+   * @param body The DText body of a forum post.
+   * @param targetUser The username to filter by (case-insensitive).
+   * @param reportDate The date of the report (YYYY-MM-DD).
+   * @return Array of {tagName, reportDate} for tags created by the target user.
+   */
+  static parseNewGeneralTags(
+    body: string,
+    targetUser: string,
+    reportDate: string,
+  ): {tagName: string; reportDate: string}[] {
+    const results: {tagName: string; reportDate: string}[] = [];
+    const userLower = targetUser.toLowerCase();
+
+    // Find "New General Tags" section
+    const sectionStart = body.indexOf('New General Tags');
+    if (sectionStart === -1) return results;
+
+    // Find next section header (h4. or h5.) to limit scope
+    const afterSection = body.slice(sectionStart);
+    const nextSectionMatch = afterSection.slice(20).search(/\bh[45]\.\s/);
+    const sectionBody = nextSectionMatch >= 0
+      ? afterSection.slice(0, nextSectionMatch + 20)
+      : afterSection;
+
+    // Extract rows: look for [td][[tag_name]]...[/td] followed by [td]"Username":...
+    // Match pairs of consecutive [tr]...[/tr] blocks
+    const rowRegex = /\[td\]\[\[(.+?)\]\].*?\[\/td\]\s*\[td\](.*?)\[\/td\]/g;
+    let match;
+    while ((match = rowRegex.exec(sectionBody)) !== null) {
+      const tagDisplay = match[1]; // e.g. "gyaru v" or "mite (idolmaster)"
+      const updaterCell = match[2]; // e.g. "AkaringoP":[/users/701499]
+
+      // Check if target user is in the updater cell (case-insensitive)
+      if (updaterCell.toLowerCase().includes(userLower)) {
+        // Convert display name to raw tag name (spaces → underscores)
+        const tagName = tagDisplay.trim().replace(/ /g, '_');
+        results.push({tagName, reportDate});
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Fetches tags created by a user from NNTBot forum reports.
+   * Automatically searches previous usernames via user_name_change_requests API.
+   * Results are enriched with current tag status and alias info.
+   *
+   * @param userInfo The target user.
+   * @param onProgress Optional progress callback for UI updates.
+   * @return Created tag items sorted by post count descending.
+   */
+  async getCreatedTags(
+    userInfo: TargetUser,
+    onProgress?: (message: string) => void,
+  ): Promise<CreatedTagItem[]> {
+    if (!userInfo.name) return [];
+
+    const uploaderId = parseInt(userInfo.id || '0');
+    const cacheKey = 'created_tags';
+
+    // Check cache
+    if (uploaderId) {
+      const cached = await this.getStats(cacheKey, uploaderId);
+      if (cached) return cached as CreatedTagItem[];
+    }
+
+    const report = onProgress || (() => {});
+
+    try {
+      // Step 0: Collect all usernames (current + previous)
+      const userNames: string[] = [userInfo.name];
+      if (uploaderId) {
+        report('Checking previous usernames...');
+        try {
+          const ncUrl = `/user_name_change_requests.json?search[user_id]=${uploaderId}&limit=500`;
+          const ncResp = await this.rateLimiter.fetch(ncUrl).then(r => r.json());
+          if (Array.isArray(ncResp)) {
+            for (const nc of ncResp) {
+              if (nc.original_name && !userNames.includes(nc.original_name)) {
+                userNames.push(nc.original_name);
+              }
+            }
+          }
+        } catch { /* proceed with current name only */ }
+      }
+
+      // Step 1: Fetch forum posts for each username
+      const rawTags: {tagName: string; reportDate: string}[] = [];
+      const seenTags = new Set<string>();
+
+      for (let ni = 0; ni < userNames.length; ni++) {
+        const name = userNames[ni];
+        report(`Searching reports for ${name}... (${ni + 1}/${userNames.length})`);
+
+        const searchQuery = `tag report ${name}`;
+        const url = `/forum_posts.json?search[body_matches]=${encodeURIComponent(searchQuery)}&limit=500`;
+        const posts = await this.rateLimiter.fetch(url).then(r => r.json());
+
+        if (!Array.isArray(posts)) continue;
+
+        for (const post of posts) {
+          const body: string = post.body || '';
+          const dateMatch = body.match(/Daily Report \((\d{4}-\d{2}-\d{2})\)/);
+          const reportDate = dateMatch ? dateMatch[1] : (post.created_at || '').slice(0, 10);
+
+          const parsed = AnalyticsDataManager.parseNewGeneralTags(body, name, reportDate);
+          for (const tag of parsed) {
+            if (!seenTags.has(tag.tagName)) {
+              seenTags.add(tag.tagName);
+              rawTags.push(tag);
+            }
+          }
+        }
+      }
+
+      if (rawTags.length === 0) return [];
+
+      report(`Found ${rawTags.length} tags. Fetching current status...`);
+
+      // Step 2: Batch fetch current tag status
+      const tagNames = rawTags.map(t => t.tagName);
+      const tagStatusMap = new Map<string, {postCount: number; isDeprecated: boolean}>();
+
+      for (let i = 0; i < tagNames.length; i += 100) {
+        const batch = tagNames.slice(i, i + 100);
+        report(`Fetching tag status... (${Math.min(i + 100, tagNames.length)}/${tagNames.length})`);
+        const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(','))}&only=name,post_count,is_deprecated&limit=500`;
+        const tagsResp = await this.rateLimiter.fetch(tagsUrl).then(r => r.json());
+        if (Array.isArray(tagsResp)) {
+          for (const t of tagsResp) {
+            tagStatusMap.set(t.name, {
+              postCount: t.post_count || 0,
+              isDeprecated: t.is_deprecated || false,
+            });
+          }
+        }
+      }
+
+      // Step 3: Check aliases (only for post_count=0 tags — aliased tags have posts moved)
+      const emptyTagNames = tagNames.filter(name => {
+        const status = tagStatusMap.get(name);
+        return !status || status.postCount === 0;
+      });
+
+      report(`Checking aliases for ${emptyTagNames.length} empty tags...`);
+      const aliasMap = new Map<string, string>();
+      let aliasChecked = 0;
+
+      await this.mapConcurrent(emptyTagNames, 5, async (name: string) => {
+        try {
+          const aliasUrl = `/tag_aliases.json?search[antecedent_name]=${encodeURIComponent(name)}&search[status]=active&limit=1`;
+          const aliasResp = await this.rateLimiter.fetch(aliasUrl).then(r => r.json());
+          if (Array.isArray(aliasResp) && aliasResp.length > 0) {
+            aliasMap.set(name, aliasResp[0].consequent_name);
+          }
+        } catch { /* skip */ }
+        aliasChecked++;
+        if (aliasChecked % 10 === 0 || aliasChecked === emptyTagNames.length) {
+          report(`Checking aliases... (${aliasChecked}/${emptyTagNames.length})`);
+        }
+        return null;
+      });
+
+      // Step 4: Fetch post counts for aliased tags (consequent tag's count)
+      const aliasedNames = Array.from(aliasMap.values());
+      const aliasPostCounts = new Map<string, number>();
+      if (aliasedNames.length > 0) {
+        report(`Fetching aliased tag counts...`);
+        for (let i = 0; i < aliasedNames.length; i += 100) {
+          const batch = aliasedNames.slice(i, i + 100);
+          const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(','))}&only=name,post_count&limit=500`;
+          const tagsResp = await this.rateLimiter.fetch(tagsUrl).then(r => r.json());
+          if (Array.isArray(tagsResp)) {
+            for (const t of tagsResp) {
+              aliasPostCounts.set(t.name, t.post_count || 0);
+            }
+          }
+        }
+      }
+
+      report('Finalizing...');
+
+      // Step 5: Assemble results
+      const items: CreatedTagItem[] = rawTags.map(raw => {
+        const status = tagStatusMap.get(raw.tagName);
+        const alias = aliasMap.get(raw.tagName) || null;
+        // For aliased tags, show the consequent tag's post count
+        const postCount = alias
+          ? (aliasPostCounts.get(alias) ?? 0)
+          : (status?.postCount ?? 0);
+        return {
+          tagName: raw.tagName,
+          displayName: raw.tagName.replace(/_/g, ' '),
+          postCount,
+          isDeprecated: status?.isDeprecated ?? false,
+          aliasedTo: alias,
+          reportDate: raw.reportDate,
+        };
+      });
+
+      // Sort by post count descending
+      items.sort((a, b) => b.postCount - a.postCount);
+
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+      return items;
+    } catch (e: unknown) {
+      console.debug('[DI] Failed to fetch created tags', e);
       return [];
     }
   }

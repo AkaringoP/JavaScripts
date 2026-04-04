@@ -201,6 +201,44 @@ export const GLOBAL_CSS = `
         border-top: 1px solid #eee;
     }
 
+    /* -- Created Tags Widget -- */
+    .di-created-tags-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85em;
+    }
+    .di-created-tags-table th {
+        text-align: left;
+        color: #666;
+        font-weight: 600;
+        padding: 6px 8px;
+        border-bottom: 2px solid #e1e4e8;
+        font-size: 0.85em;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .di-created-tags-table td {
+        padding: 5px 8px;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    .di-created-tags-row:hover {
+        background: #f6f8fa;
+    }
+    .di-created-tags-row a {
+        text-decoration: none;
+    }
+    .di-created-tags-row a:hover {
+        text-decoration: underline;
+    }
+    .di-created-tags-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 0.85em;
+        padding: 1px 6px;
+        border-radius: 8px;
+    }
+
     /* -- User Analytics Charts -- */
     .month-column .column-overlay { transition: fill 0.2s; }
     .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
