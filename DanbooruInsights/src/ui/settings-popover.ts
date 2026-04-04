@@ -55,6 +55,8 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
       return;
     }
     popover.style.display = 'none';
+    const gf = document.getElementById('danbooru-grass-flyout');
+    if (gf) gf.style.display = 'none';
     if (settingsChanged) {
       settingsChanged = false;
       closeSettings();
@@ -70,12 +72,26 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
     if (popover && popover.style.display === 'block') {
       if (
         !popover.contains(e.target as Node) &&
-        !settingsBtn.contains(e.target as Node)
+        !settingsBtn.contains(e.target as Node) &&
+        !grassFlyout.contains(e.target as Node)
       ) {
         handleClose();
       }
     }
   });
+
+  // Reposition popover on page scroll to stay anchored to settings button
+  const repositionPopover = () => {
+    if (popover.style.display !== 'block') return;
+    const btnRect = settingsBtn.getBoundingClientRect();
+    popover.style.left = btnRect.left + 'px';
+    popover.style.top = (btnRect.bottom + 4) + 'px';
+  };
+  window.addEventListener('scroll', (e) => {
+    if (popover.style.display === 'block' && !popover.contains(e.target as Node)) {
+      repositionPopover();
+    }
+  }, true);
 
   // --- 1. Color Themes Section ---
   const themeHeader = document.createElement('div');
@@ -119,23 +135,23 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
 
   // --- 1b. Grass Color Flyout ---
   const grassFlyout = document.createElement('div');
-  grassFlyout.style.cssText = 'position:absolute;display:none;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:8px;z-index:10;flex-direction:column;gap:6px;';
-  popover.appendChild(grassFlyout);
+  grassFlyout.id = 'danbooru-grass-flyout';
+  grassFlyout.style.cssText = 'position:fixed;display:none;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:8px;z-index:10001;flex-direction:column;gap:6px;';
+  document.body.appendChild(grassFlyout);
 
   let currentFlyoutKey = '';
 
-  const toggleGrassFlyout = (anchorEl: HTMLElement, themeKey: string) => {
+  const toggleGrassFlyout = (_anchorEl: HTMLElement, themeKey: string) => {
     if (grassFlyout.style.display !== 'none' && currentFlyoutKey === themeKey) {
       grassFlyout.style.display = 'none';
       return;
     }
     currentFlyoutKey = themeKey;
 
-    // Position flyout to the right of the anchor
-    const anchorRect = anchorEl.getBoundingClientRect();
+    // Position flyout to the right of the popover
     const popoverRect = popover.getBoundingClientRect();
-    grassFlyout.style.left = (anchorRect.right - popoverRect.left + 8) + 'px';
-    grassFlyout.style.top = (anchorRect.top - popoverRect.top) + 'px';
+    grassFlyout.style.left = (popoverRect.right + 8) + 'px';
+    grassFlyout.style.top = popoverRect.top + 'px';
 
     renderGrassFlyout(themeKey);
     grassFlyout.style.display = 'flex';

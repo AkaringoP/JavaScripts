@@ -117,8 +117,16 @@ export class GraphRenderer {
       }
     };
 
+    // Sync Hourly panel position/width with heatmap container
+    const syncPanelPosition = () => {
+      const panel = document.getElementById('danbooru-grass-panel');
+      if (!panel) return;
+      const xOffset = parseFloat(container.style.transform?.replace(/translateX\(|px\)/g, '') || '0') || 0;
+      panel.style.marginLeft = xOffset > 0 ? `${xOffset}px` : '0';
+    };
+
     // Initial apply (might be 0 if not 100% rendered, so we use a small delay or observer)
-    setTimeout(applyConstraints, 0);
+    setTimeout(() => { applyConstraints(); syncPanelPosition(); }, 0);
 
     container.style.minWidth = '300px';
 
@@ -201,6 +209,7 @@ export class GraphRenderer {
               container.style.transform = `translateX(${newX}px)`;
             }
           }
+          syncPanelPosition();
         };
 
         const onMouseUp = () => {
@@ -211,10 +220,7 @@ export class GraphRenderer {
             width: container.style.width,
             xOffset: finalX
           });
-          // Trigger a re-render or layout update if needed
-          if ((window as any).cal) {
-            // CalHeatmap might need a resize or just re-paint
-          }
+          syncPanelPosition();
         };
 
         document.addEventListener('mousemove', onMouseMove);
@@ -700,6 +706,8 @@ export class GraphRenderer {
           /* Settings Popover */
           #danbooru-grass-settings-popover {
             position: fixed;
+            max-height: 70vh;
+            overflow-y: auto;
             background: #fff;
             color: #24292f;
             border: 1px solid #d0d7de;
