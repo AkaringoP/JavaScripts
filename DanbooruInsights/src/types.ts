@@ -1,5 +1,12 @@
 // Shared interfaces and type aliases for DanbooruInsights.
 
+/** A named grass (heatmap level) color palette. */
+export interface GrassOption {
+  name: string;
+  /** Five-step color ramp [empty, level1, level2, level3, level4]. */
+  levels: string[];
+}
+
 /** A color theme definition for the contribution graph. */
 export interface Theme {
   name: string;
@@ -10,6 +17,8 @@ export interface Theme {
   levels?: string[];
   /** Custom scrollbar thumb color. */
   scrollbar?: string;
+  /** Selectable grass color palettes (4 options per theme). */
+  grassOptions?: GrassOption[];
 }
 
 /** Threshold values for each contribution metric. */

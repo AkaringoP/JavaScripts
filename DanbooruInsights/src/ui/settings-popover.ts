@@ -55,6 +55,8 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
       return;
     }
     popover.style.display = 'none';
+    const gf = document.getElementById('danbooru-grass-flyout');
+    if (gf) gf.style.display = 'none';
     if (settingsChanged) {
       settingsChanged = false;
       closeSettings();
@@ -70,12 +72,26 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
     if (popover && popover.style.display === 'block') {
       if (
         !popover.contains(e.target as Node) &&
-        !settingsBtn.contains(e.target as Node)
+        !settingsBtn.contains(e.target as Node) &&
+        !grassFlyout.contains(e.target as Node)
       ) {
         handleClose();
       }
     }
   });
+
+  // Reposition popover on page scroll to stay anchored to settings button
+  const repositionPopover = () => {
+    if (popover.style.display !== 'block') return;
+    const btnRect = settingsBtn.getBoundingClientRect();
+    popover.style.left = btnRect.left + 'px';
+    popover.style.top = (btnRect.bottom + 4) + 'px';
+  };
+  window.addEventListener('scroll', (e) => {
+    if (popover.style.display === 'block' && !popover.contains(e.target as Node)) {
+      repositionPopover();
+    }
+  }, true);
 
   // --- 1. Color Themes Section ---
   const themeHeader = document.createElement('div');
@@ -102,14 +118,102 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
     icon.appendChild(inner);
 
     icon.onclick = () => {
-      settingsManager.applyTheme(key);
-      // Update active state visual
-      document.querySelectorAll('.theme-icon').forEach((el) => el.classList.remove('active'));
-      icon.classList.add('active');
+      const wasActive = icon.classList.contains('active');
+      if (!wasActive) {
+        // Reset grass to Recommended when switching themes
+        settingsManager.setGrassIndex(0);
+        settingsManager.applyTheme(key);
+        document.querySelectorAll('.theme-icon').forEach((el) => el.classList.remove('active'));
+        icon.classList.add('active');
+      }
+      // Toggle grass flyout (show on click of active theme, or on first apply)
+      toggleGrassFlyout(icon, key);
     };
     grid.appendChild(icon);
   });
   popover.appendChild(grid);
+
+  // --- 1b. Grass Color Flyout ---
+  const grassFlyout = document.createElement('div');
+  grassFlyout.id = 'danbooru-grass-flyout';
+  grassFlyout.style.cssText = 'position:fixed;display:none;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:8px;z-index:10001;flex-direction:column;gap:6px;';
+  document.body.appendChild(grassFlyout);
+
+  let currentFlyoutKey = '';
+
+  const toggleGrassFlyout = (_anchorEl: HTMLElement, themeKey: string) => {
+    if (grassFlyout.style.display !== 'none' && currentFlyoutKey === themeKey) {
+      grassFlyout.style.display = 'none';
+      return;
+    }
+    currentFlyoutKey = themeKey;
+
+    // Position flyout to the right of the popover
+    const popoverRect = popover.getBoundingClientRect();
+    grassFlyout.style.left = (popoverRect.right + 8) + 'px';
+    grassFlyout.style.top = popoverRect.top + 'px';
+
+    renderGrassFlyout(themeKey);
+    grassFlyout.style.display = 'flex';
+  };
+
+  const renderGrassFlyout = (themeKey: string) => {
+    grassFlyout.innerHTML = '';
+    const theme = CONFIG.THEMES[themeKey] || CONFIG.THEMES.light;
+    const options = (theme as any).grassOptions;
+    if (!options || !Array.isArray(options)) {
+      grassFlyout.style.display = 'none';
+      return;
+    }
+
+    const currentIdx = settingsManager.getGrassIndex();
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:10px;color:#888;font-weight:600;margin-bottom:2px;';
+    title.textContent = 'Grass Color';
+    grassFlyout.appendChild(title);
+
+    options.forEach((opt: any, idx: number) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'cursor:pointer;display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;border:2px solid transparent;transition:all 0.15s;';
+      if (idx === currentIdx) row.style.borderColor = '#007bff';
+
+      // Mini heatmap (4 cells)
+      const preview = document.createElement('div');
+      preview.style.cssText = 'display:flex;gap:2px;';
+      for (let i = 1; i < opt.levels.length; i++) {
+        const cell = document.createElement('div');
+        cell.style.cssText = `width:12px;height:12px;border-radius:2px;background:${opt.levels[i]};`;
+        preview.appendChild(cell);
+      }
+      row.appendChild(preview);
+
+      const label = document.createElement('div');
+      label.style.cssText = 'font-size:10px;color:#555;white-space:nowrap;';
+      label.textContent = idx === 0 ? `★ ${opt.name}` : opt.name;
+      row.appendChild(label);
+
+      row.onmouseover = () => { if (idx !== currentIdx) row.style.background = '#f6f8fa'; };
+      row.onmouseout = () => { row.style.background = ''; };
+
+      row.onclick = (e) => {
+        e.stopPropagation();
+        settingsManager.setGrassIndex(idx);
+        settingsManager.applyTheme(themeKey);
+        renderGrassFlyout(themeKey);
+      };
+
+      grassFlyout.appendChild(row);
+    });
+  };
+
+  // Close flyout when clicking outside
+  popover.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (!grassFlyout.contains(target) && !target.closest('.theme-icon')) {
+      grassFlyout.style.display = 'none';
+    }
+  });
 
   // --- 2. Thresholds Section ---
   const threshHeader = document.createElement('div');
