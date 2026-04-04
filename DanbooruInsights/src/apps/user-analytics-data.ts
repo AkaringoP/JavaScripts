@@ -65,9 +65,12 @@ export class UserAnalyticsDataService {
         dataManager.getFavCopyrightDistribution(user),
         dataManager.getBreastsDistribution(user),
         dataManager.getHairLengthDistribution(user),
-        dataManager.getHairColorDistribution(user)
-      ]).then(([status, rating, char, copy, favCopy, breasts, hairL, hairC]) => ({
-        status, rating, character: char, copyright: copy, fav_copyright: favCopy, breasts, hair_length: hairL, hair_color: hairC
+        dataManager.getHairColorDistribution(user),
+        dataManager.getGenderDistribution(user),
+        dataManager.getCommentaryDistribution(user),
+        dataManager.getTranslationDistribution(user)
+      ]).then(([status, rating, char, copy, favCopy, breasts, hairL, hairC, gender, commentary, translation]) => ({
+        status, rating, character: char, copyright: copy, fav_copyright: favCopy, breasts, hair_length: hairL, hair_color: hairC, gender, commentary, translation
       })),
       dataManager.getTopPostsByType(user),
       dataManager.getRecentPopularPosts(user),

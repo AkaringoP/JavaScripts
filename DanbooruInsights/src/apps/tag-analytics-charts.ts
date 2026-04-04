@@ -66,7 +66,7 @@ export class TagAnalyticsChartRenderer {
       counts = {
         'commentary': translated,
         'commentary_request': requested,
-        'has:comments -commentary -commentary_request': untagged
+        'has:commentary -commentary -commentary_request': untagged
       };
     }
     if (!counts) return;
@@ -81,7 +81,7 @@ export class TagAnalyticsChartRenderer {
       else if (type === 'commentary') {
         if (key === 'commentary') name = 'Commentary';
         else if (key === 'commentary_request') name = 'Requested';
-        else if (key === 'has:comments -commentary -commentary_request') name = 'Untagged';
+        else if (key === 'has:commentary -commentary -commentary_request') name = 'Untagged';
       }
       else name = key.replace(/_/g, ' ');
 
@@ -134,7 +134,7 @@ export class TagAnalyticsChartRenderer {
       if (type === 'commentary') {
         if (key === 'commentary') return '#007bff'; // Blue
         if (key === 'commentary_request') return '#ffc107';    // Yellow/Orange
-        if (key === 'has:comments -commentary -commentary_request') return '#6c757d';   // Grey
+        if (key === 'has:commentary -commentary -commentary_request') return '#6c757d';   // Grey
       }
       if (key === 'others') return '#888'; // Grey for Others
       return ordinalColor(key);
