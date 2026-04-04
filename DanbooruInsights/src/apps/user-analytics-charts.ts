@@ -169,7 +169,12 @@ export function renderPieWidget(
     pieContent.style.flexDirection = 'row';
     pieContent.style.alignItems = 'center';
     pieContent.style.justifyContent = 'space-around';
-    pieContent.style.perspective = '1000px';
+
+    // Firefox: skip 3D perspective — breaks SVG pointer events
+    const isFirefox = navigator.userAgent.includes('Firefox');
+    if (!isFirefox) {
+      pieContent.style.perspective = '1000px';
+    }
 
     const ratingColors: Record<string, string> = {'g': '#28a745', 's': '#fd7e14', 'q': '#6f42c1', 'e': '#dc3545'};
     const ratingLabels: Record<string, string> = {'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit'};
@@ -224,33 +229,46 @@ export function renderPieWidget(
       chartWrapper.className = 'pie-chart-wrapper';
       chartWrapper.style.width = '180px';
       chartWrapper.style.height = '180px';
-      chartWrapper.style.transformStyle = 'preserve-3d';
-      chartWrapper.style.transform = 'rotateX(40deg) rotateY(0deg)';
-      chartWrapper.style.transition = 'transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
       chartWrapper.style.cursor = 'pointer';
 
-      const shadow = document.createElement('div');
-      shadow.style.position = 'absolute';
-      shadow.style.top = '50%';
-      shadow.style.left = '50%';
-      shadow.style.width = '140px';
-      shadow.style.height = '140px';
-      shadow.style.transform = 'translate(-50%, -50%) translateZ(-10px)';
-      shadow.style.borderRadius = '50%';
-      shadow.style.background = 'rgba(0,0,0,0.2)';
-      shadow.style.filter = 'blur(5px)';
-      chartWrapper.appendChild(shadow);
+      if (!isFirefox) {
+        // 3D tilt effect (Chrome/Safari/Edge only — Firefox breaks SVG pointer events)
+        chartWrapper.style.transformStyle = 'preserve-3d';
+        chartWrapper.style.transform = 'rotateX(40deg) rotateY(0deg)';
+        chartWrapper.style.transition = 'transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
 
-      chartWrapper.addEventListener('mouseenter', () => {
-        chartWrapper.style.transform = 'rotateX(0deg) scale(1.1)';
-        shadow.style.transform = 'translate(-50%, -50%) translateZ(-30px) scale(0.9)';
-        shadow.style.opacity = '0.5';
-      });
-      chartWrapper.addEventListener('mouseleave', () => {
-        chartWrapper.style.transform = 'rotateX(40deg)';
+        const shadow = document.createElement('div');
+        shadow.style.position = 'absolute';
+        shadow.style.top = '50%';
+        shadow.style.left = '50%';
+        shadow.style.width = '140px';
+        shadow.style.height = '140px';
         shadow.style.transform = 'translate(-50%, -50%) translateZ(-10px)';
-        shadow.style.opacity = '1';
-      });
+        shadow.style.borderRadius = '50%';
+        shadow.style.background = 'rgba(0,0,0,0.2)';
+        shadow.style.filter = 'blur(5px)';
+        chartWrapper.appendChild(shadow);
+
+        chartWrapper.addEventListener('mouseenter', () => {
+          chartWrapper.style.transform = 'rotateX(0deg) scale(1.1)';
+          shadow.style.transform = 'translate(-50%, -50%) translateZ(-30px) scale(0.9)';
+          shadow.style.opacity = '0.5';
+        });
+        chartWrapper.addEventListener('mouseleave', () => {
+          chartWrapper.style.transform = 'rotateX(40deg)';
+          shadow.style.transform = 'translate(-50%, -50%) translateZ(-10px)';
+          shadow.style.opacity = '1';
+        });
+      } else {
+        // Firefox: simple hover scale (no 3D)
+        chartWrapper.style.transition = 'transform 0.3s ease';
+        chartWrapper.addEventListener('mouseenter', () => {
+          chartWrapper.style.transform = 'scale(1.05)';
+        });
+        chartWrapper.addEventListener('mouseleave', () => {
+          chartWrapper.style.transform = 'none';
+        });
+      }
 
       pieContent.appendChild(chartWrapper);
 
