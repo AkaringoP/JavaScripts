@@ -570,7 +570,7 @@ export class TagAnalyticsApp {
 
         if (monthlyData.historyCutoff) {
           try {
-            const cutoffUrl = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+date:<${encodeURIComponent(monthlyData.historyCutoff)}`;
+            const cutoffUrl = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+status:any+date:<${encodeURIComponent(monthlyData.historyCutoff)}`;
             const r = await this.rateLimiter.fetch(cutoffUrl).then((res: Response) => res.json());
             referenceTotal = (r && r.counts ? r.counts.posts : (r ? r.posts : 0)) || 0;
           } catch (e) {

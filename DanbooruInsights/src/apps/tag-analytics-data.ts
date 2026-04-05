@@ -801,7 +801,7 @@ export class TagAnalyticsDataService {
     // Create Promises
     const promises = tasks.map(task => {
       const params = new URLSearchParams({
-        tags: `${tagName} date:${task.queryDate}` // Correct: date must be in tags
+        tags: `${tagName} status:any date:${task.queryDate}` // Correct: date must be in tags
       });
       const url = `/counts/posts.json?${params.toString()}`;
 
@@ -912,7 +912,7 @@ export class TagAnalyticsDataService {
         // We must use order:id to ensure deterministic sort matching the "count" order roughly.
         // Actually "count" is just total.
         const params = new URLSearchParams({
-          tags: `${tagName} date:>${prevDateStr} order:id`,
+          tags: `${tagName} status:any date:>${prevDateStr} order:id`,
           limit: limit,
           page: page,
           only: 'id,created_at,uploader_id,uploader_name,variants,rating,preview_file_url'
