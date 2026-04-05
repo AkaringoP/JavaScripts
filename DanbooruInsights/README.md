@@ -103,3 +103,4 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 * Tested on Chrome/Edge/Whale with Tampermonkey.
 * Requires `d3.v7`, `d3-cloud`, `cal-heatmap`, and `dexie.js` (automatically included via `@require`).
+* **Works with all account levels** — every feature operates correctly on basic Member (Blue) accounts. No Gold-only search features (3+ tag queries) are used.
