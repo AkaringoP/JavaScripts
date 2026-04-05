@@ -1136,16 +1136,40 @@ export class UserAnalyticsApp {
         `<div style="white-space:nowrap;">${ev.html}</div>`
       ).join('');
 
-      // Details for Card 2 — scrollable timeline (3 rows visible by default)
+      // Details for Card 2 — scrollable timeline (3 rows visible by default).
+      // Discoverability for overflowing rows uses two layers:
+      //   1. `di-user-history-timeline` — slim custom scrollbar (Chrome/Firefox).
+      //   2. `di-user-history-wrap` + `has-overflow` class — bottom fade gradient
+      //      for macOS Safari where overlay scrollbars auto-hide regardless of
+      //      custom ::-webkit-scrollbar styles.
+      // The has-overflow class is toggled below after the element is in the DOM
+      // so scrollHeight can be measured.
       const dateDetails = `
-       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px; max-height:66px; overflow-y:auto;">
-           ${timelineRows}
+       <div class="di-user-history-wrap">
+         <div class="di-user-history-timeline" style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px; max-height:66px; overflow-y:auto;">
+             ${timelineRows}
+         </div>
        </div>
     `;
 
       summaryWrapper.innerHTML += makeCard('User History', '', '📅', dateDetails);
 
       dashboardDiv.appendChild(summaryWrapper);
+
+      // Toggle `.has-overflow` on the wrap so the bottom fade gradient only
+      // shows when there's actually more content below the fold. Also hide
+      // the fade when the user has scrolled to the bottom.
+      const historyTimeline = dashboardDiv.querySelector('.di-user-history-timeline') as HTMLElement | null;
+      const historyWrap = historyTimeline?.parentElement as HTMLElement | null;
+      if (historyTimeline && historyWrap) {
+        if (historyTimeline.scrollHeight > historyTimeline.clientHeight + 1) {
+          historyWrap.classList.add('has-overflow');
+          historyTimeline.addEventListener('scroll', () => {
+            const atBottom = historyTimeline.scrollTop + historyTimeline.clientHeight >= historyTimeline.scrollHeight - 1;
+            historyWrap.classList.toggle('scrolled-to-bottom', atBottom);
+          });
+        }
+      }
 
       // Bind Play/Pause Button Logic
       const btnPlayPause = dashboardDiv.querySelector('#analytics-upload-btn-play-pause') as HTMLElement;

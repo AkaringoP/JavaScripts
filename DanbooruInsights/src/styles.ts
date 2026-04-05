@@ -92,6 +92,50 @@ export const GLOBAL_CSS = `
       background: rgba(128,128,128,0.2);
     }
 
+    /* -- User History timeline: discoverability for scrollable overflow --
+       Two-layer approach:
+       1. Slim always-visible scrollbar (works on Chrome/Firefox where custom
+          ::-webkit-scrollbar disables overlay auto-hide).
+       2. Bottom fade gradient (reliable fallback for Safari/macOS where
+          overlay scrollbars auto-hide regardless of custom styles).
+       The fade is only shown when the has-overflow class is set via JS after
+       measuring scrollHeight, so it doesn't clutter the UI when there's
+       nothing to scroll. */
+    .di-user-history-timeline {
+      scrollbar-width: thin;
+      scrollbar-color: #bbb transparent;
+    }
+    .di-user-history-timeline::-webkit-scrollbar {
+      width: 8px;
+    }
+    .di-user-history-timeline::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .di-user-history-timeline::-webkit-scrollbar-thumb {
+      background: #ccc;
+      border-radius: 4px;
+    }
+    .di-user-history-timeline:hover::-webkit-scrollbar-thumb {
+      background: #999;
+    }
+    .di-user-history-wrap {
+      position: relative;
+    }
+    .di-user-history-wrap.has-overflow::after {
+      content: '';
+      position: absolute;
+      left: 14px;
+      right: 8px;
+      bottom: 0;
+      height: 14px;
+      background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.95) 100%);
+      pointer-events: none;
+    }
+    .di-user-history-wrap.has-overflow.scrolled-to-bottom::after {
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+
     /* -- Spinner -- */
     .di-spinner {
         width: 50px;
