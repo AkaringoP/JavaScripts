@@ -1,0 +1,10028 @@
+// ==UserScript==
+// @name         Danbooru Insights
+// @namespace    http://tampermonkey.net/
+// @version      8.0.4
+// @author       AkaringoP with Claude Code
+// @description  Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.
+// @icon         https://danbooru.donmai.us/favicon.ico
+// @homepageURL  https://github.com/AkaringoP/JavaScripts/tree/main/DanbooruInsights
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js
+// @match        https://*.donmai.us/users/*
+// @match        https://*.donmai.us/profile
+// @match        https://*.donmai.us/wiki_pages*
+// @match        https://*.donmai.us/artists/*
+// @require      https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js
+// @require      https://cdn.jsdelivr.net/npm/d3-cloud@1.2.7/build/d3.layout.cloud.min.js
+// @require      https://cdn.jsdelivr.net/npm/cal-heatmap@4.2.4/dist/cal-heatmap.min.js
+// @require      https://cdn.jsdelivr.net/npm/dexie@3.2.7/dist/dexie.min.js
+// @grant        none
+// ==/UserScript==
+
+(function (Dexie, d3) {
+  'use strict';
+
+  function _interopNamespaceDefault(e) {
+    const n = Object.create(null, { [Symbol.toStringTag]: { value: 'Module' } });
+    if (e) {
+      for (const k in e) {
+        if (k !== 'default') {
+          const d = Object.getOwnPropertyDescriptor(e, k);
+          Object.defineProperty(n, k, d.get ? d : {
+            enumerable: true,
+            get: () => e[k]
+          });
+        }
+      }
+    }
+    n.default = e;
+    return Object.freeze(n);
+  }
+
+  const d3__namespace = _interopNamespaceDefault(d3);
+
+  const GLOBAL_CSS = `
+    /* -- Animations & Base -- */
+    @keyframes di-slide-in-out-a {
+        0%, 28% { transform: translateX(0); opacity: 1; }
+        33% { transform: translateX(-20px); opacity: 0; }
+        35%, 95% { transform: translateX(20px); opacity: 0; }
+        100% { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes di-slide-in-out-b {
+        0%, 28% { transform: translateX(20px); opacity: 0; }
+        33%, 61% { transform: translateX(0); opacity: 1; }
+        66% { transform: translateX(-20px); opacity: 0; }
+        68%, 100% { transform: translateX(20px); opacity: 0; }
+    }
+    @keyframes di-slide-in-out-c {
+        0%, 61% { transform: translateX(20px); opacity: 0; }
+        66%, 95% { transform: translateX(0); opacity: 1; }
+        100% { transform: translateX(-20px); opacity: 0; }
+    }
+
+    /* -- UserAnalyticsApp Modal & Button -- */
+    #danbooru-grass-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 10000;
+      display: none;
+      justify-content: center;
+      align-items: center;
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    #danbooru-grass-modal-overlay.visible {
+      display: flex;
+      opacity: 1;
+    }
+    #danbooru-grass-modal-window {
+      width: 80%;
+      max-width: 1000px;
+      height: 80%;
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      color: #333;
+      font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    }
+    #danbooru-grass-modal-close {
+      position: absolute;
+      top: 15px;
+      right: 20px;
+      font-size: 24px;
+      cursor: pointer;
+      color: #666;
+      z-index: 10;
+      line-height: 1;
+    }
+    #danbooru-grass-modal-close:hover {
+      color: #000;
+    }
+    #danbooru-grass-modal-content {
+      padding: 40px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .di-analytics-entry-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 10px;
+      vertical-align: middle;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      padding: 4px;
+      border-radius: 50%;
+      transition: background 0.2s;
+      font-size: 1.2em;
+    }
+    .di-analytics-entry-btn:hover {
+      background: rgba(128,128,128,0.2);
+    }
+
+    /* -- User History timeline: discoverability for scrollable overflow --
+       Two-layer approach:
+       1. Slim always-visible scrollbar (works on Chrome/Firefox where custom
+          ::-webkit-scrollbar disables overlay auto-hide).
+       2. Bottom fade gradient (reliable fallback for Safari/macOS where
+          overlay scrollbars auto-hide regardless of custom styles).
+       The fade is only shown when the has-overflow class is set via JS after
+       measuring scrollHeight, so it doesn't clutter the UI when there's
+       nothing to scroll. */
+    .di-user-history-timeline {
+      scrollbar-width: thin;
+      scrollbar-color: #bbb transparent;
+    }
+    .di-user-history-timeline::-webkit-scrollbar {
+      width: 8px;
+    }
+    .di-user-history-timeline::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .di-user-history-timeline::-webkit-scrollbar-thumb {
+      background: #ccc;
+      border-radius: 4px;
+    }
+    .di-user-history-timeline:hover::-webkit-scrollbar-thumb {
+      background: #999;
+    }
+    .di-user-history-wrap {
+      position: relative;
+    }
+    .di-user-history-wrap.has-overflow::after {
+      content: '';
+      position: absolute;
+      left: 14px;
+      right: 8px;
+      bottom: 0;
+      height: 14px;
+      background: linear-gradient(to bottom, rgba(255,255,255,0) 0%, rgba(255,255,255,0.95) 100%);
+      pointer-events: none;
+    }
+    .di-user-history-wrap.has-overflow.scrolled-to-bottom::after {
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+
+    /* -- Spinner -- */
+    .di-spinner {
+        width: 50px;
+        height: 50px;
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #0969da;
+        border-radius: 50%;
+        animation: di-spin 1s linear infinite;
+    }
+    @keyframes di-spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+
+    /* -- Animated Summary Card -- */
+    .di-upload-card-pane {
+        animation-duration: 15s;
+        animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        animation-iteration-count: infinite;
+    }
+    #danbooru-insights-upload-card.paused .di-upload-card-pane {
+        animation-play-state: paused;
+    }
+    .di-play-pause-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        opacity: 0.5;
+        transition: opacity 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        border-radius: 4px;
+    }
+    .di-play-pause-btn:hover {
+        opacity: 1;
+        background-color: #f0f0f0;
+    }
+
+    /* -- Pie Chart Tabs -- */
+    .di-pie-tab {
+        background: #eee;
+        color: #555;
+        border: none;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 11px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    .di-pie-tab:hover { background: #ddd; }
+    .di-pie-tab.active { background: #555; color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+    .di-pie-tab:not(.active):hover { background: #ddd; }
+
+    /* -- User Rankings (Tag Analytics) -- */
+    .di-ranking-username:hover { font-weight: bold; }
+    .user-admin { color: #ed2426; } .user-admin:hover { color: #ff5a5b; }
+    .user-moderator { color: #00ab2c; } .user-moderator:hover { color: #35c64a; }
+    .user-builder { color: #a800aa; } .user-builder:hover { color: #d700d9; }
+    .user-platinum { color: #777892; } .user-platinum:hover { color: #9192a7; }
+    .user-gold { color: #fd9200; } .user-gold:hover { color: #ffc5a5; }
+    .user-member { color: #0075f8; } .user-member:hover { color: #5091fa; }
+    .user-janitor { color: #000; } .user-janitor:hover { color: #555; }
+
+    /* -- Hover Utilities -- */
+    .di-hover-translate-up { transition: transform 0.2s; }
+    .di-hover-translate-up:hover { transform: translateY(-3px) !important; }
+
+    .di-hover-scale { transition: transform 0.2s; }
+    .di-hover-scale:hover { transform: scale(1.02) !important; }
+
+    .di-hover-underline { text-decoration: none; }
+    .di-hover-underline:hover { text-decoration: underline !important; }
+
+    .di-hover-text-primary { transition: color 0.2s; }
+    .di-hover-text-primary:hover { color: #007bff !important; }
+
+    /* -- Layout Utilities -- */
+    .di-card { background: #f9f9f9; padding: 15px; border-radius: 8px; }
+    .di-card-sm { background: #f9f9f9; padding: 10px; border-radius: 6px; border: 1px solid #eee; }
+    .di-flex-col-between { display: flex; flex-direction: column; justify-content: space-between; }
+    .di-flex-row-between { display: flex; justify-content: space-between; align-items: center; }
+    .di-flex-center { display: flex; justify-content: center; align-items: center; }
+
+    /* -- Tag Cloud Widget -- */
+    .di-tag-cloud-word {
+        cursor: pointer;
+        transition: opacity 0.2s, font-size 0.15s ease;
+    }
+    .di-tag-cloud-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 200px;
+    }
+    .di-tag-cloud-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.75em;
+        color: #888;
+        padding-top: 8px;
+        border-top: 1px solid #eee;
+    }
+
+    /* -- Created Tags Widget -- */
+    .di-created-tags-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85em;
+    }
+    .di-created-tags-table th {
+        text-align: left;
+        color: #666;
+        font-weight: 600;
+        padding: 6px 8px;
+        border-bottom: 2px solid #e1e4e8;
+        font-size: 0.85em;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    .di-created-tags-table td {
+        padding: 5px 8px;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    .di-created-tags-row:hover {
+        background: #f6f8fa;
+    }
+    .di-created-tags-row a {
+        text-decoration: none;
+    }
+    .di-created-tags-row a:hover {
+        text-decoration: underline;
+    }
+    .di-created-tags-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 0.85em;
+        padding: 1px 6px;
+        border-radius: 8px;
+    }
+
+    /* -- User Analytics Charts -- */
+    .month-column .column-overlay { transition: fill 0.2s; }
+    .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
+    .month-column:hover .monthly-bar { fill: #216e39; }
+    .star-shiny {
+        font-size: 15px;
+        stroke-width: 0.1px !important;
+        filter: drop-shadow(0 0 5px #ffd700);
+    }
+  `;
+  function injectGlobalStyles() {
+    if (document.getElementById("danbooru-insights-global-css")) return;
+    const style = document.createElement("style");
+    style.id = "danbooru-insights-global-css";
+    style.textContent = GLOBAL_CSS;
+    document.head.appendChild(style);
+  }
+  class Database extends Dexie {
+    uploads;
+    approvals;
+    notes;
+    posts;
+    piestats;
+    completed_years;
+    approvals_detail;
+    hourly_stats;
+    tag_analytics;
+    grass_settings;
+constructor() {
+      super("DanbooruGrassDB");
+      this.version(1).stores({
+        uploads: "id, userId, date, count",
+approvals: "id, userId, date, count",
+        notes: "id, userId, date, count"
+      });
+      this.version(2).stores({
+uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+
+
+
+posts: "id, uploader_id, no, created_at, score, rating, tag_count_general"
+      });
+      this.version(3).stores({
+        uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general",
+        piestats: "[key+userId], userId, updated_at"
+      });
+      this.version(4).stores({
+        uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general",
+piestats: "[key+userId], userId, updated_at",
+completed_years: "id, userId, metric, year",
+approvals_detail: "id, userId",
+hourly_stats: "id, userId, metric, year"
+});
+      this.version(5).stores({
+        uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general",
+        piestats: "[key+userId], userId, updated_at",
+        completed_years: "id, userId, metric, year",
+        approvals_detail: "id, userId",
+        hourly_stats: "id, userId, metric, year",
+        bubble_data: "[userId+copyright], userId, copyright, updated_at"
+      });
+      this.version(6).stores({
+        uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general",
+        piestats: "[key+userId], userId, updated_at",
+        completed_years: "id, userId, metric, year",
+        approvals_detail: "id, userId",
+        hourly_stats: "id, userId, metric, year",
+        bubble_data: "[userId+copyright], userId, copyright, updated_at",
+        tag_analytics: "tagName, updatedAt"
+      });
+      this.version(7).stores({
+        uploads: "id, userId, date, count",
+        approvals: "id, userId, date, count",
+        notes: "id, userId, date, count",
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general",
+        piestats: "[key+userId], userId, updated_at",
+        completed_years: "id, userId, metric, year",
+        approvals_detail: "id, userId",
+        hourly_stats: "id, userId, metric, year",
+        bubble_data: "[userId+copyright], userId, copyright, updated_at",
+        tag_analytics: "tagName, updatedAt",
+        grass_settings: "userId"
+});
+      this.version(8).stores({
+        bubble_data: null
+      });
+      this.version(9).stores({
+        posts: "id, uploader_id, no, created_at, score, rating, tag_count_general, [uploader_id+no], [uploader_id+score]"
+      });
+    }
+  }
+  const DAY_MS = 864e5;
+  const CONFIG = {
+    STORAGE_PREFIX: "danbooru_contrib_",
+    CLEANUP_THRESHOLD_MS: 7 * DAY_MS,
+
+MAX_OPTIMIZED_POSTS: 1200,
+REPORT_COOLDOWN_MS: 3e3,
+ANALYTICS_CLEANUP_THRESHOLD_MS: 14 * DAY_MS,
+CACHE_EXPIRY_MS: DAY_MS,
+    RATE_LIMITER: { concurrency: 6, jitter: [0, 50], rps: 6 },
+    SELECTORS: {
+      STATISTICS_SECTION: "div.user-statistics"
+    },
+    THEMES: {
+light: {
+        name: "Light",
+        bg: "#ffffff",
+        empty: "#ebedf0",
+        text: "#24292f",
+        levels: ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"],
+        grassOptions: [
+          { name: "Green", levels: ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "Blues", levels: ["#ebedf0", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "Purples", levels: ["#ebedf0", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"] },
+          { name: "Oranges", levels: ["#ebedf0", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"] }
+        ]
+      },
+      solarized_light: {
+        name: "Solarized Light",
+        bg: "#fdf6e3",
+        empty: "#eee8d5",
+        text: "#586e75",
+        scrollbar: "#93a1a1",
+        grassOptions: [
+          { name: "Green", levels: ["#eee8d5", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "YlOrBr", levels: ["#eee8d5", "#fed98e", "#fe9929", "#d95f0e", "#993404"] },
+          { name: "Blues", levels: ["#eee8d5", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "BuGn", levels: ["#eee8d5", "#b2e2e2", "#66c2a4", "#2ca25f", "#006d2c"] }
+        ]
+      },
+      sakura: {
+        name: "Sakura",
+        bg: "#fff0f5",
+        empty: "#ffe0ea",
+        text: "#24292f",
+        grassOptions: [
+          { name: "Pink", levels: ["#ffe0ea", "#ffc0cb", "#ff85a2", "#e0245e", "#a8123c"] },
+          { name: "Green", levels: ["#ffe0ea", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "Purples", levels: ["#ffe0ea", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"] },
+          { name: "RdPu", levels: ["#ffe0ea", "#fbb4b9", "#f768a1", "#c51b8a", "#7a0177"] }
+        ]
+      },
+      lavender: {
+        name: "Lavender",
+        bg: "#f5f0ff",
+        empty: "#e8dff5",
+        text: "#3d2c5e",
+        scrollbar: "#c4b0e0",
+        grassOptions: [
+          { name: "Purple", levels: ["#e8dff5", "#d4a5f5", "#b36bdb", "#8a3db5", "#5e1d8a"] },
+          { name: "Green", levels: ["#e8dff5", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "Blues", levels: ["#e8dff5", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "PuRd", levels: ["#e8dff5", "#d4b9da", "#c994c7", "#dd1c77", "#980043"] }
+        ]
+      },
+      ice: {
+        name: "Ice",
+        bg: "#e6fffb",
+        empty: "#ffffff",
+        text: "#006d75",
+        scrollbar: "#5cdbd3",
+        grassOptions: [
+          { name: "Cyan", levels: ["#ffffff", "#b2e2e2", "#66c2a4", "#2ca25f", "#006d2c"] },
+          { name: "Green", levels: ["#ffffff", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "Blues", levels: ["#ffffff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "Purples", levels: ["#ffffff", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"] }
+        ]
+      },
+      aurora: {
+        name: "Aurora",
+        bg: "linear-gradient(135deg, #BAD1DE 0%, #ECECF5 100%)",
+        empty: "#ffffff",
+        text: "#2e3338",
+        scrollbar: "#9FB5C6",
+        grassOptions: [
+          { name: "Blues", levels: ["#ffffff", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "Green", levels: ["#ffffff", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "BuPu", levels: ["#ffffff", "#b3cde3", "#8c96c6", "#8856a7", "#810f7c"] },
+          { name: "YlGn", levels: ["#ffffff", "#d9f0a3", "#addd8e", "#41ab5d", "#006837"] }
+        ]
+      },
+midnight: {
+        name: "Midnight",
+        bg: "#000000",
+        empty: "#222222",
+        text: "#f0f6fc",
+        levels: ["#222222", "#0e4429", "#006d32", "#26a641", "#39d353"],
+        grassOptions: [
+          { name: "Neon Green", levels: ["#222222", "#0e4429", "#006d32", "#26a641", "#39d353"] },
+          { name: "Viridis", levels: ["#222222", "#31446b", "#21908d", "#5dc863", "#fde725"] },
+          { name: "Plasma", levels: ["#222222", "#6a00a8", "#b12a90", "#e16462", "#fca636"] },
+          { name: "Cool", levels: ["#222222", "#4a36b0", "#6e80e0", "#76d7c4", "#afffaf"] }
+        ]
+      },
+      solarized_dark: {
+        name: "Solarized Dark",
+        bg: "#002b36",
+        empty: "#073642",
+        text: "#93a1a1",
+        scrollbar: "#586e75",
+        grassOptions: [
+          { name: "Neon Green", levels: ["#073642", "#0e4429", "#006d32", "#26a641", "#39d353"] },
+          { name: "Viridis", levels: ["#073642", "#31446b", "#21908d", "#5dc863", "#fde725"] },
+          { name: "Inferno", levels: ["#073642", "#6a176e", "#bb3754", "#f0732a", "#fcffa4"] },
+          { name: "Cool", levels: ["#073642", "#4a36b0", "#6e80e0", "#76d7c4", "#afffaf"] }
+        ]
+      },
+      newspaper: {
+        name: "Newspaper",
+        bg: "#f0f0f0",
+        empty: "#dbdbdb",
+        text: "#24292f",
+        scrollbar: "#d0d7de",
+        grassOptions: [
+          { name: "Green", levels: ["#dbdbdb", "#9be9a8", "#40c463", "#30a14e", "#216e39"] },
+          { name: "Blues", levels: ["#dbdbdb", "#bdd7e7", "#6baed6", "#3182bd", "#08519c"] },
+          { name: "Purples", levels: ["#dbdbdb", "#cbc9e2", "#9e9ac8", "#756bb1", "#54278f"] },
+          { name: "Oranges", levels: ["#dbdbdb", "#fdbe85", "#fd8d3c", "#e6550d", "#a63603"] }
+        ]
+      },
+      ocean: {
+        name: "Ocean",
+        bg: "#1b2a4e",
+        empty: "#2b3d68",
+        text: "#e6edf3",
+        grassOptions: [
+          { name: "Neon Blue", levels: ["#2b3d68", "#1b5e80", "#2188ff", "#58a6ff", "#79c0ff"] },
+          { name: "Neon Green", levels: ["#2b3d68", "#0e4429", "#006d32", "#26a641", "#39d353"] },
+          { name: "Viridis", levels: ["#2b3d68", "#31446b", "#21908d", "#5dc863", "#fde725"] },
+          { name: "Plasma", levels: ["#2b3d68", "#6a00a8", "#b12a90", "#e16462", "#fca636"] }
+        ]
+      },
+      monokai: {
+        name: "Monokai",
+        bg: "#272822",
+        empty: "#3e3d32",
+        text: "#f8f8f2",
+        scrollbar: "#75715e",
+        grassOptions: [
+          { name: "Neon Green", levels: ["#3e3d32", "#0e4429", "#006d32", "#26a641", "#39d353"] },
+          { name: "Inferno", levels: ["#3e3d32", "#6a176e", "#bb3754", "#f0732a", "#fcffa4"] },
+          { name: "Magma", levels: ["#3e3d32", "#51127c", "#b73779", "#fb8861", "#fcfdbf"] },
+          { name: "Turbo", levels: ["#3e3d32", "#3e49bb", "#1ac7c2", "#aad833", "#f5e642"] }
+        ]
+      },
+      ember: {
+        name: "Ember",
+        bg: "linear-gradient(135deg, #1a0a0a 0%, #2d1215 100%)",
+        empty: "#3a1a1d",
+        text: "#f0c0a0",
+        scrollbar: "#6b3030",
+        grassOptions: [
+          { name: "Ember", levels: ["#3a1a1d", "#5c1a1a", "#a93226", "#e74c3c", "#ff8a75"] },
+          { name: "Neon Green", levels: ["#3a1a1d", "#0e4429", "#006d32", "#26a641", "#39d353"] },
+          { name: "Inferno", levels: ["#3a1a1d", "#6a176e", "#bb3754", "#f0732a", "#fcffa4"] },
+          { name: "OrRd", levels: ["#3a1a1d", "#7a3014", "#b35900", "#e67e22", "#f5b041"] }
+        ]
+      }
+    }
+  };
+  class SettingsManager {
+    key;
+    defaults;
+    settings;
+constructor() {
+      this.key = CONFIG.STORAGE_PREFIX + "settings";
+      this.defaults = {
+        theme: "light",
+        thresholds: {
+          uploads: [1, 10, 25, 50],
+          approvals: [10, 50, 100, 150],
+          notes: [1, 10, 20, 30]
+        },
+        rememberedModes: {}
+};
+      this.settings = this.load();
+    }
+load() {
+      try {
+        const s = localStorage.getItem(this.key);
+        const saved = s ? JSON.parse(s) : {};
+        if (saved.remembered_modes && !saved.rememberedModes) {
+          saved.rememberedModes = saved.remembered_modes;
+          delete saved.remembered_modes;
+        }
+        return {
+          ...this.defaults,
+          ...saved,
+          thresholds: {
+            ...this.defaults.thresholds,
+            ...saved.thresholds || {}
+          },
+          rememberedModes: {
+            ...saved.rememberedModes || {}
+          }
+        };
+      } catch (e) {
+        console.error("[Danbooru Grass] Error loading settings, using defaults:", e);
+        return this.defaults;
+      }
+    }
+save(newSettings) {
+      this.settings = {
+        ...this.settings,
+        ...newSettings
+      };
+      localStorage.setItem(this.key, JSON.stringify(this.settings));
+    }
+getTheme() {
+      const t = this.settings.theme;
+      return CONFIG.THEMES[t] ? t : "light";
+    }
+getThresholds(metric) {
+      return this.settings.thresholds[metric] || this.defaults.thresholds[metric] || [1, 5, 10, 20];
+    }
+setThresholds(metric, values) {
+      const newThresholds = {
+        ...this.settings.thresholds,
+        [metric]: values
+      };
+      this.save({
+        thresholds: newThresholds
+      });
+    }
+getGrassIndex() {
+      const idx = this.settings.grassIndex;
+      return typeof idx === "number" && idx >= 0 && idx <= 3 ? idx : 0;
+    }
+setGrassIndex(index) {
+      this.save({ grassIndex: Math.max(0, Math.min(3, index)) });
+    }
+resolveLevels(theme) {
+      const defaultLevels = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"];
+      if (theme.grassOptions && theme.grassOptions.length > 0) {
+        const idx = this.getGrassIndex();
+        const option = theme.grassOptions[idx] || theme.grassOptions[0];
+        return option.levels;
+      }
+      return theme.levels || defaultLevels;
+    }
+applyTheme(themeKey) {
+      const theme = CONFIG.THEMES[themeKey] || CONFIG.THEMES.light;
+      const root = document.querySelector(":root");
+      if (root) {
+        root.style.setProperty("--grass-bg", theme.bg);
+        root.style.setProperty("--grass-empty-cell", theme.empty);
+        root.style.setProperty("--grass-text", theme.text);
+        root.style.setProperty(
+          "--grass-scrollbar-thumb",
+          theme.scrollbar || "#d0d7de"
+        );
+        const levels = this.resolveLevels(theme);
+        levels.forEach((color, i) => {
+          root.style.setProperty(`--grass-level-${i}`, color);
+        });
+      }
+      this.save({
+        theme: themeKey
+      });
+      window.dispatchEvent(new CustomEvent("DanbooruInsights:ThemeChanged", {
+        detail: { themeKey }
+      }));
+    }
+getLastMode(userId) {
+      return this.settings.rememberedModes[userId] || null;
+    }
+setLastMode(userId, mode) {
+      const newModes = {
+        ...this.settings.rememberedModes,
+        [userId]: mode
+      };
+      this.save({
+        rememberedModes: newModes
+      });
+    }
+getSyncThreshold() {
+      return typeof this.settings.syncThreshold === "number" ? this.settings.syncThreshold : 5;
+    }
+setSyncThreshold(val) {
+      this.save({
+        syncThreshold: parseInt(val, 10)
+      });
+    }
+  }
+  class ProfileContext {
+    targetUser;
+constructor() {
+      try {
+        this.targetUser = this.getTargetUserInfo();
+      } catch (e) {
+        console.error("[Danbooru Grass] Context Init Failed:", e);
+        this.targetUser = null;
+      }
+    }
+getTargetUserInfo() {
+      let name = null;
+      let id = null;
+      let joinDate = ( new Date()).toISOString();
+      try {
+        const titleMatch = document.title.match(/^User: (.+?) \|/);
+        if (titleMatch) {
+          name = titleMatch[1];
+        }
+        if (!name) {
+          const h1 = document.querySelector("h1");
+          if (h1) name = h1.textContent?.trim().replace(/^User: /, "") ?? null;
+        }
+        const urlMatch = window.location.pathname.match(/^\/users\/(\d+)/);
+        if (urlMatch) {
+          id = urlMatch[1];
+        }
+        if (!id && name) {
+          const messagesLink = document.querySelector(
+            'a[href*="/messages?search%5Bto_user_id%5D="]'
+          );
+          if (messagesLink) {
+            const match = messagesLink.href.match(/to_user_id%5D=(\d+)/);
+            if (match) id = match[1];
+          }
+        }
+        if (!id && window.location.pathname === "/profile") {
+          const editLink = document.querySelector(
+            'a[href^="/users/"][href$="/edit"]'
+          );
+          if (editLink) {
+            const m = editLink.getAttribute("href")?.match(/\/users\/(\d+)\/edit/);
+            if (m) id = m[1];
+          }
+        }
+        if (!id && name) {
+          const userLinks = Array.from(document.querySelectorAll('a[href^="/users/"]'));
+          for (const link of userLinks) {
+            const m = link.getAttribute("href")?.match(/\/users\/(\d+)(?:\?|$)/);
+            if (m && link.textContent?.trim() === name) {
+              id = m[1];
+              break;
+            }
+          }
+        }
+        const cells = Array.from(document.querySelectorAll("th, td"));
+        const joinHeader = cells.find((el) => el.textContent?.trim() === "Join Date");
+        if (joinHeader) {
+          const valEl = joinHeader.nextElementSibling;
+          if (valEl) {
+            const timeEl = valEl.querySelector("time");
+            if (timeEl) {
+              joinDate = timeEl.getAttribute("datetime") || timeEl.textContent?.trim() || joinDate;
+            } else {
+              joinDate = valEl.textContent?.trim() || joinDate;
+            }
+          }
+        }
+        let level_string = null;
+        const levelHeader = cells.find((el) => el.textContent?.trim() === "Level");
+        if (levelHeader) {
+          const valEl = levelHeader.nextElementSibling;
+          if (valEl) {
+            level_string = valEl.textContent?.trim() ?? null;
+          }
+        }
+        if (!name) return null;
+        if (!id) {
+          console.warn("[Danbooru Grass] User ID not found. Functionality may be limited (Notes).");
+        }
+        return {
+          name,
+          normalizedName: name.replace(/ /g, "_"),
+          id,
+          created_at: joinDate,
+          joinDate: new Date(joinDate),
+          level_string
+        };
+      } catch (e) {
+        console.warn("[Danbooru Grass] Extraction error:", e);
+        return null;
+      }
+    }
+isValidProfile() {
+      if (!this.targetUser || !this.targetUser.name) return false;
+      const path = window.location.pathname;
+      const isProfileUrl = path === "/profile" || /^\/users\/\d+$/.test(path);
+      return isProfileUrl;
+    }
+  }
+  class RateLimitedFetch {
+    maxConcurrency;
+    startDelayRange;
+    rateLimit;
+    refillRate;
+    tokens;
+    lastRefill;
+    queue;
+    activeWorkers;
+    requestCounter;
+    reportQueue;
+    isProcessingReport;
+constructor(maxConcurrency = 6, startDelayRange = [50, 150], requestsPerSecond = 6) {
+      this.maxConcurrency = maxConcurrency;
+      this.startDelayRange = startDelayRange;
+      this.rateLimit = requestsPerSecond;
+      this.refillRate = 1e3 / requestsPerSecond;
+      this.tokens = requestsPerSecond;
+      this.lastRefill = Date.now();
+      this.queue = [];
+      this.activeWorkers = 0;
+      this.requestCounter = 0;
+      this.reportQueue = [];
+      this.isProcessingReport = false;
+    }
+    getRequestCount() {
+      return this.requestCounter;
+    }
+    async fetch(url, options) {
+      if (url.includes("/reports/")) {
+        return new Promise((resolve, reject) => {
+          this.reportQueue.push({ url, options, resolve, reject });
+          this.processReportQueue();
+        });
+      }
+      return new Promise((resolve, reject) => {
+        this.queue.push({ url, options, resolve, reject });
+        this.processQueue();
+      });
+    }
+    async processReportQueue() {
+      if (this.isProcessingReport || this.reportQueue.length === 0) return;
+      this.isProcessingReport = true;
+      const task = this.reportQueue.shift();
+      if (!task) {
+        this.isProcessingReport = false;
+        return;
+      }
+      this.requestCounter++;
+      try {
+        const response = await fetch(task.url, task.options);
+        task.resolve(response);
+      } catch (e) {
+        console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e);
+        task.reject(e);
+      } finally {
+        await new Promise((r) => setTimeout(r, CONFIG.REPORT_COOLDOWN_MS));
+        this.isProcessingReport = false;
+        this.processReportQueue();
+      }
+    }
+    async processQueue() {
+      if (this.activeWorkers >= this.maxConcurrency || this.queue.length === 0) {
+        return;
+      }
+      this.refillTokens();
+      if (this.tokens < 1) {
+        const waitTime = this.refillRate;
+        setTimeout(() => this.processQueue(), waitTime);
+        return;
+      }
+      this.tokens -= 1;
+      this.activeWorkers++;
+      this.requestCounter++;
+      const task = this.queue.shift();
+      if (!task) {
+        this.activeWorkers--;
+        return;
+      }
+      const startDelay = Math.floor(Math.random() * (this.startDelayRange[1] - this.startDelayRange[0] + 1)) + this.startDelayRange[0];
+      if (startDelay > 0) await new Promise((r) => setTimeout(r, startDelay));
+      try {
+        const response = await fetch(task.url, task.options);
+        task.resolve(response);
+      } catch (e) {
+        task.reject(e);
+      } finally {
+        this.activeWorkers--;
+        this.processQueue();
+      }
+    }
+    refillTokens() {
+      const now = Date.now();
+      const elapsed = now - this.lastRefill;
+      if (elapsed > this.refillRate) {
+        const newTokens = Math.floor(elapsed / this.refillRate);
+        this.tokens = Math.min(this.rateLimit, this.tokens + newTokens);
+        this.lastRefill = now;
+        this.lastRefill = now - elapsed % this.refillRate;
+      }
+    }
+  }
+  class DataManager {
+    baseUrl;
+
+db;
+    rateLimiter;
+
+constructor(db, rateLimiter = null) {
+      this.baseUrl = window.location.origin;
+      this.db = db;
+      const rl = CONFIG.RATE_LIMITER;
+      this.rateLimiter = rateLimiter || new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+    }
+async getStats(key, userId) {
+      try {
+        const record = await this.db.piestats.get({ key, userId });
+        if (record) {
+          return record.data;
+        }
+        return null;
+      } catch (e) {
+        console.warn("Failed to load stats cache", e);
+        return null;
+      }
+    }
+async saveStats(key, userId, data) {
+      try {
+        await this.db.piestats.put({
+          key,
+          userId,
+          data,
+          updated_at: ( new Date()).toISOString()
+        });
+      } catch (e) {
+        console.warn("Failed to save stats cache", e);
+      }
+    }
+async getGrassSettings(userId) {
+      if (!userId) return null;
+      try {
+        return await this.db.grass_settings.get(userId.toString());
+      } catch (e) {
+        console.warn("Failed to load grass settings", e);
+        return null;
+      }
+    }
+async saveGrassSettings(userId, settings) {
+      if (!userId) return;
+      try {
+        await this.db.grass_settings.put({
+          userId: userId.toString(),
+          ...settings,
+          updated_at: ( new Date()).toISOString()
+        });
+      } catch (e) {
+        console.warn("Failed to save grass settings", e);
+      }
+    }
+async checkYearCompletion(userId, metric, year) {
+      const id = `${userId}_${metric}_${year}`;
+      try {
+        const record = await this.db.completed_years.get(id);
+        return !!record;
+      } catch (e) {
+        console.warn("Failed to check completion status", e);
+        return false;
+      }
+    }
+async markYearComplete(userId, metric, year) {
+      try {
+        await this.db.completed_years.put({
+          id: `${userId}_${metric}_${year}`,
+          userId,
+          metric,
+          year,
+          timestamp: Date.now()
+        });
+      } catch (e) {
+        console.warn("Failed to mark year complete", e);
+      }
+    }
+async getMetricData(metric, userInfo, year, onProgress = null) {
+      try {
+        let endpoint = "";
+        let storeName = "";
+        let dateKey = "created_at";
+        let idKey = "";
+        const startDate = `${year}-01-01`;
+        const endDate = `${year + 1}-01-01`;
+        const params = {
+          limit: 200
+        };
+        const normalizedName = (userInfo.name || "").replace(/ /g, "_");
+        let hourlyCounts = new Array(24).fill(0);
+        switch (metric) {
+          case "uploads":
+            endpoint = "/posts.json";
+            storeName = "uploads";
+            dateKey = "created_at";
+            idKey = "uploader_id";
+            params["only"] = "uploader_id,created_at";
+            break;
+          case "approvals":
+            endpoint = "/post_approvals.json";
+            storeName = "approvals";
+            dateKey = "created_at";
+            idKey = "user_id";
+            params["search[user_id]"] = userInfo.id;
+            params["only"] = "id,post_id,created_at";
+            break;
+          case "notes":
+            if (!userInfo.id) throw new Error("User ID required for Notes");
+            endpoint = "/note_versions.json";
+            storeName = "notes";
+            dateKey = "created_at";
+            idKey = "updater_id";
+            params["search[updater_id]"] = userInfo.id;
+            params["only"] = "updater_id,created_at";
+            break;
+          default:
+            return {};
+        }
+        const table = this.db[storeName];
+        const userIdVal = userInfo.id || userInfo.name;
+        const isYearCompleteCache = await this.checkYearCompletion(userIdVal, metric, year);
+        if (isYearCompleteCache) {
+        }
+        let forceFullFetch = false;
+        if (!isYearCompleteCache && metric === "uploads" && year < ( new Date()).getFullYear()) {
+          try {
+            const strictEndDate = `${year + 1}-01-01`;
+            const checkRange = `${startDate}...${strictEndDate}`;
+            const queryTags = `user:${normalizedName} date:${checkRange}`;
+            const remoteCount = await this.fetchRemoteCount(queryTags);
+            const matchedEndDate = `${year}-12-31`;
+            let localCount = 0;
+            await table.where("id").between(
+              `${userIdVal}_${startDate}`,
+              `${userIdVal}_${matchedEndDate}￿`,
+              true,
+              true
+).each((cur) => {
+              localCount += cur["count"] || 0;
+            });
+            if (remoteCount !== localCount) {
+              console.warn(`[Danbooru Grass] Data mismatch detected for ${year} (Remote: ${remoteCount}, Local: ${localCount}). Forcing full sync.`);
+              const deleteEndDate = `${year}-12-31`;
+              await table.where("id").between(
+                `${userIdVal}_${startDate}`,
+                `${userIdVal}_${deleteEndDate}￿`,
+                true,
+                true
+).delete();
+              forceFullFetch = true;
+            } else {
+            }
+          } catch (e) {
+            console.warn("[Danbooru Grass] Integrity check failed (Network/API), proceeding with cache.", e);
+          }
+        }
+        let fetchFromDate = null;
+        let lastEntry = null;
+        let existingHourlyStats = [];
+        if (!forceFullFetch && !isYearCompleteCache) {
+          lastEntry = await table.where("id").between(
+            `${userIdVal}_${startDate}`,
+            `${userIdVal}_${year}-12-31￿`,
+            true,
+            true
+          ).last();
+          existingHourlyStats = await this.db.hourly_stats.where("id").between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false).toArray();
+          if (existingHourlyStats.length > 0) {
+            existingHourlyStats.forEach((stat) => {
+              if (stat.hour >= 0 && stat.hour < 24) {
+                hourlyCounts[stat.hour] = stat.count;
+              }
+            });
+          }
+        }
+        if (lastEntry) {
+          const lastDate = new Date(lastEntry["date"]);
+          const currentYear = ( new Date()).getFullYear();
+          const isYearComplete = year < currentYear;
+          if (isYearComplete) {
+            fetchFromDate = endDate;
+          } else {
+            lastDate.setDate(lastDate.getDate() - 3);
+            const bufferDateStr = lastDate.toISOString().slice(0, 10);
+            fetchFromDate = bufferDateStr;
+          }
+        }
+        {
+          let stopDate = null;
+          const fetchDirection = "desc";
+          const rangeStart = fetchFromDate || startDate;
+          const fetchRange = `${rangeStart}...${endDate}`;
+          if (metric === "uploads") {
+            params["tags"] = `user:${normalizedName} date:${fetchRange}`;
+          } else if (metric === "notes") {
+            params["search[created_at]"] = fetchRange;
+          } else if (metric === "approvals") {
+            params["search[created_at]"] = fetchRange;
+          }
+          stopDate = null;
+          if (!isYearCompleteCache) {
+            const items = await this.fetchAllPages(endpoint, params, stopDate, dateKey, fetchDirection, onProgress);
+            const dailyCounts = {};
+            items.forEach((item) => {
+              const rawDate = item[dateKey] || item["created_at"];
+              if (!rawDate) return;
+              if (userInfo.id && item[idKey] && String(item[idKey]) !== String(userInfo.id)) {
+                console.warn(`[Danbooru Grass] ID Mismatch! Expected: ${userInfo.id}, Got: ${item[idKey]}. Item Date: ${rawDate}`);
+                return;
+              }
+              const dateStr = String(rawDate).slice(0, 10);
+              if (!dailyCounts[dateStr]) {
+                dailyCounts[dateStr] = { count: 0, postList: [] };
+              }
+              dailyCounts[dateStr].count += 1;
+              if (item["post_id"]) {
+                dailyCounts[dateStr].postList.push(item["post_id"]);
+              }
+              const isNewData = !lastEntry || String(rawDate).slice(0, 10) > lastEntry["date"];
+              const itemDate = new Date(rawDate);
+              const hour = itemDate.getHours();
+              if (isNewData && !isNaN(hour) && hour >= 0 && hour < 24) {
+                hourlyCounts[hour]++;
+              }
+            });
+            const bulkData = [];
+            const detailData = [];
+            Object.entries(dailyCounts).forEach(([date, entry]) => {
+              const id = `${userIdVal}_${date}`;
+              bulkData.push({
+                id,
+                userId: userIdVal,
+                date,
+                count: entry.count
+              });
+              if (metric === "approvals") {
+                detailData.push({
+                  id,
+                  userId: userIdVal,
+                  post_list: entry.postList
+                });
+              }
+            });
+            const hourlyBulk = [];
+            hourlyCounts.forEach((count, h) => {
+              hourlyBulk.push({
+                id: `${userIdVal}_${metric}_${year}_${String(h).padStart(2, "0")}`,
+                userId: userIdVal,
+                metric,
+                year,
+                hour: h,
+                count
+              });
+            });
+            await this.db.transaction("rw", [table, this.db.approvals_detail, this.db.hourly_stats], async () => {
+              if (bulkData.length > 0) {
+                await table.bulkPut(bulkData);
+              }
+              if (detailData.length > 0) {
+                await this.db.approvals_detail.bulkPut(detailData);
+              }
+              await this.db.hourly_stats.bulkPut(hourlyBulk);
+            });
+            if (year < ( new Date()).getFullYear()) {
+              await this.markYearComplete(userIdVal, metric, year);
+            }
+          }
+        }
+        const dataEndDate = `${year}-12-31`;
+        const fullYearData = await table.where("id").between(
+          `${userIdVal}_${startDate}`,
+          `${userIdVal}_${dataEndDate}￿`,
+          true,
+          true
+        ).toArray();
+        const resultMap = {};
+        fullYearData.forEach((i) => resultMap[i.date] = i.count);
+        if (isYearCompleteCache) {
+          const cachedHourly = await this.db.hourly_stats.where("id").between(`${userIdVal}_${metric}_${year}_00`, `${userIdVal}_${metric}_${year}_24`, true, false).toArray();
+          hourlyCounts = new Array(24).fill(0);
+          cachedHourly.forEach((stat) => {
+            if (stat.hour >= 0 && stat.hour < 24) {
+              hourlyCounts[stat.hour] = stat.count;
+            }
+          });
+        }
+        return { daily: resultMap, hourly: hourlyCounts };
+      } catch (e) {
+        console.error("[Danbooru Grass] Data fetch failed:", e);
+        throw e;
+      }
+    }
+async clearCache(_metric, userInfo) {
+      try {
+        const userIdVal = userInfo.id || userInfo.name;
+        const tablesToClear = ["uploads", "approvals", "approvals_detail", "notes", "completed_years", "hourly_stats"];
+        for (const storeName of tablesToClear) {
+          const table = this.db[storeName];
+          const items = await table.where("userId").equals(userIdVal).primaryKeys();
+          if (items.length > 0) {
+            await table.bulkDelete(items);
+          }
+        }
+        return true;
+      } catch (e) {
+        console.error("[Danbooru Grass] Clear cache failed:", e);
+        return false;
+      }
+    }
+async fetchAllPages(endpoint, params, stopDate = null, dateKey = "created_at", direction = "desc", onProgress = null) {
+      let allItems = [];
+      let page = 1;
+      const isApprovals = endpoint.includes("/post_approvals.json");
+      const BATCH_SIZE = isApprovals ? 1 : 5;
+      const DELAY_BETWEEN_BATCHES = 150;
+      while (true) {
+        const promises = [];
+        for (let i = 0; i < BATCH_SIZE; i++) {
+          const currentPage = page + i;
+          const q = new URLSearchParams({
+            ...params,
+            page: currentPage
+          });
+          const url = `${this.baseUrl}${endpoint}?${q.toString()}`;
+          const fetchTask = async () => {
+            if (isApprovals) {
+              const delay = Math.floor(Math.random() * 300) + 200;
+              await new Promise((r) => setTimeout(r, delay));
+            }
+            let attempt = 0;
+            const backoff = [1e3, 2e3, 4e3];
+            while (true) {
+              const resp = await this.rateLimiter.fetch(url);
+              if (resp.status === 429 || resp.status >= 500) {
+                if (attempt < backoff.length) {
+                  const waitMs = backoff[attempt];
+                  console.warn(`[Danbooru Grass] ${resp.status} on Page ${currentPage}. Retrying in ${waitMs}ms...`);
+                  await new Promise((r) => setTimeout(r, waitMs));
+                  attempt++;
+                  continue;
+                } else {
+                  throw new Error(`HTTP ${resp.status} (Max Retries Exceeded)`);
+                }
+              }
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              return {
+                page: currentPage,
+                data: await resp.json()
+              };
+            }
+          };
+          promises.push(
+            fetchTask().catch((e) => {
+              console.error(`[Danbooru Grass] Critical Error on Page ${currentPage}:`, e);
+              throw e;
+            })
+          );
+        }
+        const batchResults = await Promise.all(promises);
+        batchResults.sort((a, b) => a.page - b.page);
+        let finished = false;
+        for (const res of batchResults) {
+          const json = res.data;
+          if (!Array.isArray(json) || json.length === 0) {
+            finished = true;
+            continue;
+          }
+          if (stopDate) {
+            for (const item of json) {
+              const itemDate = (item[dateKey] || "").slice(0, 10);
+              if (itemDate) {
+                let shouldStop = false;
+                if (direction === "desc") {
+                  if (itemDate < stopDate) shouldStop = true;
+                } else {
+                  if (itemDate > stopDate) shouldStop = true;
+                }
+                if (shouldStop) {
+                  finished = true;
+                  break;
+                }
+              }
+              allItems.push(item);
+            }
+            if (finished) break;
+          } else {
+            allItems = allItems.concat(json);
+          }
+          if (onProgress) {
+            onProgress(allItems.length);
+          }
+          if (json.length < params["limit"]) {
+            finished = true;
+          }
+        }
+        if (finished) break;
+        page += BATCH_SIZE;
+        if (page > 1e3) {
+          console.warn("[Danbooru Grass] Hit safety page limit.");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, DELAY_BETWEEN_BATCHES));
+      }
+      return allItems;
+    }
+async fetchPromotionDate(userName) {
+      try {
+        const encodedName = encodeURIComponent(userName);
+        const url = `${this.baseUrl}/user_feedbacks.json?search[body_matches]=to+Approver&search[category]=neutral&search[hide_bans]=No&search[user_name]=${encodedName}&limit=1`;
+        const resp = await this.rateLimiter.fetch(url);
+        if (!resp.ok) return null;
+        const json = await resp.json();
+        if (Array.isArray(json) && json.length > 0) {
+          return json[0]["created_at"] ? String(json[0]["created_at"]).slice(0, 10) : null;
+        }
+        return null;
+      } catch (e) {
+        console.warn("Failed to fetch promotion date", e);
+        return null;
+      }
+    }
+async getCacheStats() {
+      const stats = {
+        indexedDB: {
+          count: 0,
+          size: 0
+        },
+        localStorage: {
+          count: 0,
+          size: 0
+        }
+      };
+      try {
+        const tables = ["uploads", "approvals", "notes"];
+        for (const t of tables) {
+          const c = await this.db[t].count();
+          stats.indexedDB.count += c;
+        }
+        if (navigator.storage && navigator.storage.estimate) {
+          const est = await navigator.storage.estimate();
+          if (est.usageDetails && est.usageDetails.indexedDB) {
+            stats.indexedDB.size = est.usageDetails.indexedDB;
+          } else {
+            stats.indexedDB.size = est.usage;
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to get IDB stats", e);
+      }
+      let lsCount = 0;
+      let lsSize = 0;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(CONFIG.STORAGE_PREFIX)) {
+          lsCount++;
+          const val = localStorage.getItem(k);
+          if (val) lsSize += (k.length + val.length) * 2;
+        }
+      }
+      stats.localStorage.count = lsCount;
+      stats.localStorage.size = lsSize;
+      return stats;
+    }
+async fetchRemoteCount(tags) {
+      const url = `${this.baseUrl}/counts/posts.json?tags=${encodeURIComponent(tags)}`;
+      const resp = await this.rateLimiter.fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const json = await resp.json();
+      return json["counts"] && typeof json["counts"]["posts"] === "number" ? json["counts"]["posts"] : 0;
+    }
+  }
+  function createSettingsPopover(options) {
+    const { settingsManager, db, metric, settingsBtn, closeSettings, onRefresh } = options;
+    let settingsChanged = false;
+    const validateThresholds = () => {
+      const modes = ["uploads", "approvals", "notes"];
+      for (const m of modes) {
+        const vals = settingsManager.getThresholds(m);
+        for (let i = 0; i < vals.length - 1; i++) {
+          if (vals[i] >= vals[i + 1]) {
+            return {
+              valid: false,
+              msg: `Invalid in [${m}]: Level ${i + 1} (${vals[i]}) must be smaller than Level ${i + 2} (${vals[i + 1]})`
+            };
+          }
+        }
+      }
+      return { valid: true };
+    };
+    const handleClose = () => {
+      const check = validateThresholds();
+      if (!check.valid) {
+        alert(check.msg);
+        return;
+      }
+      popover.style.display = "none";
+      const gf = document.getElementById("danbooru-grass-flyout");
+      if (gf) gf.style.display = "none";
+      if (settingsChanged) {
+        settingsChanged = false;
+        closeSettings();
+      }
+    };
+    const popover = document.createElement("div");
+    popover.id = "danbooru-grass-settings-popover";
+    document.addEventListener("click", (e) => {
+      if (popover && popover.style.display === "block") {
+        if (!popover.contains(e.target) && !settingsBtn.contains(e.target) && !grassFlyout.contains(e.target)) {
+          handleClose();
+        }
+      }
+    });
+    const repositionPopover = () => {
+      if (popover.style.display !== "block") return;
+      const btnRect = settingsBtn.getBoundingClientRect();
+      popover.style.left = btnRect.left + "px";
+      popover.style.top = btnRect.bottom + 4 + "px";
+    };
+    window.addEventListener("scroll", (e) => {
+      if (popover.style.display === "block" && !popover.contains(e.target)) {
+        repositionPopover();
+      }
+    }, true);
+    const themeHeader = document.createElement("div");
+    themeHeader.className = "popover-header";
+    themeHeader.textContent = "Color Themes";
+    popover.appendChild(themeHeader);
+    const grid = document.createElement("div");
+    grid.className = "theme-grid";
+    const currentTheme = settingsManager.getTheme();
+    Object.entries(CONFIG.THEMES).forEach(([key, theme]) => {
+      const icon = document.createElement("div");
+      icon.className = "theme-icon";
+      if (key === currentTheme) icon.classList.add("active");
+      icon.title = theme.name;
+      icon.style.background = theme.bg;
+      const inner = document.createElement("div");
+      inner.className = "theme-icon-inner";
+      inner.style.background = theme.empty;
+      icon.appendChild(inner);
+      icon.onclick = () => {
+        const wasActive = icon.classList.contains("active");
+        if (!wasActive) {
+          settingsManager.setGrassIndex(0);
+          settingsManager.applyTheme(key);
+          document.querySelectorAll(".theme-icon").forEach((el) => el.classList.remove("active"));
+          icon.classList.add("active");
+        }
+        toggleGrassFlyout(icon, key);
+      };
+      grid.appendChild(icon);
+    });
+    popover.appendChild(grid);
+    const grassFlyout = document.createElement("div");
+    grassFlyout.id = "danbooru-grass-flyout";
+    grassFlyout.style.cssText = "position:fixed;display:none;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:8px;z-index:10001;flex-direction:column;gap:6px;";
+    document.body.appendChild(grassFlyout);
+    let currentFlyoutKey = "";
+    const toggleGrassFlyout = (_anchorEl, themeKey) => {
+      if (grassFlyout.style.display !== "none" && currentFlyoutKey === themeKey) {
+        grassFlyout.style.display = "none";
+        return;
+      }
+      currentFlyoutKey = themeKey;
+      const popoverRect = popover.getBoundingClientRect();
+      grassFlyout.style.left = popoverRect.right + 8 + "px";
+      grassFlyout.style.top = popoverRect.top + "px";
+      renderGrassFlyout(themeKey);
+      grassFlyout.style.display = "flex";
+    };
+    const renderGrassFlyout = (themeKey) => {
+      grassFlyout.innerHTML = "";
+      const theme = CONFIG.THEMES[themeKey] || CONFIG.THEMES.light;
+      const options2 = theme.grassOptions;
+      if (!options2 || !Array.isArray(options2)) {
+        grassFlyout.style.display = "none";
+        return;
+      }
+      const currentIdx = settingsManager.getGrassIndex();
+      const title = document.createElement("div");
+      title.style.cssText = "font-size:10px;color:#888;font-weight:600;margin-bottom:2px;";
+      title.textContent = "Grass Color";
+      grassFlyout.appendChild(title);
+      options2.forEach((opt, idx) => {
+        const row = document.createElement("div");
+        row.style.cssText = "cursor:pointer;display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;border:2px solid transparent;transition:all 0.15s;";
+        if (idx === currentIdx) row.style.borderColor = "#007bff";
+        const preview = document.createElement("div");
+        preview.style.cssText = "display:flex;gap:2px;";
+        for (let i = 1; i < opt.levels.length; i++) {
+          const cell = document.createElement("div");
+          cell.style.cssText = `width:12px;height:12px;border-radius:2px;background:${opt.levels[i]};`;
+          preview.appendChild(cell);
+        }
+        row.appendChild(preview);
+        const label = document.createElement("div");
+        label.style.cssText = "font-size:10px;color:#555;white-space:nowrap;";
+        label.textContent = idx === 0 ? `★ ${opt.name}` : opt.name;
+        row.appendChild(label);
+        row.onmouseover = () => {
+          if (idx !== currentIdx) row.style.background = "#f6f8fa";
+        };
+        row.onmouseout = () => {
+          row.style.background = "";
+        };
+        row.onclick = (e) => {
+          e.stopPropagation();
+          settingsManager.setGrassIndex(idx);
+          settingsManager.applyTheme(themeKey);
+          renderGrassFlyout(themeKey);
+        };
+        grassFlyout.appendChild(row);
+      });
+    };
+    popover.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!grassFlyout.contains(target) && !target.closest(".theme-icon")) {
+        grassFlyout.style.display = "none";
+      }
+    });
+    const threshHeader = document.createElement("div");
+    threshHeader.className = "popover-header";
+    threshHeader.textContent = "Set thresholds";
+    threshHeader.style.marginTop = "15px";
+    popover.appendChild(threshHeader);
+    const modeSelect = document.createElement("select");
+    modeSelect.className = "popover-select";
+    ["uploads", "approvals", "notes"].forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+      if (m === metric.toLowerCase() || m === "uploads" && !metric) opt.selected = true;
+      modeSelect.appendChild(opt);
+    });
+    popover.appendChild(modeSelect);
+    const editor = document.createElement("div");
+    popover.appendChild(editor);
+    const renderEditor = (mode) => {
+      editor.innerHTML = "";
+      const vals = settingsManager.getThresholds(mode);
+      const inputColors = ["#9be9a8", "#40c463", "#30a14e", "#216e39"];
+      vals.forEach((val, idx) => {
+        const row = document.createElement("div");
+        row.className = "threshold-row";
+        const label = document.createElement("span");
+        label.textContent = `Level ${idx + 1}:`;
+        label.style.width = "50px";
+        const input = document.createElement("input");
+        input.type = "number";
+        input.className = "threshold-input";
+        input.value = String(val);
+        input.style.backgroundColor = inputColors[idx];
+        input.style.color = "#ffffff";
+        input.style.textShadow = "0px 1px 2px rgba(0,0,0,0.8)";
+        input.style.fontWeight = "bold";
+        input.style.border = "1px solid #d0d7de";
+        input.style.borderRadius = "4px";
+        input.onchange = () => {
+          const newVals = [...vals];
+          newVals[idx] = parseInt(input.value);
+          settingsManager.setThresholds(mode, newVals);
+          settingsChanged = true;
+          vals[idx] = newVals[idx];
+        };
+        row.appendChild(label);
+        row.appendChild(input);
+        editor.appendChild(row);
+      });
+    };
+    modeSelect.addEventListener("change", () => renderEditor(modeSelect.value));
+    renderEditor(modeSelect.value);
+    const cacheSection = document.createElement("div");
+    cacheSection.style.marginTop = "15px";
+    cacheSection.style.borderTop = "1px solid #d0d7de";
+    cacheSection.style.paddingTop = "10px";
+    const cacheHeader = document.createElement("div");
+    cacheHeader.style.display = "flex";
+    cacheHeader.style.justifyContent = "space-between";
+    cacheHeader.style.alignItems = "center";
+    cacheHeader.style.marginBottom = "5px";
+    cacheHeader.innerHTML = `
+          <div style="font-weight:bold; color:#24292f;">Cache Info</div>
+          <button id="grass-purge-btn" title="Purge Cache" style="
+            padding: 2px 6px;
+            background-color: #ffebe9;
+            border: 1px solid #ff818266;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            color: #cf222e;
+            line-height: 1;
+          ">↺</button>
+        `;
+    cacheSection.appendChild(cacheHeader);
+    const cacheStatsContainer = document.createElement("div");
+    cacheStatsContainer.id = "grass-cache-container";
+    cacheStatsContainer.innerHTML = `
+          <div style="font-size:12px; margin-bottom:10px;">
+            <a href="#" id="grass-cache-trigger" style="color:#0969da; text-decoration:none;">[ Show Stats ]</a>
+          </div>
+          <div id="grass-cache-content" style="display:none;"></div>
+        `;
+    cacheSection.appendChild(cacheStatsContainer);
+    popover.appendChild(cacheSection);
+    const trigger = cacheSection.querySelector("#grass-cache-trigger");
+    const contentDiv = cacheSection.querySelector("#grass-cache-content");
+    const purgeBtn = cacheSection.querySelector("#grass-purge-btn");
+    const formatBytes = (bytes, decimals = 2) => {
+      if (!+bytes) return "0 B";
+      const k = 1024;
+      const dm = decimals < 0 ? 0 : decimals;
+      const sizes = ["B", "KB", "MB", "GB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+    };
+    let isStatsVisible = false;
+    let statsInterval = null;
+    const updateMyStats = async () => {
+      const dataManager = new DataManager(db);
+      const stats = await dataManager.getCacheStats();
+      contentDiv.innerHTML = `
+            <table style="width:100%; border-collapse:collapse; font-size:11px;">
+              <tr style="border-bottom:1px solid #eee;">
+                <th style="text-align:left; padding:2px;">Source</th>
+                <th style="text-align:right; padding:2px;">Items</th>
+                <th style="text-align:right; padding:2px;">Size</th>
+              </tr>
+              <tr>
+                <td style="padding:2px;">IndexedDB</td>
+                <td style="text-align:right; padding:2px;">${stats.indexedDB.count}</td>
+                <td style="text-align:right; padding:2px;">${formatBytes(stats.indexedDB.size)}</td>
+              </tr>
+              <tr>
+                <td style="padding:2px;">Settings</td>
+                <td style="text-align:right; padding:2px;">${stats.localStorage.count}</td>
+                <td style="text-align:right; padding:2px;">${formatBytes(stats.localStorage.size)}</td>
+              </tr>
+            </table>
+          `;
+    };
+    trigger.onclick = async (e) => {
+      e.preventDefault();
+      if (isStatsVisible) {
+        contentDiv.style.display = "none";
+        trigger.textContent = "[ Show Stats ]";
+        isStatsVisible = false;
+        if (statsInterval) {
+          clearInterval(statsInterval);
+          statsInterval = null;
+        }
+      } else {
+        trigger.textContent = "Calculating...";
+        contentDiv.style.display = "block";
+        await updateMyStats();
+        trigger.textContent = "[ Hide Stats ]";
+        isStatsVisible = true;
+        if (statsInterval) clearInterval(statsInterval);
+        statsInterval = setInterval(() => {
+          if (isStatsVisible && popover.style.display === "block") {
+            updateMyStats();
+          } else {
+            if (statsInterval) clearInterval(statsInterval);
+          }
+        }, 100);
+      }
+    };
+    purgeBtn.onclick = () => {
+      if (confirm(
+        "Are you sure you want to clear all cached data? This will trigger a full re-fetch."
+      )) {
+        onRefresh();
+      }
+    };
+    return { popover, close: handleClose };
+  }
+  async function showApprovalsDetail(db, dateStr, userId, event) {
+    const popoverId = "danbooru-approvals-popover";
+    let pop = document.getElementById(popoverId);
+    if (!pop) {
+      pop = document.createElement("div");
+      pop.id = popoverId;
+      document.body.appendChild(pop);
+    }
+    const detailId = `${userId}_${dateStr}`;
+    const detail = await db.approvals_detail.get(detailId);
+    if (!detail) {
+      console.warn(`[Danbooru Grass] No entry found in approvals_detail for ID: ${detailId}. Did you clear cache?`);
+      return;
+    }
+    if (!detail.post_list || detail.post_list.length === 0) {
+      console.warn(`[Danbooru Grass] Entry found but post_list is empty:`, detail);
+      return;
+    }
+    const posts = detail.post_list;
+    const total = posts.length;
+    const limit = 100;
+    let currentPage = 1;
+    const totalPages = Math.ceil(total / limit);
+    const renderPage = (page) => {
+      currentPage = page;
+      const start = (page - 1) * limit;
+      const end = Math.min(start + limit, total);
+      const pagePosts = posts.slice(start, end);
+      pop.innerHTML = `
+          <div class="header">
+            <div class="header-title">${dateStr} Approvals (${total})</div>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <a href="/posts?tags=id:${pagePosts.join(",")}" target="_blank" class="gallery-btn" title="View Current Page as Gallery">
+                <svg aria-hidden="true" height="18" viewBox="0 0 16 16" version="1.1" width="18" data-view-component="true" style="fill: currentColor;">
+                  <path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.75.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-1.19l-4.22 4.22a.75.75 0 1 1-1.06-1.06L12.44 3.5h-1.19a.75.75 0 0 1-.75-.75Z"></path>
+                </svg>
+              </a>
+              <div class="close-btn">&times;</div>
+            </div>
+          </div>
+          <div class="post-grid">
+            ${pagePosts.map((id) => `<a href="/posts/${id}" target="_blank" class="post-link">#${id}</a>`).join("")}
+          </div>
+          <div class="pagination">
+            <button class="page-btn" id="popover-prev" ${page === 1 ? "disabled" : ""}>&lt;</button>
+            <span>${page} / ${totalPages}</span>
+            <button class="page-btn" id="popover-next" ${page === totalPages ? "disabled" : ""}>&gt;</button>
+          </div>
+        `;
+      pop.querySelector(".close-btn").onclick = () => {
+        pop.style.display = "none";
+      };
+      pop.querySelector("#popover-prev").onclick = (e) => {
+        e.stopPropagation();
+        renderPage(currentPage - 1);
+      };
+      pop.querySelector("#popover-next").onclick = (e) => {
+        e.stopPropagation();
+        renderPage(currentPage + 1);
+      };
+    };
+    renderPage(1);
+    pop.style.setProperty("display", "block", "important");
+    const rect = pop.getBoundingClientRect();
+    let left = event.pageX + 10;
+    let top = event.pageY - 20;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+    if (left + rect.width > scrollX + viewportWidth - 20) {
+      left = event.pageX - rect.width - 10;
+    }
+    if (top + rect.height > scrollY + viewportHeight - 20) {
+      top = event.pageY - rect.height - 10;
+    }
+    if (left < scrollX + 10) left = scrollX + 10;
+    if (top < scrollY + 10) top = scrollY + 10;
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+    const closeHandler = (e) => {
+      if (!pop.contains(e.target)) {
+        pop.style.setProperty("display", "none", "important");
+        document.removeEventListener("mousedown", closeHandler);
+      }
+    };
+    setTimeout(() => {
+      document.addEventListener("mousedown", closeHandler);
+    }, 100);
+  }
+  class GraphRenderer {
+    containerId;
+    cal;
+    settingsManager;
+    db;
+constructor(settingsManager, db) {
+      this.containerId = "danbooru-grass-container";
+      this.cal = null;
+      this.settingsManager = settingsManager;
+      this.db = db;
+    }
+async injectSkeleton(dataManager, userId) {
+      if (document.getElementById(this.containerId)) {
+        return true;
+      }
+      let stats = document.querySelector(CONFIG.SELECTORS.STATISTICS_SECTION);
+      if (!stats) {
+        const table = document.querySelector(
+          "#a-show > div:nth-child(1) > div:nth-child(2) > table"
+        );
+        if (table) stats = table.parentElement;
+      }
+      if (!stats) {
+        document.querySelectorAll("h1, h2").forEach((el) => {
+          if (el.textContent.trim() === "Statistics") stats = el.parentElement;
+        });
+      }
+      if (!stats) {
+        console.error("[Danbooru Grass] Injection point not found.");
+        return false;
+      }
+      let wrapper = document.getElementById("danbooru-grass-wrapper");
+      if (!wrapper) {
+        if (stats.parentNode.id === "danbooru-grass-wrapper") {
+          wrapper = stats.parentNode;
+        } else {
+          wrapper = document.createElement("div");
+          wrapper.id = "danbooru-grass-wrapper";
+          wrapper.style.display = "flex";
+          wrapper.style.alignItems = "flex-start";
+          wrapper.style.gap = "20px";
+          wrapper.style.flexWrap = "wrap";
+          wrapper.style.width = "100%";
+          stats.parentNode?.insertBefore(wrapper, stats);
+          wrapper.appendChild(stats);
+        }
+      }
+      const container = document.createElement("div");
+      container.id = this.containerId;
+      container.style.position = "relative";
+      const grassSettings = await dataManager.getGrassSettings(userId);
+      let savedWidth = grassSettings ? grassSettings.width : null;
+      let savedX = grassSettings ? grassSettings.xOffset : 0;
+      const applyConstraints = () => {
+        const wrapperWidth = wrapper.offsetWidth;
+        const statsWidth = stats.offsetWidth;
+        const gap = 20;
+        const isWrapped = container.offsetTop > stats.offsetTop + 10;
+        let maxAvailableWidth;
+        if (isWrapped) {
+          maxAvailableWidth = wrapperWidth;
+        } else {
+          maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+        }
+        if (savedWidth) {
+          const numericWidth = parseFloat(String(savedWidth));
+          const clampedWidth = Math.max(300, Math.min(numericWidth, maxAvailableWidth));
+          container.style.flex = "0 0 auto";
+          container.style.width = `${clampedWidth}px`;
+          const clampedX = Math.max(0, Math.min(savedX ?? 0, maxAvailableWidth - clampedWidth));
+          container.style.transform = `translateX(${clampedX}px)`;
+        } else {
+          container.style.flex = "1";
+          container.style.transform = `translateX(0px)`;
+        }
+      };
+      const syncPanelPosition = () => {
+        const panel = document.getElementById("danbooru-grass-panel");
+        if (!panel) return;
+        const xOffset = parseFloat(container.style.transform?.replace(/translateX\(|px\)/g, "") || "0") || 0;
+        panel.style.marginLeft = xOffset > 0 ? `${xOffset}px` : "0";
+      };
+      setTimeout(() => {
+        applyConstraints();
+        syncPanelPosition();
+      }, 0);
+      container.style.minWidth = "300px";
+      const createHandle = (type, side) => {
+        const handle = document.createElement("div");
+        if (type === "resize") {
+          handle.style.cssText = `
+            position: absolute;
+            top: 0;
+            ${side}: -5px;
+            width: 10px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 101;
+          `;
+        } else if (type === "move") {
+          handle.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 30px;
+            height: 30px;
+            cursor: move;
+            z-index: 102;
+            background: rgba(136, 136, 136, 0.1);
+            border-bottom-right-radius: 8px;
+            border-top-left-radius: 8px;
+          `;
+        }
+        handle.onmousedown = (e) => {
+          e.preventDefault();
+          const startX = e.clientX;
+          const startWidth = container.offsetWidth;
+          const startXOffset = parseFloat(container.style.transform.replace(/translateX\(|px\)/g, "")) || 0;
+          const onMouseMove = (mE) => {
+            const delta = mE.clientX - startX;
+            const wrapperWidth = wrapper.offsetWidth;
+            const statsWidth = stats.offsetWidth;
+            const gap = 20;
+            const isWrapped = container.offsetTop > stats.offsetTop + 10;
+            let maxAvailableWidth;
+            if (isWrapped) {
+              maxAvailableWidth = wrapperWidth;
+            } else {
+              maxAvailableWidth = Math.max(300, wrapperWidth - statsWidth - gap);
+            }
+            if (type === "move") {
+              let newX = startXOffset + delta;
+              newX = Math.max(0, Math.min(newX, maxAvailableWidth - startWidth));
+              container.style.transform = `translateX(${newX}px)`;
+            } else if (type === "resize") {
+              if (side === "right") {
+                const maxWidth = maxAvailableWidth - startXOffset;
+                const newWidth = Math.max(300, Math.min(startWidth + delta, maxWidth));
+                container.style.flex = "0 0 auto";
+                container.style.width = `${newWidth}px`;
+              } else if (side === "left") {
+                const minDelta = -startXOffset;
+                const clampedDelta = Math.max(delta, minDelta);
+                let newWidth = Math.max(300, startWidth - clampedDelta);
+                const finalDelta = startWidth - newWidth;
+                const newX = startXOffset + finalDelta;
+                container.style.flex = "0 0 auto";
+                container.style.width = `${newWidth}px`;
+                container.style.transform = `translateX(${newX}px)`;
+              }
+            }
+            syncPanelPosition();
+          };
+          const onMouseUp = () => {
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+            const finalX = parseFloat(container.style.transform.replace(/translateX\(|px\)/g, "")) || 0;
+            dataManager.saveGrassSettings(userId, {
+              width: container.style.width,
+              xOffset: finalX
+            });
+            syncPanelPosition();
+          };
+          document.addEventListener("mousemove", onMouseMove);
+          document.addEventListener("mouseup", onMouseUp);
+        };
+        return handle;
+      };
+      container.style.background = "var(--card-background-color, #222)";
+      container.style.padding = "15px";
+      container.style.borderRadius = "8px";
+      container.style.minHeight = "180px";
+      container.style.color = "var(--text-color, #eee)";
+      container.innerHTML = `
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px; align-items:center;">
+          <h2 style="font-size:1.2em; margin:0;">Contribution Graph</h2>
+          <div id="grass-controls" style="gap:10px; display:flex;"></div>
+        </div>
+        <div id="cal-heatmap" style="overflow-x:auto; padding-bottom:5px;"></div>
+        <div id="grass-loading" style="text-align:center; padding:20px; color:#888;">Initializing...</div>
+      `;
+      container.appendChild(createHandle("resize", "left"));
+      container.appendChild(createHandle("resize", "right"));
+      container.appendChild(createHandle("move"));
+      const currentTheme = this.settingsManager.getTheme();
+      this.settingsManager.applyTheme(currentTheme);
+      wrapper.appendChild(container);
+      this.populateSummaryGrid();
+      if (!document.getElementById("danbooru-grass-tooltip")) {
+        const tooltip = document.createElement("div");
+        tooltip.id = "danbooru-grass-tooltip";
+        tooltip.style.position = "absolute";
+        tooltip.style.padding = "8px";
+        tooltip.style.background = "#222";
+        tooltip.style.color = "#fff";
+        tooltip.style.borderRadius = "4px";
+        tooltip.style.border = "1px solid #444";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.opacity = "0";
+        tooltip.style.zIndex = "99999";
+        tooltip.style.fontSize = "12px";
+        document.body.appendChild(tooltip);
+      }
+      return true;
+    }
+updateControls(_availableYears, _currentYear, currentMetric, _onYearChange, onMetricChange, _onRefresh) {
+      const controls = document.getElementById("grass-controls");
+      if (!controls) return;
+      controls.innerHTML = "";
+      const metricSel = document.createElement("select");
+      metricSel.className = "ui-select";
+      ["uploads", "approvals", "notes"].forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.text = m.charAt(0).toUpperCase() + m.slice(1);
+        if (m === currentMetric) opt.selected = true;
+        metricSel.appendChild(opt);
+      });
+      metricSel.onchange = (e) => onMetricChange(e.target.value);
+      controls.appendChild(metricSel);
+    }
+populateSummaryGrid() {
+      const panel = document.getElementById("danbooru-grass-panel");
+      if (!panel) return;
+      panel.innerHTML = "";
+      const wrapper = document.createElement("div");
+      wrapper.id = "danbooru-grass-summary-grid-wrapper";
+      const header = document.createElement("div");
+      header.id = "danbooru-grass-summary-header";
+      header.style.cssText = `
+        font-size: 14px;
+        font-weight: 500;
+        margin-bottom: 2px;
+        color: var(--grass-text, #24292f);
+      `;
+      header.textContent = "Hourly Distribution";
+      wrapper.appendChild(header);
+      const topLabels = document.createElement("div");
+      topLabels.className = "summary-top-labels";
+      const label0 = document.createElement("div");
+      label0.className = "summary-label top-label-item";
+      label0.textContent = "0 / 12";
+      label0.style.left = "11px";
+      const label6 = document.createElement("div");
+      label6.className = "summary-label top-label-item";
+      label6.textContent = "6 / 18";
+      label6.style.left = `${11 + (22 + 4) * 6}px`;
+      topLabels.appendChild(label0);
+      topLabels.appendChild(label6);
+      wrapper.appendChild(topLabels);
+      const midRow = document.createElement("div");
+      midRow.className = "summary-row-container";
+      const sideLabels = document.createElement("div");
+      sideLabels.className = "summary-side-labels";
+      const labelAM = document.createElement("div");
+      labelAM.className = "summary-label";
+      labelAM.textContent = "AM";
+      const labelPM = document.createElement("div");
+      labelPM.className = "summary-label";
+      labelPM.textContent = "PM";
+      sideLabels.appendChild(labelAM);
+      sideLabels.appendChild(labelPM);
+      const grid = document.createElement("div");
+      grid.id = "danbooru-grass-summary-grid";
+      for (let i = 0; i < 24; i++) {
+        const cell = document.createElement("div");
+        cell.className = "large-grass-cell";
+        grid.appendChild(cell);
+      }
+      midRow.appendChild(sideLabels);
+      midRow.appendChild(grid);
+      wrapper.appendChild(midRow);
+      const legendRow = document.createElement("div");
+      legendRow.id = "danbooru-grass-summary-legend";
+      legendRow.style.cssText = `
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 4px;
+        margin-top: 6px;
+        font-size: 10px;
+        color: var(--grass-text, #57606a);
+      `;
+      legendRow.innerHTML = '<span style="margin-right:2px">Less</span>' + [0, 1, 2, 3, 4].map((l) => `<div class="legend-rect" data-level="${l}" style="width:10px; height:10px; border-radius:2px; background:var(--grass-level-${l})"></div>`).join("") + '<span style="margin-left:2px">More</span>';
+      wrapper.appendChild(legendRow);
+      panel.appendChild(wrapper);
+    }
+updateSummaryGrid(hourlyCounts, metric) {
+      const grid = document.getElementById("danbooru-grass-summary-grid");
+      if (!grid) return;
+      const cells = grid.querySelectorAll(".large-grass-cell");
+      if (cells.length !== 24) return;
+      if (!hourlyCounts) {
+        cells.forEach((cell) => {
+          cell.style.background = "var(--grass-empty-cell, #ebedf0)";
+          cell.onmouseenter = null;
+          cell.onmouseleave = null;
+          cell.removeAttribute("title");
+        });
+        const header2 = document.getElementById("danbooru-grass-summary-header");
+        if (header2) header2.textContent = `Hourly ${metric} Distribution`;
+        return;
+      }
+      const header = document.getElementById("danbooru-grass-summary-header");
+      if (header) header.textContent = `Hourly ${metric} Distribution`;
+      const max = Math.max(...hourlyCounts, 1);
+      cells.forEach((cell, i) => {
+        const count = hourlyCounts[i] || 0;
+        let level = 0;
+        if (count > 0) {
+          level = Math.floor(count / max * 5);
+          if (level > 4) level = 4;
+        }
+        cell.style.background = `var(--grass-level-${level})`;
+        cell.removeAttribute("title");
+        cell.onmouseenter = (_e) => {
+          const tooltip = document.getElementById("danbooru-grass-tooltip");
+          if (!tooltip) return;
+          tooltip.style.opacity = "1";
+          tooltip.innerHTML = `<strong>${i.toString().padStart(2, "0")}:00</strong>, ${count} ${metric}`;
+          const rect = cell.getBoundingClientRect();
+          const tooltipRect = tooltip.getBoundingClientRect();
+          let left = rect.left + window.scrollX + rect.width / 2 - tooltipRect.width / 2;
+          let top = rect.top + window.scrollY - tooltipRect.height - 8;
+          tooltip.style.left = `${left}px`;
+          tooltip.style.top = `${top}px`;
+        };
+        cell.onmouseleave = () => {
+          const tooltip = document.getElementById("danbooru-grass-tooltip");
+          if (tooltip) tooltip.style.opacity = "0";
+        };
+      });
+      const legend = document.getElementById("danbooru-grass-summary-legend");
+      if (legend) {
+        const step = max / 5;
+        const rects = legend.querySelectorAll(".legend-rect");
+        rects.forEach((r) => {
+          const l = parseInt(r.getAttribute("data-level") ?? "0");
+          let minRange, maxRange;
+          if (l === 0) {
+            minRange = 0;
+            maxRange = Math.floor(step);
+          } else {
+            minRange = Math.floor(step * l) + 1;
+            maxRange = Math.floor(step * (l + 1));
+          }
+          if (l === 4) maxRange = max;
+          r.removeAttribute("title");
+          r.onmouseenter = (_e) => {
+            const tooltip = document.getElementById("danbooru-grass-tooltip");
+            if (!tooltip) return;
+            tooltip.style.opacity = "1";
+            tooltip.innerHTML = `${minRange} - ${maxRange}`;
+            const rect = r.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            let left = rect.left + window.scrollX + rect.width / 2 - tooltipRect.width / 2;
+            let top = rect.top + window.scrollY - tooltipRect.height - 8;
+            tooltip.style.left = `${left}px`;
+            tooltip.style.top = `${top}px`;
+          };
+          r.onmouseleave = () => {
+            const tooltip = document.getElementById("danbooru-grass-tooltip");
+            if (tooltip) tooltip.style.opacity = "0";
+          };
+        });
+      }
+    }
+setLoading(isLoading, message = "Initializing...") {
+      const el = document.getElementById("grass-loading");
+      if (el) {
+        el.style.display = isLoading ? "block" : "none";
+        el.textContent = message;
+      }
+      const cal = document.getElementById("cal-heatmap");
+      if (cal) cal.style.opacity = isLoading ? "0.5" : "1";
+    }
+async renderGraph(dataMap, year, metric, userInfo, availableYears, onYearChange, onRefresh, skipScroll = false) {
+      let dailyData = dataMap;
+      let hourlyData = null;
+      if (dataMap && dataMap.daily) {
+        dailyData = dataMap.daily;
+        hourlyData = dataMap.hourly;
+      }
+      const total = Object.values(dailyData || {}).reduce((acc, v) => acc + v, 0);
+      const header = document.querySelector("#danbooru-grass-container h2");
+      if (header) {
+        header.innerHTML = "";
+        const textSpan = document.createElement("span");
+        textSpan.textContent = `${total.toLocaleString()} contributions in `;
+        header.appendChild(textSpan);
+        if (availableYears && onYearChange) {
+          const yearSelect = document.createElement("select");
+          yearSelect.style.cssText = `
+            font-family: inherit;
+            font-size: inherit;
+            font-weight: normal;
+            color: #24292f;
+            background-color: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            padding: 2px 4px;
+            margin-left: 6px;
+            cursor: pointer;
+            vertical-align: baseline;
+          `;
+          availableYears.forEach((y) => {
+            const opt = document.createElement("option");
+            opt.value = String(y);
+            opt.textContent = String(y);
+            if (y === year) opt.selected = true;
+            yearSelect.appendChild(opt);
+          });
+          yearSelect.onchange = (e) => onYearChange(parseInt(e.target.value, 10));
+          header.appendChild(yearSelect);
+        } else {
+          header.appendChild(document.createTextNode(String(year)));
+        }
+      }
+      if (window.cal && typeof window.cal.destroy === "function") {
+        try {
+          window.cal.destroy();
+        } catch (e) {
+          console.warn("[Danbooru Grass] Failed to destroy previous instance:", e);
+        }
+      }
+      window.cal = new window.CalHeatmap();
+      const userName = userInfo.name || userInfo;
+      const container = document.getElementById("cal-heatmap");
+      if (!container) return;
+      const source = Object.entries(dailyData || {}).map(([k, v]) => ({
+        date: k,
+        value: v
+      }));
+      const sanitizedName = userInfo.normalizedName || userName.replace(/ /g, "_");
+      const userIdVal = userInfo.id || userInfo.name;
+      const getUrl = (date, _count) => {
+        if (!date) return null;
+        switch (metric) {
+          case "uploads":
+            return `/posts?tags=user:${sanitizedName}+date:${date}`;
+          case "approvals":
+            return "#";
+case "notes":
+            return `/posts?tags=noteupdater:${sanitizedName}+date:${date}`;
+          default:
+            return null;
+        }
+      };
+      const styleId = "danbooru-grass-styles";
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement("style");
+        style.id = styleId;
+        style.textContent = `
+          /* Container & Header Styling */
+          #danbooru-grass-container {
+            background: var(--grass-bg, #fff) !important;
+            color: var(--grass-text, #24292f) !important;
+            border-radius: 6px;
+          }
+          #danbooru-grass-container h2 {
+            color: var(--grass-text, #24292f) !important;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+            font-weight: normal !important;
+          }
+          /* Controls */
+          #grass-controls select {
+            background-color: #f6f8fa !important;
+            color: #24292f !important;
+            border: 1px solid #d0d7de !important;
+            border-radius: 6px;
+            padding: 2px 2px;
+          }
+          /* Empty Cells & Domain Backgrounds */
+          .ch-subdomain-bg { fill: var(--grass-empty-cell, #ebedf0); }
+          .ch-domain-bg { fill: transparent !important; } /* Fix black bars */
+
+          /* All SVG Text (Months & Days) */
+          #cal-heatmap text,
+          #gh-day-labels text {
+            fill: var(--grass-text, #24292f) !important;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+            font-size: 10px;
+          }
+
+          /* Scrollable Area */
+          #cal-heatmap-scroll {
+            overflow-x: auto;
+            overflow-y: hidden;
+            flex: 1;
+            white-space: nowrap;
+          }
+          #cal-heatmap-scroll::-webkit-scrollbar { height: 8px; }
+          #cal-heatmap-scroll::-webkit-scrollbar-thumb {
+            background: var(--grass-scrollbar-thumb, #d0d7de);
+            border-radius: 4px;
+          }
+
+          /* Settings Popover */
+          #danbooru-grass-settings-popover {
+            position: fixed;
+            max-height: 70vh;
+            overflow-y: auto;
+            background: #fff;
+            color: #24292f;
+            border: 1px solid #d0d7de;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-radius: 8px;
+            padding: 12px;
+            z-index: 10000;
+            display: none;
+            width: 290px;
+            transform-origin: top left;
+          }
+          .theme-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 8px;
+          }
+          .theme-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            position: relative;
+            cursor: pointer;
+            border: 2px solid transparent;
+            box-sizing: border-box;
+          }
+          .theme-icon:hover { transform: scale(1.1); }
+          .theme-icon.active { border-color: #0969da; }
+          .theme-icon-inner {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 16px; height: 16px;
+            border-radius: 4px;
+          }
+          .popover-header {
+            font-weight: 600;
+            font-size: 12px;
+            color: #24292f;
+            margin-bottom: 8px;
+          }
+          .popover-select {
+            width: 100%;
+            margin-bottom: 10px;
+            padding: 4px;
+            border-radius: 4px;
+            border: 1px solid #d0d7de;
+            background-color: #f6f8fa;
+            font-size: 12px;
+          }
+          .threshold-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 12px;
+          }
+          .threshold-input {
+            width: 60px;
+            margin-left: auto;
+            padding: 2px 4px;
+            border: 1px solid #d0d7de;
+            border-radius: 4px;
+          }
+
+          /* Approvals Detail Popover */
+          #danbooru-approvals-popover {
+            position: absolute;
+            background: #fff;
+            color: #24292f;
+            border: 1px solid #d0d7de;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            border-radius: 10px;
+            padding: 16px;
+            z-index: 100005;
+            display: none;
+            width: 320px;
+            font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+          }
+          #danbooru-approvals-popover .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+          }
+          #danbooru-approvals-popover .header-title {
+            font-weight: 600;
+            font-size: 14px;
+          }
+          #danbooru-approvals-popover .close-btn {
+            cursor: pointer;
+            color: #888;
+            font-size: 18px;
+            line-height: 1;
+          }
+          /* Summary Grid Layout */
+          #danbooru-grass-summary-grid-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            width: fit-content;
+            margin: 0 auto;
+            padding: 10px;
+            background: var(--grass-bg, rgba(128, 128, 128, 0.05));
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.05);
+          }
+          #danbooru-grass-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 4px;
+            width: fit-content;
+          }
+          .summary-row-container {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+          }
+          .summary-side-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-around;
+            height: 48px; /* 22px * 2 + 4px gap */
+            padding-top: 2px;
+          }
+          .summary-top-labels {
+            display: flex;
+            margin-left: 28px; /* Match width of side labels + gap */
+            position: relative;
+            height: 14px;
+          }
+          .summary-label {
+             fill: var(--grass-text, #24292f);
+             color: var(--grass-text, #24292f);
+             font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+             font-size: 10px;
+             white-space: nowrap;
+          }
+          .top-label-item {
+            position: absolute;
+            transform: translateX(-50%);
+          }
+          .large-grass-cell {
+            width: 22px;
+            height: 22px;
+            background-color: var(--grass-empty-cell, #ebedf0);
+            border-radius: 4px;
+            transition: background-color 0.2s, transform 0.1s, box-shadow 0.2s;
+          }
+          .large-grass-cell:hover {
+            transform: scale(1.1);
+            background-color: var(--grass-text, #30363d);
+            opacity: 0.15;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+          }
+          #danbooru-approvals-popover .gallery-btn {
+            cursor: pointer;
+            color: #0969da;
+            display: flex;
+            align-items: center;
+            padding: 2px;
+            border-radius: 4px;
+            transition: background 0.2s;
+            text-decoration: none;
+          }
+          #danbooru-approvals-popover .gallery-btn:hover {
+            background: #f0f7ff;
+            color: #054ada;
+          }
+          #danbooru-approvals-popover .post-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+          }
+          #danbooru-approvals-popover .post-link {
+            display: block;
+            text-align: center;
+            padding: 4px;
+            background: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #0969da;
+            text-decoration: none;
+          }
+          #danbooru-approvals-popover .post-link:hover {
+            background: #0969da;
+            color: #fff;
+          }
+          #danbooru-approvals-popover .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+          }
+          #danbooru-approvals-popover .page-btn {
+            padding: 2px 8px;
+            border: 1px solid #d0d7de;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          #danbooru-approvals-popover .page-btn:disabled {
+            opacity: 0.5;
+            cursor: default;
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      container.innerHTML = "";
+      container.style.display = "flex";
+      container.style.flexDirection = "row";
+      container.style.alignItems = "flex-start";
+      container.style.overflow = "hidden";
+      const labels = document.createElement("div");
+      labels.id = "gh-day-labels";
+      labels.style.display = "flex";
+      labels.style.flexDirection = "column";
+      labels.style.paddingTop = "20px";
+      labels.style.paddingRight = "5px";
+      labels.style.marginRight = "5px";
+      labels.style.textAlign = "right";
+      labels.style.flexShrink = "0";
+      labels.style.color = "var(--grass-text, #24292f)";
+      labels.style.fontSize = "9px";
+      const rowStyle = "height:11px; line-height:11px; margin-bottom:2px;";
+      const hiddenStyle = "height:11px; visibility:hidden; margin-bottom:2px;";
+      const lastHiddenStyle = "height:11px; visibility:hidden; margin-bottom:0;";
+      labels.innerHTML = `
+        <div style="${hiddenStyle}"></div> <!-- Sun (0) -->
+        <div style="${rowStyle}">Mon</div> <!-- Mon (1) -->
+        <div style="${hiddenStyle}"></div> <!-- Tue (2) -->
+        <div style="${rowStyle}">Wed</div> <!-- Wed (3) -->
+        <div style="${hiddenStyle}"></div> <!-- Thu (4) -->
+        <div style="${rowStyle}">Fri</div> <!-- Fri (5) -->
+        <div style="${lastHiddenStyle}"></div> <!-- Sat (6) -->
+      `;
+      container.appendChild(labels);
+      const scrollWrapper = document.createElement("div");
+      scrollWrapper.id = "cal-heatmap-scroll";
+      scrollWrapper.style.minHeight = "140px";
+      container.appendChild(scrollWrapper);
+      const mainContainer = document.getElementById("danbooru-grass-container");
+      if (!mainContainer) return;
+      if (!document.getElementById("danbooru-grass-footer")) {
+        const footer = document.createElement("div");
+        footer.id = "danbooru-grass-footer";
+        footer.style.display = "flex";
+        footer.style.justifyContent = "space-between";
+        footer.style.alignItems = "center";
+        footer.style.padding = "5px 20px 10px 0px";
+        footer.style.marginTop = "10px";
+        mainContainer.appendChild(footer);
+        const footerLeft = document.createElement("div");
+        footerLeft.style.display = "flex";
+        footerLeft.style.alignItems = "center";
+        footerLeft.style.gap = "8px";
+        footer.appendChild(footerLeft);
+        const settingsBtn = document.createElement("div");
+        settingsBtn.id = "danbooru-grass-settings";
+        settingsBtn.title = "Settings";
+        settingsBtn.style.cssText = `
+          padding: 2px 8px;
+          border: 1px solid #d0d7de;
+          border-radius: 6px;
+          background-color: #f6f8fa;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          color: #57606a;
+        `;
+        settingsBtn.innerHTML = `
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;">
+            <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.292.028 1.555.563l.566 1.142c.27.547.106 1.181-.394 1.524l-.904.621c-.056.038-.076.104-.076.17a8.7 8.7 0 0 0 0 1.018c0 .066.02.132.076.17l.904.62c.5.344.664.978.394 1.524l-.566 1.142c-.263.535-.91.74-1.555.563l-1.103-.303c-.066-.019-.176-.011-.299.071a6.8 6.8 0 0 1-.668.386c-.133.066-.194.158-.212.224l-.288 1.107c-.17.646-.716 1.196-1.461 1.26a8.2 8.2 0 0 1-.701.031 8.2 8.2 0 0 1-.701-.031c-.745-.064-1.29-.614-1.461-1.26l-.288-1.106c-.018-.066-.079-.158-.212-.224a6.8 6.8 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.292-.028-1.555-.563l-.566-1.142c-.27-.547-.106-1.181.394-1.524l.904-.621c.056-.038.076-.104.076-.17a8.7 8.7 0 0 0 0-1.018c0-.066-.02-.132-.076-.17l-.904-.62c-.5-.344-.664-.978-.394-1.524l.566-1.142c.263-.535.91-.74 1.555-.563l1.103.303c.066.019.176.011.299-.071.214-.143.437-.272.668-.386.133-.066.194-.158.212-.224l.288-1.107C6.71.645 7.256.095 8.001.031A8.2 8.2 0 0 1 8 0Zm-.571 1.525c-.036.003-.108.036-.123.098l-.289 1.106c-.17.643-.64 1.103-1.246 1.218a5.2 5.2 0 0 0-1.157.669c-.53.411-1.192.427-1.748.046l-.904-.621c-.055-.038-.135-.04-.158.006l-.566 1.142c-.023.047.013.109.055.137l.904.621a1.9 1.9 0 0 1 0 3.23l-.904.621c-.042.029-.078.09-.055.137l.566 1.142c.023.047.103.044.158.006l.904-.621c.556-.38 1.218-.365 1.748.046.348.27.753.496 1.157.669.606.115 1.076.575 1.246 1.218l.289 1.106c.015.062.087.095.123.098.36.031.725.031 1.082 0 .036-.003.108-.036.123-.098l.289-1.106c.17-.643.64-1.103 1.246-1.218.404-.173.809-.399 1.157-.669.53-.411 1.192-.427 1.748-.046l.904.621c.055.038.135.04.158-.006l.566-1.142c.023-.047-.013-.109-.055-.137l-.904-.621a1.9 1.9 0 0 1 0-3.23l.904-.621c.042-.029.078-.09.055-.137l-.566-1.142c-.023-.047-.103-.044-.158-.006l-.904.621c-.556.38-1.218.365-1.748-.046a5.2 5.2 0 0 0-1.157-.669c-.606-.115-1.076-.575-1.246-1.218l-.289-1.106c-.015-.062-.087-.095-.123-.098a6.5 6.5 0 0 0-1.082 0ZM8 5.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z"></path>
+          </svg>
+        `;
+        const onSettingsClose = () => {
+          if (typeof onYearChange === "function") {
+            onYearChange(year);
+          }
+        };
+        settingsBtn.onmouseover = () => {
+          settingsBtn.style.backgroundColor = "#eaeef2";
+        };
+        settingsBtn.onmouseout = () => {
+          settingsBtn.style.backgroundColor = "#f6f8fa";
+        };
+        footerLeft.appendChild(settingsBtn);
+        const toggleBtn = document.createElement("div");
+        toggleBtn.id = "danbooru-grass-toggle-panel";
+        toggleBtn.title = "Show Details";
+        toggleBtn.style.cssText = `
+          padding: 2px 8px;
+          border: 1px solid #d0d7de;
+          border-radius: 6px;
+          background-color: #f6f8fa;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          color: #57606a;
+        `;
+        const chevronDown = `<svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;"><path d="M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z"></path></svg>`;
+        const chevronUp = `<svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" style="fill: currentColor;"><path d="M3.22 9.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1-1.06 1.06L8 6.06 4.28 9.78a.75.75 0 0 1-1.06 0Z"></path></svg>`;
+        toggleBtn.innerHTML = chevronDown;
+        toggleBtn.onmouseover = () => {
+          toggleBtn.style.backgroundColor = "#eaeef2";
+        };
+        toggleBtn.onmouseout = () => {
+          toggleBtn.style.backgroundColor = "#f6f8fa";
+        };
+        footerLeft.appendChild(toggleBtn);
+        let columnWrapper = document.getElementById("danbooru-grass-column");
+        if (!columnWrapper) {
+          if (mainContainer.parentNode) {
+            columnWrapper = document.createElement("div");
+            columnWrapper.id = "danbooru-grass-column";
+            columnWrapper.style.display = "flex";
+            columnWrapper.style.flexDirection = "column";
+            columnWrapper.style.flex = "1";
+            columnWrapper.style.minWidth = "300px";
+            mainContainer.parentNode.insertBefore(columnWrapper, mainContainer);
+            columnWrapper.appendChild(mainContainer);
+            mainContainer.style.flex = "none";
+            mainContainer.style.width = "100%";
+          }
+        }
+        let panel = document.getElementById("danbooru-grass-panel");
+        if (!panel) {
+          panel = document.createElement("div");
+          panel.id = "danbooru-grass-panel";
+          panel.style.cssText = `
+                width: fit-content;
+                min-width: 310px;
+                background: var(--grass-bg, #fff);
+                border: 1px solid #d0d7de;
+                border-radius: 8px;
+                margin-top: 10px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+
+                /* Animation Styles */
+                height: 0;
+                opacity: 0;
+                padding: 0 10px;
+                overflow: hidden;
+                transition: height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+                display: block;
+            `;
+          if (columnWrapper) {
+            columnWrapper.appendChild(panel);
+          } else {
+            mainContainer.parentNode?.appendChild(panel);
+          }
+        }
+        if (panel) {
+          this.populateSummaryGrid();
+        }
+        let isExpanded = false;
+        toggleBtn.onclick = () => {
+          isExpanded = !isExpanded;
+          if (isExpanded) {
+            panel.style.height = "150px";
+            panel.style.opacity = "1";
+            panel.style.padding = "10px";
+            toggleBtn.innerHTML = chevronUp;
+            toggleBtn.title = "Hide Details";
+          } else {
+            panel.style.height = "0";
+            panel.style.opacity = "0";
+            panel.style.padding = "0 10px";
+            toggleBtn.innerHTML = chevronDown;
+            toggleBtn.title = "Show Details";
+          }
+        };
+        const { popover, close: closeSettings } = createSettingsPopover({
+          settingsManager: this.settingsManager,
+          db: this.db,
+          metric,
+          settingsBtn,
+          closeSettings: onSettingsClose,
+          onRefresh
+        });
+        settingsBtn.onclick = (e) => {
+          const current = popover.style.display;
+          if (current === "block") {
+            closeSettings();
+          } else {
+            const btnRect = settingsBtn.getBoundingClientRect();
+            popover.style.left = btnRect.left + "px";
+            popover.style.top = btnRect.bottom + 4 + "px";
+            popover.style.display = "block";
+          }
+          e.stopPropagation();
+        };
+        document.body.appendChild(popover);
+        const legend = document.createElement("div");
+        legend.id = "danbooru-grass-legend";
+        legend.style.display = "flex";
+        legend.style.justifyContent = "flex-end";
+        legend.style.alignItems = "center";
+        legend.style.fontSize = "10px";
+        legend.style.color = "var(--grass-text, #57606a)";
+        legend.style.gap = "4px";
+        const colors = [
+          "var(--grass-level-0)",
+          "var(--grass-level-1)",
+          "var(--grass-level-2)",
+          "var(--grass-level-3)",
+          "var(--grass-level-4)"
+        ];
+        const rects = colors.map(
+          (c) => `<div style="width:10px; height:10px; background:${c}; border-radius:2px;"></div>`
+        ).join("");
+        legend.innerHTML = `
+          <span style="margin-right:4px;">Less</span>
+          ${rects}
+          <span style="margin-left:4px;">More</span>
+        `;
+        footer.appendChild(legend);
+      }
+      const currentThresholds = this.settingsManager.getThresholds(metric);
+      const buildPaintConfig = () => ({
+        itemSelector: scrollWrapper,
+        range: 12,
+        domain: {
+          type: "month",
+          gutter: 3,
+          label: { position: "top", text: "MMM", height: 20, textAlign: "start" }
+        },
+        subDomain: { type: "day", radius: 2, width: 11, height: 11, gutter: 2 },
+        date: {
+          start: new Date(
+            new Date(year, 0, 1).getTime() - ( new Date()).getTimezoneOffset() * 6e4
+          )
+        },
+        data: { source, x: "date", y: "value" },
+        scale: {
+          color: {
+            range: this.settingsManager.resolveLevels(
+              CONFIG.THEMES[this.settingsManager.getTheme()] || CONFIG.THEMES.light
+            ),
+            domain: currentThresholds,
+            type: "threshold"
+          }
+        },
+        theme: "light"
+      });
+      window.cal.paint(buildPaintConfig()).then(() => {
+        const onThemeChange = () => {
+          try {
+            const sw = document.getElementById("cal-heatmap-scroll");
+            const savedScroll = sw ? sw.scrollLeft : 0;
+            window.cal.destroy();
+            window.cal.paint(buildPaintConfig()).then(() => {
+              if (sw) sw.scrollLeft = savedScroll;
+            });
+          } catch (e) {
+            console.debug("[DI] CalHeatmap re-paint failed", e);
+          }
+          this.updateSummaryGrid(hourlyData, metric);
+        };
+        window.addEventListener("DanbooruInsights:ThemeChanged", onThemeChange);
+        this.updateSummaryGrid(hourlyData, metric);
+        setTimeout(() => {
+          const tooltip = d3__namespace.select("#danbooru-grass-tooltip");
+          const updateTooltip = (event, content) => {
+            tooltip.style("opacity", 1).html(content);
+            const node = tooltip.node();
+            if (!node) return;
+            const rect = node.getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            let left = event.pageX + 10;
+            let top = event.pageY - 28;
+            if (left + rect.width > viewportWidth - 20) {
+              left = event.pageX - rect.width / 2;
+              top = event.pageY - rect.height - 15;
+              if (left < 5) left = 5;
+            }
+            tooltip.style("left", left + "px").style("top", top + "px");
+          };
+          const scrollContainer = document.getElementById("cal-heatmap-scroll");
+          if (scrollContainer && !skipScroll) {
+            if (year === ( new Date()).getFullYear()) {
+              const currentMonth = ( new Date()).getMonth() + 1;
+              const targetMonth = scrollContainer.querySelector(`.ch-domain:nth-of-type(${currentMonth})`);
+              if (targetMonth) {
+                const containerRect = scrollContainer.getBoundingClientRect();
+                const elementRect = targetMonth.getBoundingClientRect();
+                scrollContainer.scrollLeft += elementRect.left - containerRect.left - 10;
+              } else {
+                scrollContainer.scrollLeft = scrollContainer.scrollWidth;
+              }
+            } else {
+              scrollContainer.scrollLeft = 0;
+            }
+          }
+          d3__namespace.selectAll("#cal-heatmap-scroll rect").attr("rx", 2).attr("ry", 2).on("mouseover", function(event, d) {
+            const datum = d || d3__namespace.select(this).datum();
+            if (!datum || !datum.t) return;
+            const count = datum.v ?? 0;
+            const dateStr = new Date(datum.t).toISOString().split("T")[0];
+            updateTooltip(event, `<strong>${dateStr}</strong>, ${count} ${metric}`);
+          }).on("mouseout", () => tooltip.style("opacity", 0)).on("click", (event, d) => {
+            const datum = d;
+            if (!datum || !datum.t) {
+              return;
+            }
+            const count = datum.v ?? 0;
+            const dateStr = new Date(datum.t).toISOString().split("T")[0];
+            if (metric === "approvals" && count > 0) {
+              this.showApprovalsDetail(dateStr, userIdVal, event);
+            } else {
+              const link = getUrl(dateStr);
+              if (link) window.open(link, "_blank");
+            }
+          });
+          const t = this.settingsManager.getThresholds(metric);
+          const legendThresholds = [
+            `${t[0] > 1 ? `0-${t[0] - 1}` : "0"} (Less)`,
+            `${t[0]}-${t[1] - 1}`,
+            `${t[1]}-${t[2] - 1}`,
+            `${t[2]}-${t[3] - 1}`,
+            `${t[3]}+ (More)`
+          ];
+          const legendDivs = d3__namespace.selectAll("#danbooru-grass-legend > div");
+          legendDivs.each(function(_d, i) {
+            if (i >= 0 && i < legendThresholds.length) {
+              d3__namespace.select(this).on("mouseover", function(event) {
+                updateTooltip(event, legendThresholds[i]);
+              }).on("mouseout", () => tooltip.style("opacity", 0));
+            }
+          });
+        }, 300);
+      }).catch((err) => {
+        console.error("[Danbooru Grass] Render failed:", err);
+        this.updateSummaryGrid(hourlyData, metric);
+      });
+    }
+renderError(message, onRetry) {
+      const container = document.getElementById(this.containerId);
+      if (!container) return;
+      container.innerHTML = `
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:140px; color:#cf222e; text-align:center;">
+          <div style="font-weight:bold; margin-bottom:8px;">Unable to load contribution data</div>
+          <div style="font-size:0.9em; margin-bottom:12px; color: var(--grass-text, #57606a);">${message}</div>
+          <button id="grass-retry-btn" style="
+            padding: 5px 16px;
+            background-color: #f6f8fa;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            color: #24292f;
+          ">Retry</button>
+        </div>
+      `;
+      const btn = document.getElementById("grass-retry-btn");
+      if (btn) btn.onclick = onRetry;
+    }
+async showApprovalsDetail(dateStr, userId, event) {
+      return showApprovalsDetail(this.db, dateStr, userId, event);
+    }
+  }
+  class GrassApp {
+    db;
+    settings;
+    context;
+constructor(db, settings, context) {
+      this.db = db;
+      this.settings = settings;
+      this.context = context;
+    }
+async run() {
+      const context = this.context;
+      const targetUser = context.targetUser;
+      if (!targetUser) return;
+      const dataManager = new DataManager(this.db);
+      const renderer = new GraphRenderer(this.settings, this.db);
+      const userId = targetUser.id || targetUser.name;
+      const injected = await renderer.injectSkeleton(dataManager, userId);
+      if (!injected) {
+        return;
+      }
+      let currentYear = ( new Date()).getFullYear();
+      let currentMetric = this.settings.getLastMode(userId) || "uploads";
+      const joinYear = targetUser.joinDate.getFullYear();
+      const years = [];
+      const startYear = Math.max(joinYear, 2005);
+      for (let y = currentYear; y >= startYear; y--) years.push(y);
+      const updateView = async () => {
+        let availableYears = [...years];
+        if (currentMetric === "approvals") {
+          const promoDate = await dataManager.fetchPromotionDate(targetUser.name);
+          if (promoDate) {
+            const promoYear = parseInt(promoDate.slice(0, 4), 10);
+            availableYears = availableYears.filter((y) => y >= promoYear);
+            if (currentYear < promoYear) {
+              currentYear = promoYear;
+            }
+          }
+        }
+        const onYearChange = (y) => {
+          currentYear = y;
+          updateView();
+        };
+        renderer.setLoading(true);
+        try {
+          await renderer.renderGraph(
+            {},
+            currentYear,
+            currentMetric,
+            targetUser,
+            availableYears,
+            onYearChange,
+            async () => {
+              renderer.setLoading(true);
+              await dataManager.clearCache(currentMetric, targetUser);
+              updateView();
+            },
+true
+          );
+          renderer.updateControls(
+            availableYears,
+            currentYear,
+            currentMetric,
+            onYearChange,
+            (newMetric) => {
+              currentMetric = newMetric;
+              this.settings.setLastMode(userId, currentMetric);
+              updateView();
+            },
+async () => {
+              renderer.setLoading(true);
+              await dataManager.clearCache(currentMetric, targetUser);
+              updateView();
+            }
+          );
+          const onProgress = (count) => {
+            renderer.setLoading(true, `Fetching... ${count} items`);
+          };
+          const data = await dataManager.getMetricData(
+            currentMetric,
+            targetUser,
+            currentYear,
+            onProgress
+          );
+          await renderer.renderGraph(
+            data,
+            currentYear,
+            currentMetric,
+            targetUser,
+            availableYears,
+            onYearChange,
+            async () => {
+              renderer.setLoading(true);
+              await dataManager.clearCache(currentMetric, targetUser);
+              updateView();
+            }
+          );
+        } catch (e) {
+          console.error(e);
+          const message = e instanceof Error ? e.message : "Unknown error occurred";
+          renderer.renderError(message, () => updateView());
+        } finally {
+          renderer.setLoading(false);
+        }
+      };
+      updateView();
+    }
+  }
+  function escapeHtml(text) {
+    const el = document.createElement("div");
+    el.textContent = text;
+    return el.innerHTML;
+  }
+  function getLevelClass(level) {
+    if (!level) return "user-member";
+    const l = level.toLowerCase();
+    if (l.includes("admin") || l.includes("owner")) return "user-admin";
+    if (l.includes("moderator")) return "user-moderator";
+    if (l.includes("builder") || l.includes("contributor") || l.includes("approver")) return "user-builder";
+    if (l.includes("platinum")) return "user-platinum";
+    if (l.includes("gold")) return "user-gold";
+    if (l.includes("janitor")) return "user-janitor";
+    if (l.includes("member")) return "user-member";
+    return "user-member";
+  }
+  function getBestThumbnailUrl(post) {
+    if (!post) return "";
+    if (post.variants && Array.isArray(post.variants) && post.variants.length > 0) {
+      const preferredTypes = ["720x720", "360x360"];
+      for (const type of preferredTypes) {
+        const variant = post.variants.find((v) => v.type === type && v.file_ext === "webp");
+        if (variant) return variant.url;
+      }
+      for (const type of preferredTypes) {
+        const variant = post.variants.find((v) => v.type === type);
+        if (variant) return variant.url;
+      }
+      if (post.variants[0] && post.variants[0].url) return post.variants[0].url;
+    }
+    return post.preview_file_url || post.file_url || post.large_file_url || "";
+  }
+  async function isTopLevelTag(rateLimiter, tagName) {
+    const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
+    try {
+      const imps = await rateLimiter.fetch(impUrl).then((r) => r.json());
+      return !(Array.isArray(imps) && imps.length > 0);
+    } catch (e) {
+      return true;
+    }
+  }
+  function computeUntaggedTranslation(counts) {
+    const { t, a, b, c, ab, ac } = counts;
+    return Math.max(0, t - a - b - c + ab + ac);
+  }
+  function buildUntaggedTranslationQueries(normalizedName) {
+    const u = `user:${normalizedName}`;
+    return {
+      t: `${u} *_text`,
+      a: `${u} english_text`,
+      b: `${u} *_text translation_request`,
+      c: `${u} *_text translated`,
+      ab: `${u} english_text translation_request`,
+      ac: `${u} english_text translated`,
+      bc: `${u} translation_request translated`
+    };
+  }
+  class AnalyticsDataManager extends DataManager {
+    static isGlobalSyncing = false;
+    static syncProgress = { current: 0, total: 0, message: "" };
+    static onProgressCallback = null;
+constructor(db) {
+      super(db);
+    }
+
+async fetchThumbnailWithRetry(tags, retries = 3, delay = 2e3) {
+      const url = `/posts.json?tags=${encodeURIComponent(tags)}&limit=1&only=preview_file_url,variants,rating`;
+      for (let i = 0; i < retries; i++) {
+        try {
+          const resp = await this.rateLimiter.fetch(url);
+          if (resp.status === 429) {
+            await new Promise((r) => setTimeout(r, delay + Math.random() * 2e3));
+            delay *= 2;
+            continue;
+          }
+          if (resp.status === 422) return "";
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const data = await resp.json();
+          if (Array.isArray(data) && data.length > 0) {
+            return getBestThumbnailUrl(data[0]);
+          }
+          return "";
+        } catch (e) {
+          if (i === retries - 1) {
+            console.warn(`[Analytics] Failed thumb fetch after ${retries} tries: ${tags}`, e);
+            return "";
+          }
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+      return "";
+    }
+async getSyncStats(userInfo) {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return { count: 0, lastSync: null };
+      const count = await this.db.posts.where("uploader_id").equals(uploaderId).count();
+      const lastEntry = await this.db.posts.orderBy("created_at").last();
+      return {
+        count,
+        lastSync: lastEntry ? lastEntry.created_at : null
+};
+    }
+async getSummaryStats(userInfo) {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return { maxUploads: 0, maxDate: "N/A", firstUploadDate: null, lastUploadDate: null };
+      const historyAll = {};
+      const history1Year = {};
+      let firstUploadDate = null;
+      let lastUploadDate = null;
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      let count1Year = 0;
+      let totalCount = 0;
+      await this.db.posts.where("uploader_id").equals(uploaderId).each((p) => {
+        totalCount++;
+        const dStr = p["created_at"].split("T")[0];
+        historyAll[dStr] = (historyAll[dStr] || 0) + 1;
+        const d = new Date(p.created_at);
+        if (!firstUploadDate || d < firstUploadDate) {
+          firstUploadDate = d;
+        }
+        if (!lastUploadDate || d > lastUploadDate) {
+          lastUploadDate = d;
+        }
+        if (d >= oneYearAgo) {
+          history1Year[dStr] = (history1Year[dStr] || 0) + 1;
+          count1Year++;
+        }
+      });
+      if (totalCount === 0) return { maxUploads: 0, maxDate: "N/A", firstUploadDate: null, lastUploadDate: null };
+      let maxUploads = 0;
+      let maxDate = "N/A";
+      const sortedDates = Object.keys(historyAll).sort();
+      const activeDays = sortedDates.length;
+      for (const [date, count] of Object.entries(historyAll)) {
+        if (count > maxUploads) {
+          maxUploads = count;
+          maxDate = date;
+        }
+      }
+      let maxStreak = 0;
+      let maxStreakStart = null;
+      let maxStreakEnd = null;
+      let currentStreak = 0;
+      let currentStreakStart = null;
+      let lastDateObj = null;
+      for (const dateStr of sortedDates) {
+        const d = new Date(dateStr);
+        d.setHours(0, 0, 0, 0);
+        if (!lastDateObj) {
+          currentStreak = 1;
+          currentStreakStart = dateStr;
+        } else {
+          const diffTime = d - lastDateObj;
+          const diffDays = Math.round(diffTime / (1e3 * 60 * 60 * 24));
+          if (diffDays === 1) {
+            currentStreak++;
+          } else if (diffDays > 1) {
+            currentStreak = 1;
+            currentStreakStart = dateStr;
+          }
+        }
+        if (currentStreak > maxStreak) {
+          maxStreak = currentStreak;
+          maxStreakStart = currentStreakStart;
+          maxStreakEnd = dateStr;
+        }
+        lastDateObj = d;
+      }
+      let maxUploads1Year = 0;
+      let maxDate1Year = "N/A";
+      for (const [date, count] of Object.entries(history1Year)) {
+        if (count > maxUploads1Year) {
+          maxUploads1Year = count;
+          maxDate1Year = date;
+        }
+      }
+      return {
+        maxUploads,
+        maxDate,
+        firstUploadDate,
+        lastUploadDate,
+        count1Year,
+        maxUploads1Year,
+        maxDate1Year,
+        maxStreak,
+        maxStreakStart,
+        maxStreakEnd,
+        activeDays
+      };
+    }
+async getMilestones(userInfo, isNsfwEnabled = false, customStep = "auto") {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return [];
+      const total = await this.db.posts.where("uploader_id").equals(uploaderId).count();
+      if (total === 0) return [];
+      let targets = [];
+      if (customStep === "repdigit") {
+        targets.push(1);
+        if (total >= 11) targets.push(11);
+        for (let digits = 3; digits <= 6; digits++) {
+          for (let d = 1; d <= 9; d++) {
+            const num = parseInt(String(d).repeat(digits));
+            if (num <= total) targets.push(num);
+          }
+        }
+      } else if (customStep !== "auto" && typeof customStep === "number") {
+        const step = customStep;
+        targets.push(1);
+        for (let i = step; i <= total; i += step) {
+          targets.push(i);
+        }
+      } else {
+        if (total < 1500) {
+          targets.push(1);
+          for (let i = 100; i <= total; i += 100) {
+            targets.push(i);
+          }
+        } else if (total <= 1e4) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          for (let i = 500; i <= total; i += 500) {
+            targets.push(i);
+          }
+        } else if (total > 1e5) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          if (total >= 1e3) targets.push(1e3);
+          for (let i = 5e3; i <= total; i += 5e3) {
+            targets.push(i);
+          }
+        } else if (total > 5e4) {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          if (total >= 1e3) targets.push(1e3);
+          for (let i = 2500; i <= total; i += 2500) {
+            targets.push(i);
+          }
+        } else {
+          targets.push(1);
+          if (total >= 100) targets.push(100);
+          for (let i = 1e3; i <= total; i += 1e3) {
+            targets.push(i);
+          }
+        }
+      }
+      targets = [...new Set(targets)].sort((a, b) => a - b);
+      const matches = await this.db.posts.where("[uploader_id+no]").anyOf(targets.map((no) => [uploaderId, no])).toArray();
+      const missingIds = [];
+      matches.forEach((p) => {
+        const isSafe = p.rating === "s" || p.rating === "g";
+        const shouldFetch = isNsfwEnabled || isSafe;
+        if (shouldFetch && (!p.variants || p.variants.length === 0)) {
+          missingIds.push(p.id);
+        }
+      });
+      if (missingIds.length > 0) {
+        try {
+          const chunkSize = 100;
+          for (let i = 0; i < missingIds.length; i += chunkSize) {
+            const chunk = missingIds.slice(i, i + chunkSize);
+            const idsStr = chunk.join(",");
+            const url = `${this.baseUrl}/posts.json?tags=id:${idsStr}&limit=100&only=id,variants,rating,preview_file_url`;
+            const res = await this.rateLimiter.fetch(url);
+            if (res.ok) {
+              const fetchedItems = await res.json();
+              fetchedItems.forEach((item) => {
+                const local = matches.find((m) => m["id"] === item["id"]);
+                if (local) {
+                  local.variants = item.variants;
+                  local.preview_file_url = item.preview_file_url;
+                  local.rating = item.rating;
+                  this.db.posts.update(local.id, {
+                    variants: item.variants,
+                    preview_file_url: item.preview_file_url,
+                    rating: item.rating
+                  }).catch((e) => console.error("Failed to update post", local["id"], e));
+                }
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("[Danbooru Grass] Failed to fetch missing milestone thumbnails", e);
+        }
+      }
+      const map = new Map(matches.map((p) => [p.no, p]));
+      const results = [];
+      targets.forEach((t) => {
+        const p = map.get(t);
+        if (p) {
+          let label = `#${t.toLocaleString()}`;
+          if (t >= 1e3 && t % 1e3 === 0) label = `${t / 1e3} k`;
+          const tStr = String(t);
+          if (tStr.length >= 3 && tStr.split("").every((c) => c === tStr[0])) label = tStr;
+          if (t === 1) label = "First";
+          results.push({ type: label, post: p, index: t });
+        }
+      });
+      results.sort((a, b) => a.index - b.index);
+      return results;
+    }
+async getMonthlyStats(userInfo, minDate = null) {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return [];
+      const counts = {};
+      await this.db.posts.where("uploader_id").equals(uploaderId).each((post) => {
+        if (!post["created_at"]) return;
+        const month = post["created_at"].substring(0, 7);
+        counts[month] = (counts[month] || 0) + 1;
+      });
+      let results = [];
+      const keys = Object.keys(counts).sort();
+      if (keys.length > 0) {
+        let startKey = keys[0];
+        const endKey = keys[keys.length - 1];
+        if (minDate) {
+          const mY = minDate.getFullYear();
+          const mM = minDate.getMonth() + 1;
+          const mKey = `${mY}-${String(mM).padStart(2, "0")}`;
+          if (mKey < startKey) startKey = mKey;
+        }
+        let [y, m] = startKey.split("-").map(Number);
+        const [endY, endM] = endKey.split("-").map(Number);
+        while (y < endY || y === endY && m <= endM) {
+          const k = `${y}-${String(m).padStart(2, "0")}`;
+          results.push({
+            date: k,
+            count: counts[k] || 0,
+            label: k
+          });
+          m++;
+          if (m > 12) {
+            m = 1;
+            y++;
+          }
+        }
+      } else {
+        results = [];
+      }
+      return results;
+    }
+
+async getStatusDistribution(userInfo, startDate = null) {
+      if (!userInfo.name) return [];
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const statuses = ["active", "appealed", "banned", "deleted", "flagged", "pending"];
+      const tasks = statuses.map(async (status) => {
+        try {
+          let tagQuery = `user:${normalizedName} status:${status}`;
+          if (startDate) {
+            const dateStr = startDate instanceof Date ? startDate.toISOString().split("T")[0] : startDate;
+            tagQuery += ` date:>=${dateStr}`;
+          }
+          const params = new URLSearchParams({ tags: tagQuery });
+          const url = `/counts/posts.json?${params.toString()}`;
+          const resp = await this.rateLimiter.fetch(url);
+          let count = 0;
+          if (resp.ok) {
+            const data = await resp.json();
+            count = (data && data.counts ? data.counts.posts : data ? data.posts : 0) || 0;
+          }
+          return {
+            name: status,
+            count,
+            label: status.charAt(0).toUpperCase() + status.slice(1)
+          };
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch count for status:${status}`, e);
+          return { name: status, count: 0, label: status.charAt(0).toUpperCase() + status.slice(1) };
+        }
+      });
+      return Promise.all(tasks);
+    }
+async getRatingDistribution(userInfo, startDate = null) {
+      if (!userInfo.name) return [];
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const ratings = ["g", "s", "q", "e"];
+      const labelMap = {
+        "g": "General",
+        "s": "Sensitive",
+        "q": "Questionable",
+        "e": "Explicit"
+      };
+      const tasks = ratings.map(async (rating) => {
+        try {
+          let tagQuery = `user:${normalizedName} rating:${rating}`;
+          if (startDate) {
+            const dateStr = startDate instanceof Date ? startDate.toISOString().split("T")[0] : startDate;
+            tagQuery += ` date:>=${dateStr}`;
+          }
+          const params = new URLSearchParams({
+            tags: tagQuery
+          });
+          const url = `/counts/posts.json?${params.toString()}`;
+          const resp = await this.rateLimiter.fetch(url);
+          if (!resp.ok) return { rating, count: 0, label: labelMap[rating] };
+          const data = await resp.json();
+          const count = (data && data.counts ? data.counts.posts : data ? data.posts : 0) || 0;
+          return {
+            rating,
+            count,
+            label: labelMap[rating]
+          };
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch count for rating:${rating}`, e);
+          return { rating, count: 0, label: labelMap[rating] };
+        }
+      });
+      try {
+        const results = await Promise.all(tasks);
+        return results;
+      } catch (e) {
+        console.error("[Danbooru Grass] Failed to fetch rating distribution", e);
+        return [];
+      }
+    }
+async getTagCloudData(userInfo, categoryId) {
+      if (!userInfo.name) return [];
+      const categoryNames = { 0: "general", 1: "artist", 3: "copyright", 4: "character" };
+      const catName = categoryNames[categoryId] || `cat${categoryId}`;
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = `tag_cloud_${catName}`;
+      if (uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const order = categoryId === 0 ? "Cosine" : "Frequency";
+      const url = `/related_tag.json?commit=Search&search[category]=${categoryId}&search[order]=${order}&search[query]=user:${encodeURIComponent(normalizedName)}`;
+      try {
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+        const queryPostCount = resp.post_count || 0;
+        const items = resp.related_tags.slice(0, 30).map((item) => ({
+          name: item.tag.name.replace(/_/g, " "),
+          tagName: item.tag.name,
+          frequency: item.frequency,
+          count: Math.round(item.frequency * queryPostCount)
+        })).sort((a, b) => b.frequency - a.frequency);
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+        return items;
+      } catch (e) {
+        console.debug("[DI] Failed to fetch tag cloud data", e);
+        return [];
+      }
+    }
+static parseNewGeneralTags(body, targetUser, reportDate) {
+      const results = [];
+      const userLower = targetUser.toLowerCase();
+      const sectionStart = body.indexOf("New General Tags");
+      if (sectionStart === -1) return results;
+      const afterSection = body.slice(sectionStart);
+      const nextSectionMatch = afterSection.slice(20).search(/\bh[45]\.\s/);
+      const sectionBody = nextSectionMatch >= 0 ? afterSection.slice(0, nextSectionMatch + 20) : afterSection;
+      const rowRegex = /\[td\]\[\[(.+?)\]\].*?\[\/td\]\s*\[td\](.*?)\[\/td\]/g;
+      let match;
+      while ((match = rowRegex.exec(sectionBody)) !== null) {
+        const tagDisplay = match[1];
+        const updaterCell = match[2];
+        if (updaterCell.toLowerCase().includes(userLower)) {
+          const tagName = tagDisplay.trim().replace(/ /g, "_");
+          results.push({ tagName, reportDate });
+        }
+      }
+      return results;
+    }
+async getCreatedTags(userInfo, onProgress) {
+      if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "created_tags";
+      if (uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const report = onProgress || (() => {
+      });
+      try {
+        const userNames = [userInfo.name];
+        if (uploaderId) {
+          report("Checking previous usernames...");
+          try {
+            const ncUrl = `/user_name_change_requests.json?search[user_id]=${uploaderId}&limit=500`;
+            const ncResp = await this.rateLimiter.fetch(ncUrl).then((r) => r.json());
+            if (Array.isArray(ncResp)) {
+              for (const nc of ncResp) {
+                if (nc.original_name && !userNames.includes(nc.original_name)) {
+                  userNames.push(nc.original_name);
+                }
+              }
+            }
+          } catch {
+          }
+        }
+        const rawTags = [];
+        const seenTags = new Set();
+        for (let ni = 0; ni < userNames.length; ni++) {
+          const name = userNames[ni];
+          report(`Searching reports for ${name}... (${ni + 1}/${userNames.length})`);
+          const searchQuery = `tag report ${name}`;
+          const url = `/forum_posts.json?search[body_matches]=${encodeURIComponent(searchQuery)}&limit=500`;
+          const posts = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (!Array.isArray(posts)) continue;
+          for (const post of posts) {
+            const body = post.body || "";
+            const dateMatch = body.match(/Daily Report \((\d{4}-\d{2}-\d{2})\)/);
+            const reportDate = dateMatch ? dateMatch[1] : (post.created_at || "").slice(0, 10);
+            const parsed = AnalyticsDataManager.parseNewGeneralTags(body, name, reportDate);
+            for (const tag of parsed) {
+              if (!seenTags.has(tag.tagName)) {
+                seenTags.add(tag.tagName);
+                rawTags.push(tag);
+              }
+            }
+          }
+        }
+        if (rawTags.length === 0) return [];
+        report(`Found ${rawTags.length} tags. Fetching current status...`);
+        const tagNames = rawTags.map((t) => t.tagName);
+        const tagStatusMap = new Map();
+        for (let i = 0; i < tagNames.length; i += 100) {
+          const batch = tagNames.slice(i, i + 100);
+          report(`Fetching tag status... (${Math.min(i + 100, tagNames.length)}/${tagNames.length})`);
+          const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(","))}&only=name,post_count,is_deprecated&limit=500`;
+          const tagsResp = await this.rateLimiter.fetch(tagsUrl).then((r) => r.json());
+          if (Array.isArray(tagsResp)) {
+            for (const t of tagsResp) {
+              tagStatusMap.set(t.name, {
+                postCount: t.post_count || 0,
+                isDeprecated: t.is_deprecated || false
+              });
+            }
+          }
+        }
+        const emptyTagNames = tagNames.filter((name) => {
+          const status = tagStatusMap.get(name);
+          return !status || status.postCount === 0;
+        });
+        report(`Checking aliases for ${emptyTagNames.length} empty tags...`);
+        const aliasMap = new Map();
+        let aliasChecked = 0;
+        await this.mapConcurrent(emptyTagNames, 5, async (name) => {
+          try {
+            const aliasUrl = `/tag_aliases.json?search[antecedent_name]=${encodeURIComponent(name)}&search[status]=active&limit=1`;
+            const aliasResp = await this.rateLimiter.fetch(aliasUrl).then((r) => r.json());
+            if (Array.isArray(aliasResp) && aliasResp.length > 0) {
+              aliasMap.set(name, aliasResp[0].consequent_name);
+            }
+          } catch {
+          }
+          aliasChecked++;
+          if (aliasChecked % 10 === 0 || aliasChecked === emptyTagNames.length) {
+            report(`Checking aliases... (${aliasChecked}/${emptyTagNames.length})`);
+          }
+          return null;
+        });
+        const aliasedNames = Array.from(aliasMap.values());
+        const aliasPostCounts = new Map();
+        if (aliasedNames.length > 0) {
+          report(`Fetching aliased tag counts...`);
+          for (let i = 0; i < aliasedNames.length; i += 100) {
+            const batch = aliasedNames.slice(i, i + 100);
+            const tagsUrl = `/tags.json?search[name_comma]=${encodeURIComponent(batch.join(","))}&only=name,post_count&limit=500`;
+            const tagsResp = await this.rateLimiter.fetch(tagsUrl).then((r) => r.json());
+            if (Array.isArray(tagsResp)) {
+              for (const t of tagsResp) {
+                aliasPostCounts.set(t.name, t.post_count || 0);
+              }
+            }
+          }
+        }
+        report("Finalizing...");
+        const items = rawTags.map((raw) => {
+          const status = tagStatusMap.get(raw.tagName);
+          const alias = aliasMap.get(raw.tagName) || null;
+          const postCount = alias ? aliasPostCounts.get(alias) ?? 0 : status?.postCount ?? 0;
+          return {
+            tagName: raw.tagName,
+            displayName: raw.tagName.replace(/_/g, " "),
+            postCount,
+            isDeprecated: status?.isDeprecated ?? false,
+            aliasedTo: alias,
+            reportDate: raw.reportDate
+          };
+        });
+        items.sort((a, b) => b.postCount - a.postCount);
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, items);
+        return items;
+      } catch (e) {
+        console.debug("[DI] Failed to fetch created tags", e);
+        return [];
+      }
+    }
+async getCharacterDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Character Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "character_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const url = `/related_tag.json?commit=Search&search[category]=4&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
+      try {
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+        const tags = resp.related_tags;
+        const itemsToProcess = tags.slice(0, 10);
+        const top10 = itemsToProcess.map((item) => ({
+          name: item.tag.name.replace(/_/g, " "),
+          tagName: item.tag.name,
+          count: 0,
+          frequency: item.frequency,
+          thumb: null,
+          isOther: false,
+          _item: item
+        }));
+        await this.mapConcurrent(top10, 3, async (obj) => {
+          const tagName = obj.tagName;
+          if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+          try {
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
+            const countResp = await this.rateLimiter.fetch(countUrl).then((r) => r.json());
+            const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+            obj.count = c || obj._item.tag.post_count;
+          } catch (_e) {
+            console.debug("[DI] Failed to fetch user tag count", _e);
+          }
+          delete obj._item;
+        });
+        const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+        const otherFreq = 1 - sumFreq;
+        if (otherFreq > 1e-3) {
+          top10.push({
+            name: "Others",
+            tagName: "",
+            count: 0,
+            frequency: otherFreq,
+            thumb: "",
+            isOther: true
+          });
+        }
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+        await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+        return top10;
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch character distribution", e);
+        return [];
+      }
+    }
+async getCopyrightDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Copyright Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "copyright_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=user:${encodeURIComponent(normalizedName)}`;
+      try {
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+        let tags = resp.related_tags;
+        const candidates = tags.slice(0, 20);
+        const filteredResults = await this.mapConcurrent(
+          candidates,
+          2,
+          async (item) => await isTopLevelTag(this.rateLimiter, item.tag.name) ? item : null
+        );
+        const filtered = filteredResults.filter((item) => item !== null);
+        const top10 = filtered.slice(0, 10).map((item) => ({
+          name: item.tag.name.replace(/_/g, " "),
+          tagName: item.tag.name,
+          count: 0,
+          frequency: item.frequency,
+          thumb: null,
+          isOther: false,
+          _item: item
+        }));
+        await this.mapConcurrent(top10, 3, async (obj) => {
+          const tagName = obj.tagName;
+          if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+          try {
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`user:${normalizedName} ${tagName}`)}`;
+            const countResp = await this.rateLimiter.fetch(countUrl).then((r) => r.json());
+            const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+            obj.count = c || obj._item.tag.post_count;
+          } catch (_e) {
+            console.debug("[DI] Failed to fetch user tag count", _e);
+          }
+          delete obj._item;
+        });
+        const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+        const otherFreq = 1 - sumFreq;
+        if (otherFreq > 1e-3) {
+          top10.push({
+            name: "Others",
+            tagName: "",
+            count: 0,
+            frequency: otherFreq,
+            thumb: "",
+            isOther: true
+          });
+        }
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+        await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+        return top10;
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch copyright distribution", e);
+        return [];
+      }
+    }
+async mapConcurrent(items, concurrency, fn, delayMs = 50) {
+      const results = new Array(items.length);
+      let index = 0;
+      const next = async () => {
+        while (index < items.length) {
+          const i = index++;
+          results[i] = await fn(items[i]);
+          if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+        }
+      };
+      await Promise.all(Array.from({ length: concurrency }, next));
+      return results;
+    }
+async getFavCopyrightDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "fav_copyright_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const url = `/related_tag.json?commit=Search&search[category]=3&search[order]=Frequency&search[query]=ordfav:${encodeURIComponent(normalizedName)}`;
+      try {
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return [];
+        let tags = resp.related_tags;
+        const candidates = tags.slice(0, 20);
+        const filteredResults = await this.mapConcurrent(candidates, 2, async (item) => {
+          const tagName = item.tag.name;
+          const impUrl = `/tag_implications.json?search[antecedent_name_matches]=${encodeURIComponent(tagName)}`;
+          try {
+            const imps = await this.rateLimiter.fetch(impUrl).then((r) => r.json());
+            if (Array.isArray(imps) && imps.length > 0) return null;
+            return item;
+          } catch (e) {
+            return item;
+          }
+        });
+        const filtered = filteredResults.filter((item) => item !== null);
+        const top10 = filtered.slice(0, 10).map((item) => {
+          const tagName = item.tag.name;
+          const displayName = tagName.replace(/_/g, " ");
+          return {
+            name: displayName,
+            tagName,
+            count: 0,
+frequency: item.frequency,
+            thumb: null,
+isOther: false,
+            _item: item
+};
+        });
+        await this.mapConcurrent(top10, 3, async (obj) => {
+          const tagName = obj.tagName;
+          if (reportSubStatus) reportSubStatus(`Fetching Count: ${obj.name}`);
+          try {
+            const countUrl = `/counts/posts.json?tags=${encodeURIComponent(`fav:${normalizedName} ${tagName}`)}`;
+            const countResp = await this.rateLimiter.fetch(countUrl).then((r) => r.json());
+            const c = countResp.counts && countResp.counts.posts ? countResp.counts.posts : 0;
+            obj.count = c;
+          } catch (e) {
+            console.warn("[Danbooru Grass] Count fetch failed", e);
+          }
+          delete obj._item;
+        });
+        const sumFreq = top10.reduce((acc, curr) => acc + curr.frequency, 0);
+        const otherFreq = 1 - sumFreq;
+        if (otherFreq > 1e-3) {
+          top10.push({
+            name: "Others",
+            tagName: "",
+            count: 0,
+            frequency: otherFreq,
+            thumb: "",
+            isOther: true
+          });
+        }
+        if (uploaderId) await this.saveStats(cacheKey, uploaderId, top10);
+        await this.enrichThumbnails(cacheKey, uploaderId, top10, userInfo, reportSubStatus);
+        return top10;
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch fav copyright distribution", e);
+        return [];
+      }
+    }
+async getTopPostsByType(userInfo) {
+      if (!userInfo.name) return { g: null, s: null, q: null, e: null };
+      const fetchTop = async (ratingTag, extraQuery = "") => {
+        try {
+          const normalizedName = userInfo.name.replace(/ /g, "_");
+          const query = `user:${normalizedName} order:score rating:${ratingTag} ${extraQuery}`;
+          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (Array.isArray(resp) && resp.length > 0) {
+            return resp[0];
+          }
+        } catch (e2) {
+          console.warn(`[Danbooru Grass] Failed to fetch top post for rating:${ratingTag}`, e2);
+        }
+        return null;
+      };
+      const [g, s, q, e] = await Promise.all([
+        fetchTop("g"),
+        fetchTop("s"),
+        fetchTop("q"),
+        fetchTop("e")
+      ]);
+      return { g, s, q, e };
+    }
+async getRecentPopularPosts(userInfo) {
+      if (!userInfo.name) return { sfw: null, nsfw: null };
+      const fetchTop = async (ratingTag) => {
+        try {
+          const normalizedName = userInfo.name.replace(/ /g, "_");
+          const query = `user:${normalizedName} order:score ${ratingTag} age:<1w`;
+          const url = `/posts.json?tags=${encodeURIComponent(query)}&limit=1&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (Array.isArray(resp) && resp.length > 0) {
+            return resp[0];
+          }
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch recent top post for ${ratingTag}`, e);
+        }
+        return null;
+      };
+      const [sfw, nsfw] = await Promise.all([
+        fetchTop("is:sfw"),
+        fetchTop("is:nsfw")
+      ]);
+      return { sfw, nsfw };
+    }
+async getRandomPosts(userInfo) {
+      if (!userInfo.name) return { sfw: null, nsfw: null };
+      const fetchRandom = async (ratingTag) => {
+        try {
+          const normalizedName = userInfo.name.replace(/ /g, "_");
+          const query = `user:${normalizedName} ${ratingTag}`;
+          const url = `/posts/random.json?tags=${encodeURIComponent(query)}&only=id,preview_file_url,file_url,variants,rating,score,fav_count,created_at,tag_string_artist,tag_string_copyright,tag_string_character`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (resp && resp.id) {
+            return resp;
+          }
+        } catch (e) {
+          console.warn(`[Danbooru Grass] Failed to fetch random post for ${ratingTag}`, e);
+        }
+        return null;
+      };
+      const [sfw, nsfw] = await Promise.all([
+        fetchRandom("is:sfw"),
+        fetchRandom("is:nsfw")
+      ]);
+      return { sfw, nsfw };
+    }
+async getTopScorePost(userInfo, filterMode = "sfw") {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return null;
+      const ratingFilter = filterMode === "sfw" ? (p) => p["rating"] === "g" || p["rating"] === "s" : filterMode === "nsfw" ? (p) => p["rating"] === "q" || p["rating"] === "e" : () => true;
+      const topLocal = await this.db.posts.where("[uploader_id+score]").between([uploaderId, -Infinity], [uploaderId, Infinity]).reverse().filter(ratingFilter).first();
+      if (!topLocal) return null;
+      try {
+        const url = `/posts/${topLocal.id}.json`;
+        const details = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (details && details.id) {
+          return details;
+        }
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch top post details", e);
+      }
+      return topLocal;
+    }
+async getScatterData(userInfo) {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return [];
+      const result = [];
+      await this.db.posts.where("uploader_id").equals(uploaderId).each((post) => {
+        if (!post["created_at"]) return;
+        const d = new Date(post["created_at"]).getTime();
+        const r = post["rating"];
+        const s = post["score"] || 0;
+        const t = post["tag_count_general"] || 0;
+        result.push({ id: post["id"], d, s, t, r });
+      });
+      return result;
+    }
+async fetchPromotionDate(userName) {
+      const history = await this.getPromotionHistory({ name: userName });
+      const targetRoles = ["Approver", "Moderator", "Admin"];
+      const promoEvent = history.find((h) => targetRoles.some((r) => h.role.includes(r)));
+      if (promoEvent) {
+        return promoEvent.date.toISOString().slice(0, 10);
+      }
+      return null;
+    }
+async getPromotionHistory(userInfo) {
+      if (!userInfo.name) return [];
+      try {
+        const normalizedName = userInfo.name.replace(/ /g, "_");
+        const url = `/user_feedbacks.json?commit=Search&search%5Bbody_matches%5D=promoted&search%5Buser_name%5D=${encodeURIComponent(normalizedName)}`;
+        const feedbacks = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (!Array.isArray(feedbacks)) return [];
+        return feedbacks.map((f) => {
+          const match = f.body.match(/promoted to a (.+?) level/i);
+          const role = match ? match[1] : "Unknown";
+          return {
+            date: new Date(f.created_at),
+            role,
+            rawBody: f.body
+          };
+        }).filter((item) => item.role !== "Unknown").sort((a, b) => a.date - b.date);
+      } catch (e) {
+        console.error("[Danbooru Grass] Failed to fetch promotions", e);
+        return [];
+      }
+    }
+async getLevelChangeHistory(userInfo) {
+      if (!userInfo.name) return [];
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const LEVEL_HIERARCHY = [
+        "Restricted",
+        "Member",
+        "Gold",
+        "Platinum",
+        "Builder",
+        "Contributor",
+        "Janitor",
+        "Approver",
+        "Moderator",
+        "Admin",
+        "Owner"
+      ];
+      const levelRank = new Map(LEVEL_HIERARCHY.map((l, i) => [l.toLowerCase(), i]));
+      const parse = (body) => {
+        const found = [];
+        const bodyLower = body.toLowerCase();
+        for (const level of LEVEL_HIERARCHY) {
+          if (bodyLower.includes(level.toLowerCase()) && !found.includes(level)) {
+            found.push(level);
+          }
+        }
+        if (found.length < 2) return null;
+        const isPromotion = /promot/i.test(body);
+        const sorted = found.slice(0, 2).sort(
+          (a, b) => (levelRank.get(a.toLowerCase()) ?? 0) - (levelRank.get(b.toLowerCase()) ?? 0)
+        );
+        const [lower, higher] = sorted;
+        return isPromotion ? { fromLevel: lower, toLevel: higher, isPromotion: true } : { fromLevel: higher, toLevel: lower, isPromotion: false };
+      };
+      try {
+        const base = `/user_feedbacks.json?commit=Search&search[category]=neutral&search[user_name]=${encodeURIComponent(normalizedName)}`;
+        const [promoted, demoted] = await Promise.all([
+          this.rateLimiter.fetch(`${base}&search[body_matches]=promoted+to+from`).then((r) => r.json()),
+          this.rateLimiter.fetch(`${base}&search[body_matches]=demoted+to+from`).then((r) => r.json())
+        ]);
+        const all = [
+          ...Array.isArray(promoted) ? promoted : [],
+          ...Array.isArray(demoted) ? demoted : []
+        ];
+        const events = [];
+        for (const fb of all) {
+          const body = fb.body || "";
+          const parsed = parse(body);
+          if (!parsed) continue;
+          events.push({
+            date: new Date(fb.created_at),
+            fromLevel: parsed.fromLevel,
+            toLevel: parsed.toLevel,
+            isPromotion: parsed.isPromotion
+          });
+        }
+        events.sort((a, b) => a.date.getTime() - b.date.getTime());
+        const seen = new Set();
+        return events.filter((e) => {
+          const key = `${e.date.getTime()}-${e.fromLevel}-${e.toLevel}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      } catch (e) {
+        console.warn("[Danbooru Grass] Failed to fetch level change history", e);
+        return [];
+      }
+    }
+async getTimelineMilestones(userInfo) {
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (!uploaderId) return [];
+      const total = await this.db.posts.where("uploader_id").equals(uploaderId).count();
+      if (total === 0) return [];
+      const targets = [];
+      if (total >= 100) targets.push(100);
+      if (total >= 1e3) targets.push(1e3);
+      for (let i = 1e4; i <= total; i += 1e4) targets.push(i);
+      if (targets.length === 0) return [];
+      const matches = await this.db.posts.where("[uploader_id+no]").anyOf(targets.map((no) => [uploaderId, no])).toArray();
+      const map = new Map(matches.map((p) => [p.no, p]));
+      return targets.map((t) => {
+        const p = map.get(t);
+        if (!p || !p.created_at) return null;
+        return { index: t, date: new Date(p.created_at) };
+      }).filter(Boolean);
+    }
+async getCommentaryDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Commentary Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "commentary_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const categories = [
+        { name: "Commentary", tagName: "commentary", query: `user:${normalizedName} commentary`, color: "#007bff" },
+        { name: "Requested", tagName: "commentary_request", query: `user:${normalizedName} commentary_request`, color: "#ffc107" },
+        { name: "Untagged", tagName: "untagged_commentary", query: `user:${normalizedName} has:commentary -commentary -commentary_request`, color: "#6c757d" }
+      ];
+      const results = categories.map((cat) => ({
+        name: cat.name,
+        tagName: cat.tagName,
+        count: 0,
+        frequency: 0,
+        thumb: null,
+        isOther: false,
+        color: cat.color
+      }));
+      await this.mapConcurrent(
+        categories.map((cat, i) => ({ ...cat, idx: i })),
+        3,
+        async (item) => {
+          if (reportSubStatus) reportSubStatus(`Fetching Commentary: ${item.name}`);
+          try {
+            const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+            const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+            if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+          } catch (e) {
+            console.debug("[DI] Failed to fetch commentary count", e);
+          }
+        }
+      );
+      const filtered = results.filter((r) => r.count > 0);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      return filtered;
+    }
+async getTranslationDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Translation Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "translation_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const categories = [
+        { name: "Translated", tagName: "translated", query: `user:${normalizedName} translated`, color: "#28a745" },
+        { name: "Requested", tagName: "translation_request", query: `user:${normalizedName} translation_request`, color: "#ffc107" },
+        { name: "Untagged", tagName: "untagged_translation", useInclusionExclusion: true, color: "#6c757d" }
+      ];
+      const results = categories.map((cat) => ({
+        name: cat.name,
+        tagName: cat.tagName,
+        count: 0,
+        frequency: 0,
+        thumb: null,
+        isOther: false,
+        color: cat.color
+      }));
+      const fetchCount = async (query) => {
+        try {
+          const url = `/counts/posts.json?tags=${encodeURIComponent(query)}`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          return resp?.counts?.posts ?? 0;
+        } catch {
+          return 0;
+        }
+      };
+      await this.mapConcurrent(
+        categories.map((cat, i) => ({ ...cat, idx: i })),
+        3,
+        async (item) => {
+          if (reportSubStatus) reportSubStatus(`Fetching Translation: ${item.name}`);
+          try {
+            if (item.useInclusionExclusion) {
+              const q = buildUntaggedTranslationQueries(normalizedName);
+              const [t, a, b, c, ab, ac] = await Promise.all([
+                fetchCount(q.t),
+                fetchCount(q.a),
+                fetchCount(q.b),
+                fetchCount(q.c),
+                fetchCount(q.ab),
+                fetchCount(q.ac)
+              ]);
+              results[item.idx].count = computeUntaggedTranslation({ t, a, b, c, ab, ac });
+              fetchCount(q.bc).then((bc) => {
+                const ratio = bc / Math.max(1, t);
+                if (ratio > 5e-3) {
+                  console.warn(
+                    `[DI] Assumption-1 violation for user:${normalizedName}: |R∩TR|/|T| = ${(ratio * 100).toFixed(2)}% (threshold 0.5%, bc=${bc}, t=${t})`
+                  );
+                }
+              }).catch(() => {
+              });
+            } else if (item.query) {
+              const count = await fetchCount(item.query);
+              if (count > 0) results[item.idx].count = count;
+            }
+          } catch (e) {
+            console.debug("[DI] Failed to fetch translation count", e);
+          }
+        }
+      );
+      const filtered = results.filter((r) => r.count > 0);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      return filtered;
+    }
+async getGenderDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Gender Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "gender_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const genderCategories = [
+        {
+          name: "Girl",
+          tagName: "girl",
+          originalTag: "~1girl ~2girls ~3girls ~4girls ~5girls ~6+girls",
+          subQueries: ["1girl", "2girls", "3girls", "4girls", "5girls", "6+girls"].map(
+            (tag) => `user:${normalizedName} ${tag}`
+          ),
+          color: "#e91e63"
+        },
+        {
+          name: "Boy",
+          tagName: "boy",
+          originalTag: "~1boy ~2boys ~3boys ~4boys ~5boys ~6+boys",
+          subQueries: ["1boy", "2boys", "3boys", "4boys", "5boys", "6+boys"].map(
+            (tag) => `user:${normalizedName} ${tag}`
+          ),
+          color: "#2196f3"
+        },
+        {
+          name: "Other",
+          tagName: "other",
+          originalTag: "~1other ~2others ~3others ~4others ~5others ~6+others",
+          subQueries: ["1other", "2others", "3others", "4others", "5others", "6+others"].map(
+            (tag) => `user:${normalizedName} ${tag}`
+          ),
+          color: "#9c27b0"
+        },
+        {
+          name: "No Humans",
+          tagName: "no_humans",
+          query: `user:${normalizedName} no_humans`,
+          color: "#607d8b"
+        }
+      ];
+      const results = genderCategories.map((cat) => ({
+        name: cat.name,
+        tagName: cat.tagName,
+        originalTag: cat.originalTag,
+        count: 0,
+        frequency: 0,
+        thumb: null,
+        isOther: false,
+        color: cat.color
+      }));
+      await this.mapConcurrent(
+        genderCategories.map((cat, i) => ({ ...cat, idx: i })),
+        3,
+        async (item) => {
+          if (reportSubStatus) reportSubStatus(`Fetching Gender: ${item.name}`);
+          try {
+            if (item.subQueries) {
+              const counts = await Promise.all(
+                item.subQueries.map(async (q) => {
+                  try {
+                    const url = `/counts/posts.json?tags=${encodeURIComponent(q)}`;
+                    const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+                    return resp?.counts?.posts ?? 0;
+                  } catch {
+                    return 0;
+                  }
+                })
+              );
+              results[item.idx].count = counts.reduce((sum, n) => sum + n, 0);
+            } else if (item.query) {
+              const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+              const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+              if (resp && resp.counts && typeof resp.counts.posts === "number") {
+                results[item.idx].count = resp.counts.posts;
+              }
+            }
+          } catch (e) {
+            console.debug("[DI] Failed to fetch gender count", e);
+          }
+        }
+      );
+      const filtered = results.filter((r) => r.count > 0);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      return filtered;
+    }
+async getBreastsDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Breasts Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "breasts_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const breastTags = [
+        "flat_chest",
+        "small_breasts",
+        "medium_breasts",
+        "large_breasts",
+        "huge_breasts",
+        "gigantic_breasts"
+      ];
+      const results = breastTags.map((tag) => ({
+        name: tag.split("_").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" "),
+        tagName: tag,
+        count: 0,
+        frequency: 0,
+        thumb: null,
+        isOther: false
+      }));
+      await this.mapConcurrent(results, 3, async (obj) => {
+        const tag = obj.tagName;
+        if (reportSubStatus) reportSubStatus(`Fetching Breasts: ${obj.name}`);
+        try {
+          const uniqueTag = `user:${normalizedName} ${tag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          let count = 0;
+          if (resp && resp.counts && typeof resp.counts.posts === "number") {
+            count = resp.counts.posts;
+          }
+          obj.count = count;
+        } catch (e) {
+          console.debug("[DI] Failed to fetch breasts count", e);
+        }
+      });
+      const filtered = results.filter((r) => r.count > 0).sort((a, b) => b.count - a.count);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+      return filtered;
+    }
+async getHairLengthDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Length Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "hair_length_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const hairLengthTags = [
+        "~bald ~bald_female",
+        "very_short_hair",
+        "short_hair",
+        "medium_hair",
+        "long_hair",
+        "very_long_hair",
+        "absurdly_long_hair"
+      ];
+      const results = hairLengthTags.map((tag) => {
+        let label = tag;
+        if (tag.includes("~bald")) label = "Bald";
+        else label = tag.split("_").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
+        return {
+          name: label,
+          count: 0,
+          frequency: 0,
+          originalTag: tag,
+          thumb: null,
+          isOther: false
+        };
+      });
+      await this.mapConcurrent(results, 3, async (obj) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Hair Length: ${obj.name}`);
+        try {
+          const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (resp && resp.counts && typeof resp.counts.posts === "number") {
+            obj.count = resp.counts.posts;
+          }
+        } catch (e) {
+          console.debug("[DI] Failed to fetch count", e);
+        }
+      });
+      const filtered = results.filter((r) => r.count > 0).sort((a, b) => b.count - a.count);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+      return filtered;
+    }
+async getHairColorDistribution(userInfo, forceRefresh = false, reportSubStatus = null) {
+      if (!userInfo.name) return [];
+      if (reportSubStatus) reportSubStatus(`Fetching Hair Color Distribution...`);
+      const uploaderId = parseInt(userInfo.id || "0");
+      const cacheKey = "hair_color_dist";
+      if (!forceRefresh && uploaderId) {
+        const cached = await this.getStats(cacheKey, uploaderId);
+        if (cached) return cached;
+      }
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const hairColorMap = [
+        { tag: "black_hair", color: "#000000" },
+        { tag: "brown_hair", color: "#A52A2A" },
+        { tag: "blonde_hair", color: "#FFD700" },
+        { tag: "red_hair", color: "#FF0000" },
+        { tag: "orange_hair", color: "#FFA500" },
+        { tag: "pink_hair", color: "#FFC0CB" },
+        { tag: "purple_hair", color: "#800080" },
+        { tag: "green_hair", color: "#008000" },
+        { tag: "blue_hair", color: "#0000FF" },
+        { tag: "aqua_hair", color: "#00FFFF" },
+        { tag: "grey_hair", color: "#808080" },
+        { tag: "white_hair", color: "#FFFFFF" }
+      ];
+      const results = hairColorMap.map((item) => ({
+        name: item.tag.split("_")[0].charAt(0).toUpperCase() + item.tag.split("_")[0].slice(1) + " Hair",
+        count: 0,
+        frequency: 0,
+        color: item.color,
+        originalTag: item.tag,
+        thumb: null,
+        isOther: false
+      }));
+      await this.mapConcurrent(results, 3, async (obj) => {
+        if (reportSubStatus) reportSubStatus(`Fetching Hair Color: ${obj.name}`);
+        try {
+          const uniqueTag = `user:${normalizedName} ${obj.originalTag}`;
+          const url = `/counts/posts.json?tags=${encodeURIComponent(uniqueTag)}`;
+          const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (resp && resp.counts && typeof resp.counts.posts === "number") {
+            obj.count = resp.counts.posts;
+          }
+        } catch (e) {
+          console.debug("[DI] Failed to fetch count", e);
+        }
+      });
+      const filtered = results.filter((r) => r.count > 0).sort((a, b) => b.count - a.count);
+      if (uploaderId) await this.saveStats(cacheKey, uploaderId, filtered);
+      await this.enrichThumbnails(cacheKey, uploaderId, filtered, userInfo, reportSubStatus);
+      return filtered;
+    }
+    async enrichThumbnails(cacheKey, uploaderId, items, userInfo, _statusCallback = null) {
+      let hasUpdates = false;
+      const normalizedName = userInfo.name.replace(/ /g, "_");
+      const toFetch = items.filter((i) => !i.isOther && !i.thumb);
+      if (toFetch.length === 0) return;
+      await this.mapConcurrent(toFetch, 2, async (item) => {
+        let tagPart = item.tagName || item.originalTag;
+        if (!tagPart) return;
+        let queryTags;
+        if (cacheKey === "fav_copyright_dist") {
+          queryTags = `fav:${normalizedName} ${tagPart} rating:g order:score`;
+        } else {
+          queryTags = `user:${normalizedName} ${tagPart} order:score rating:g`;
+        }
+        const thumb = await this.fetchThumbnailWithRetry(queryTags);
+        if (thumb) {
+          item.thumb = thumb;
+          hasUpdates = true;
+        }
+      });
+      if (hasUpdates && uploaderId) {
+        await this.saveStats(cacheKey, uploaderId, items);
+        window.dispatchEvent(new CustomEvent("DanbooruInsights:DataUpdated", {
+          detail: { contentType: cacheKey, userId: uploaderId, data: items }
+        }));
+      }
+    }
+async getTotalPostCount(userInfo) {
+      if (!userInfo.name) return 0;
+      try {
+        const normalizedName = userInfo.name.replace(/ /g, "_");
+        const countUrl = `/counts/posts.json?tags=user:${encodeURIComponent(normalizedName)}`;
+        const countData = await this.rateLimiter.fetch(countUrl).then((r) => r.json());
+        if (countData && typeof countData.counts === "object" && typeof countData.counts.posts === "number") {
+          return countData.counts.posts;
+        }
+      } catch (e) {
+        console.warn("[Danbooru Grass] Counts API failed:", e);
+      }
+      try {
+        const profileUrl = `/users/${userInfo.id}.json`;
+        const profile = await this.rateLimiter.fetch(profileUrl).then((r) => r.json());
+        if (profile && typeof profile.post_upload_count === "number") {
+          return profile.post_upload_count;
+        }
+      } catch (_e2) {
+        console.debug("[DI] Failed to fetch user profile", _e2);
+      }
+      try {
+        const statsLink = document.querySelector(
+          "#danbooru-grass-wrapper > div:nth-child(1) > table > tbody > tr:nth-child(6) > td > a:nth-child(1)"
+        );
+        if (statsLink) {
+          return parseInt((statsLink.textContent ?? "").replace(/,/g, ""), 10);
+        }
+      } catch (_e3) {
+        console.debug("[DI] Failed to parse DOM stats", _e3);
+      }
+      return 0;
+    }
+async syncAllPosts(userInfo, onProgress) {
+      if (!userInfo.id) {
+        console.error("User ID required for sync");
+        return;
+      }
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      if (AnalyticsDataManager.isGlobalSyncing) {
+        console.warn("[Danbooru Grass] Sync already in progress.");
+        return;
+      }
+      AnalyticsDataManager.isGlobalSyncing = true;
+      AnalyticsDataManager.syncProgress = { current: 0, total: 0, message: "" };
+      AnalyticsDataManager.onProgressCallback = onProgress;
+      const reportProgress = (c, t, msg = "") => {
+        AnalyticsDataManager.syncProgress = { current: c, total: t, message: msg };
+        if (AnalyticsDataManager.onProgressCallback) {
+          AnalyticsDataManager.onProgressCallback(c, t, msg);
+        }
+        if (onProgress) onProgress(c, t, msg);
+      };
+      try {
+        let total = await this.getTotalPostCount(userInfo);
+        const newestArr = await this.db.posts.where("uploader_id").equals(uploaderId).reverse().limit(1).toArray();
+        let startId = 0;
+        if (newestArr.length > 0) {
+          const newest = newestArr[0];
+          const newestDate = new Date(newest.created_at);
+          const cutOffDate = new Date(newestDate);
+          cutOffDate.setMonth(cutOffDate.getMonth() - 1);
+          let cutOffFound = false;
+          await this.db.posts.where("uploader_id").equals(uploaderId).reverse().until(() => cutOffFound).each((p) => {
+            if (new Date(p["created_at"]) < cutOffDate) {
+              startId = p["id"];
+              cutOffFound = true;
+            }
+          });
+        }
+        let currentNo = 0;
+        if (startId > 0) {
+          currentNo = await this.db.posts.where("uploader_id").equals(uploaderId).filter((p) => p["id"] <= startId).count();
+        } else {
+        }
+        if (startId === 0 && total > 0 && currentNo >= total) {
+          reportProgress(currentNo, total);
+          return;
+        }
+        const limit = 200;
+        let pageOffset = 1;
+        const MAX_CONCURRENCY = 5;
+        const WORKER_DELAY = 400;
+        let hasMore = true;
+        const buffer = new Map();
+        let nextExpectedPage = 1;
+        const worker = async (workerId) => {
+          if (workerId > 0) await new Promise((r) => setTimeout(r, workerId * 200));
+          while (hasMore) {
+            const currentPage = pageOffset++;
+            try {
+              const params = {
+                limit,
+                page: currentPage,
+                "tags": `user:${userInfo.name.replace(/ /g, "_")} order:id id:>${startId}`,
+                "only": "id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url"
+              };
+              const q = new URLSearchParams(params);
+              const url = `/posts.json?${q.toString()}`;
+              const pending = buffer.size;
+              reportProgress(currentNo, total, `Fetching Page ${currentPage} (Pending: ${pending})...`);
+              let items = null;
+              let attempts = 0;
+              while (attempts < 3) {
+                try {
+                  const controller = new AbortController();
+                  const timeoutId = setTimeout(() => controller.abort(), 3e4);
+                  const fetchResp = await this.rateLimiter.fetch(url, { signal: controller.signal });
+                  clearTimeout(timeoutId);
+                  if (!fetchResp.ok) throw new Error(`HTTP ${fetchResp.status}`);
+                  items = await fetchResp.json();
+                  break;
+                } catch (err) {
+                  attempts++;
+                  const errMsg = err instanceof Error ? err.message : String(err);
+                  const isServerErr = errMsg.includes("500") || errMsg.includes("502") || errMsg.includes("503") || errMsg.includes("504");
+                  console.warn(`[Worker ${workerId}] Page ${currentPage} attempt ${attempts} failed: ${errMsg}`);
+                  if (attempts >= 3 || !isServerErr) throw err;
+                  await new Promise((r) => setTimeout(r, 1e3 * Math.pow(2, attempts - 1)));
+                }
+              }
+              if (!items || items.length === 0) {
+                hasMore = false;
+                return;
+              }
+              buffer.set(currentPage, items);
+              while (buffer.has(nextExpectedPage)) {
+                const batchItems = buffer.get(nextExpectedPage);
+                buffer.delete(nextExpectedPage);
+                if (batchItems && batchItems.length > 0) {
+                  const bulkData = batchItems.map((p) => ({
+                    id: p.id,
+                    uploader_id: p.uploader_id,
+                    created_at: p.created_at,
+                    score: p.score,
+                    rating: p.rating,
+                    tag_count_general: p.tag_count_general,
+                    variants: p.variants,
+                    preview_file_url: p.preview_file_url,
+                    no: ++currentNo
+                  }));
+                  await this.db.posts.bulkPut(bulkData);
+                  reportProgress(currentNo, total > currentNo ? total : currentNo);
+                }
+                nextExpectedPage++;
+              }
+            } catch (e) {
+              console.error(`[Worker ${workerId}] Page ${currentPage} failed`, e);
+              hasMore = false;
+            }
+            if (hasMore) {
+              await new Promise((r) => setTimeout(r, WORKER_DELAY));
+            }
+          }
+        };
+        const workers = [];
+        for (let i = 0; i < MAX_CONCURRENCY; i++) {
+          workers.push(worker(i));
+        }
+        await Promise.all(workers);
+        const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+        localStorage.setItem(lastSyncKey, ( new Date()).toISOString());
+        await this.cleanupStaleData(userInfo.id);
+        reportProgress(total, total, "PREPARING");
+        await this.refreshAllStats(userInfo, startId === 0);
+      } finally {
+        AnalyticsDataManager.isGlobalSyncing = false;
+        AnalyticsDataManager.onProgressCallback = null;
+      }
+    }
+async quickSyncAllPosts(userInfo, onProgress) {
+      if (!userInfo.id || !userInfo.name) return;
+      if (AnalyticsDataManager.isGlobalSyncing) {
+        console.warn("[Danbooru Grass] Sync already in progress.");
+        return;
+      }
+      AnalyticsDataManager.isGlobalSyncing = true;
+      AnalyticsDataManager.syncProgress = { current: 0, total: 0, message: "" };
+      AnalyticsDataManager.onProgressCallback = onProgress || null;
+      const reportProgress = (c, t, msg = "") => {
+        AnalyticsDataManager.syncProgress = { current: c, total: t, message: msg };
+        if (AnalyticsDataManager.onProgressCallback) {
+          AnalyticsDataManager.onProgressCallback(c, t, msg);
+        }
+        if (onProgress) onProgress(c, t, msg);
+      };
+      try {
+        const uploaderId = parseInt(userInfo.id ?? "0");
+        const normalizedName = userInfo.name.replace(/ /g, "_");
+        const total = await this.getTotalPostCount(userInfo);
+        reportProgress(0, total, "Fetching posts...");
+        await this.db.posts.where("uploader_id").equals(uploaderId).delete();
+        const limit = 200;
+        let page = "a0";
+        let hasMore = true;
+        let no = 0;
+        while (hasMore) {
+          const params = new URLSearchParams({
+            tags: `user:${normalizedName}`,
+            limit: String(limit),
+            page,
+            only: "id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url"
+          });
+          const url = `/posts.json?${params.toString()}`;
+          reportProgress(no, total, `Fetching posts (${no}/${total})...`);
+          let batch = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (!Array.isArray(batch) || batch.length === 0) {
+            hasMore = false;
+            break;
+          }
+          if (batch.length > 1 && batch[0].id > batch[batch.length - 1].id) {
+            batch.reverse();
+          }
+          const bulkData = batch.map((p) => ({
+            id: p.id,
+            uploader_id: p.uploader_id,
+            created_at: p.created_at,
+            score: p.score,
+            rating: p.rating,
+            tag_count_general: p.tag_count_general,
+            variants: p.variants,
+            preview_file_url: p.preview_file_url,
+            no: ++no
+          }));
+          await this.db.posts.bulkPut(bulkData);
+          reportProgress(no, total);
+          if (batch.length < limit) {
+            hasMore = false;
+          } else {
+            page = `a${batch[batch.length - 1].id}`;
+          }
+        }
+        const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+        localStorage.setItem(lastSyncKey, ( new Date()).toISOString());
+        await this.cleanupStaleData(userInfo.id);
+        reportProgress(no, no, "PREPARING");
+        await this.refreshAllStats(userInfo, true);
+      } finally {
+        AnalyticsDataManager.isGlobalSyncing = false;
+        AnalyticsDataManager.onProgressCallback = null;
+      }
+    }
+async cleanupStaleData(currentUserId) {
+      const currentId = typeof currentUserId === "number" ? currentUserId : parseInt(currentUserId);
+      const THRESHOLD = CONFIG.ANALYTICS_CLEANUP_THRESHOLD_MS;
+      const now = ( new Date()).getTime();
+      try {
+        const allIds = await this.db.posts.orderBy("uploader_id").uniqueKeys();
+        for (const uid of allIds) {
+          if (uid === currentId) continue;
+          const syncKey = `danbooru_grass_last_sync_${uid}`;
+          const lastSyncStr = localStorage.getItem(syncKey);
+          let shouldDelete = false;
+          if (!lastSyncStr) {
+            shouldDelete = true;
+          } else {
+            const lastDate = new Date(lastSyncStr).getTime();
+            if (now - lastDate > THRESHOLD) {
+              shouldDelete = true;
+            }
+          }
+          if (shouldDelete) {
+            await this.db.posts.where("uploader_id").equals(uid).delete();
+            await this.db.piestats.where("userId").equals(uid).delete();
+            localStorage.removeItem(syncKey);
+          }
+        }
+      } catch (e) {
+        console.warn("[Danbooru Grass] Cleanup failed", e);
+      }
+    }
+async refreshAllStats(userInfo, isFullSync = false) {
+      const forceRefresh = true;
+      try {
+        await Promise.all([
+          this.getRatingDistribution(userInfo),
+          this.getCharacterDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === "function") {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getCopyrightDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === "function") {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getFavCopyrightDistribution(userInfo, forceRefresh),
+          this.getBreastsDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === "function") {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getHairLengthDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === "function") {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+          this.getHairColorDistribution(userInfo, forceRefresh, (msg) => {
+            const { current, total } = AnalyticsDataManager.syncProgress;
+            if (typeof AnalyticsDataManager.onProgressCallback === "function") {
+              AnalyticsDataManager.onProgressCallback(current, total, msg);
+            }
+          }),
+this.getRandomPosts(userInfo),
+...isFullSync ? [
+            this.getTopPostsByType(userInfo),
+            this.getRecentPopularPosts(userInfo),
+            this.getTopScorePost(userInfo, "sfw"),
+            this.getTopScorePost(userInfo, "nsfw")
+          ] : []
+        ]);
+      } catch (e) {
+        console.warn("[Analytics] Failed to refresh stats", e);
+      }
+    }
+async clearUserData(userInfo) {
+      if (!userInfo.id) return;
+      const uploaderId = parseInt(userInfo.id ?? "0");
+      await this.db.posts.where("uploader_id").equals(uploaderId).delete();
+      await this.db.piestats.where("userId").equals(uploaderId).delete();
+      const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
+      localStorage.removeItem(lastSyncKey);
+    }
+  }
+  class UserAnalyticsDataService {
+    db;
+    constructor(db) {
+      this.db = db;
+    }
+async fetchDashboardData(context) {
+      const dataManager = new AnalyticsDataManager(this.db);
+      const user = context.targetUser;
+      const nsfwKey = "danbooru_grass_nsfw_enabled";
+      const isNsfwEnabled = localStorage.getItem(nsfwKey) === "true";
+      const summaryStats = await dataManager.getSummaryStats(user);
+      const { firstUploadDate } = summaryStats;
+      const [
+        stats,
+        total,
+        distributions,
+        topPosts,
+        recentPopularPosts,
+        randomPosts,
+        milestones1k,
+        scatterData,
+        levelChanges,
+        timelineMilestones,
+        tagCloudGeneral
+      ] = await Promise.all([
+        dataManager.getSyncStats(user),
+        dataManager.getTotalPostCount(user),
+        Promise.all([
+          dataManager.getStatusDistribution(user, firstUploadDate),
+          dataManager.getRatingDistribution(user, firstUploadDate),
+dataManager.getCharacterDistribution(user),
+          dataManager.getCopyrightDistribution(user),
+          dataManager.getFavCopyrightDistribution(user),
+          dataManager.getBreastsDistribution(user),
+          dataManager.getHairLengthDistribution(user),
+          dataManager.getHairColorDistribution(user),
+          dataManager.getGenderDistribution(user),
+          dataManager.getCommentaryDistribution(user),
+          dataManager.getTranslationDistribution(user)
+        ]).then(([status, rating, char, copy, favCopy, breasts, hairL, hairC, gender, commentary, translation]) => ({
+          status,
+          rating,
+          character: char,
+          copyright: copy,
+          fav_copyright: favCopy,
+          breasts,
+          hair_length: hairL,
+          hair_color: hairC,
+          gender,
+          commentary,
+          translation
+        })),
+        dataManager.getTopPostsByType(user),
+        dataManager.getRecentPopularPosts(user),
+        dataManager.getRandomPosts(user),
+        dataManager.getMilestones(user, isNsfwEnabled, 1e3),
+        dataManager.getScatterData(user),
+        dataManager.getLevelChangeHistory(user),
+        dataManager.getTimelineMilestones(user),
+        dataManager.getTagCloudData(user, 0)
+]);
+      return {
+        stats,
+        total,
+        summaryStats,
+        distributions,
+        topPosts,
+        recentPopularPosts,
+        randomPosts,
+        milestones1k,
+        scatterData,
+        levelChanges,
+        timelineMilestones,
+        tagCloudGeneral
+      };
+    }
+  }
+  function renderPieWidget(container, distributions, initialNsfwEnabled, dataManager, context, firstUploadDate) {
+    const pieData = { ...distributions };
+    let currentPieTab = "copyright";
+    let renderPending = false;
+    let isNsfwEnabled = initialNsfwEnabled;
+    for (const key of ["breasts", "gender", "commentary", "translation"]) {
+      if (pieData[key]) {
+        const data = pieData[key];
+        const total = data.reduce((acc, c) => acc + c.count, 0);
+        pieData[key] = data.map((d) => ({
+          ...d,
+          frequency: total > 0 ? d.count / total : 0,
+          value: total > 0 ? d.count / total : 0,
+          label: d.name,
+          details: { ...d, thumb: null }
+        }));
+      }
+    }
+    const requestRender = () => {
+      if (renderPending) return;
+      renderPending = true;
+      requestAnimationFrame(() => {
+        renderPieContent();
+        renderPending = false;
+      });
+    };
+    const onPieDataUpdate = (e) => {
+      if (!document.body.contains(container)) {
+        window.removeEventListener("DanbooruInsights:DataUpdated", onPieDataUpdate);
+        return;
+      }
+      const { contentType, data } = e.detail;
+      const keyMap = {
+        "character_dist": "character",
+        "copyright_dist": "copyright",
+        "fav_copyright_dist": "fav_copyright",
+        "breasts_dist": "breasts",
+        "hair_length_dist": "hair_length",
+        "hair_color_dist": "hair_color",
+        "rating_dist": "rating"
+      };
+      const key = keyMap[contentType];
+      if (key && pieData[key]) {
+        const incomingMap = new Map(data.map((d) => [d.name, d]));
+        const currentData = pieData[key];
+        currentData.forEach((item) => {
+          const update = incomingMap.get(item.name);
+          if (update && update.thumb && item.thumb !== update.thumb) {
+            item.thumb = update.thumb;
+            if (item.details) item.details.thumb = update.thumb;
+          }
+        });
+        if (currentPieTab === key) {
+          requestRender();
+        }
+      }
+    };
+    window.addEventListener("DanbooruInsights:DataUpdated", onPieDataUpdate);
+    const handlePieClick = (d) => {
+      const targetName = context.targetUser.normalizedName || context.targetUser.name.replace(/ /g, "_") || "";
+      if (!targetName) return;
+      let query = "";
+      const details = d.data.details;
+      if (currentPieTab === "rating") {
+        if (details && details.rating) query = `rating:${details.rating}`;
+      } else if (currentPieTab === "fav_copyright") {
+        query = `ordfav:${context.targetUser.normalizedName} ${details.tagName || d.data.label}`;
+        window.open(`/posts?tags=${encodeURIComponent(query)}`, "_blank");
+        return;
+      } else if (currentPieTab === "status") {
+        query = `status:${details.name}`;
+      } else if (["breasts", "hair_length", "hair_color", "gender", "commentary", "translation"].includes(currentPieTab)) {
+        if (details.originalTag) query = details.originalTag;
+        else if (details.tagName === "untagged_commentary") query = "has:commentary -commentary -commentary_request";
+        else if (details.tagName === "untagged_translation") query = "*_text -english_text -translation_request -translated";
+        else if (details.tagName) query = details.tagName;
+        else query = d.data.label.toLowerCase().replace(/ /g, "_");
+      } else {
+        query = details.tagName || d.data.label;
+      }
+      if (query) {
+        const urlPrefix = `user:${targetName}`;
+        window.open(`/posts?tags=${encodeURIComponent(`${urlPrefix} ${query}`)}`, "_blank");
+      }
+    };
+    const renderPieContent = () => {
+      const contextUser = context.targetUser;
+      const data = pieData[currentPieTab];
+      const pieContent = container.querySelector(".pie-content");
+      if (!data) {
+        pieContent.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">Loading...</div>';
+        return;
+      }
+      if (data.length === 0) {
+        pieContent.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available</div>';
+        return;
+      }
+      if (!contextUser.normalizedName && contextUser.name) {
+        contextUser.normalizedName = contextUser.name.replace(/ /g, "_");
+      }
+      if (currentPieTab === "hair_length") {
+        const order = ["Bald", "Very Short Hair", "Short Hair", "Medium Hair", "Long Hair", "Very Long Hair", "Absurdly Long Hair"];
+        data.sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+      }
+      pieContent.style.display = "flex";
+      pieContent.style.flexDirection = "row";
+      pieContent.style.alignItems = "center";
+      pieContent.style.justifyContent = "space-around";
+      const isFirefox = navigator.userAgent.includes("Firefox");
+      if (!isFirefox) {
+        pieContent.style.perspective = "1000px";
+      }
+      const ratingColors = { "g": "#28a745", "s": "#fd7e14", "q": "#6f42c1", "e": "#dc3545" };
+      const ratingLabels = { "g": "General", "s": "Sensitive", "q": "Questionable", "e": "Explicit" };
+      const palette = [
+        "#e91e63",
+        "#9c27b0",
+        "#673ab7",
+        "#3f51b5",
+        "#2196f3",
+        "#03a9f4",
+        "#00bcd4",
+        "#009688",
+        "#4caf50",
+        "#8bc34a",
+        "#cddc39",
+        "#ffeb3b",
+        "#ffc107",
+        "#ff9800",
+        "#ff5722",
+        "#795548"
+      ];
+      const processedData = data.map((d, i) => {
+        if (["rating", "status", "breasts", "hair_length", "hair_color", "gender", "commentary", "translation"].includes(currentPieTab)) {
+          return {
+            value: d.count,
+            label: currentPieTab === "rating" ? ratingLabels[d.rating] || d.rating : d.label || d.name,
+            color: currentPieTab === "rating" ? ratingColors[d.rating] || "#999" : currentPieTab === "hair_color" && d.color ? d.color : d.color || (d.isOther ? "#bdbdbd" : palette[i % palette.length]),
+            details: d
+          };
+        } else {
+          let sliceColor = d.isOther ? "#bdbdbd" : palette[i % palette.length];
+          if (currentPieTab === "hair_color" && d.color) {
+            sliceColor = d.color;
+          }
+          return {
+            value: d.frequency,
+            label: d.name,
+            color: sliceColor,
+            details: d
+          };
+        }
+      });
+      const validData = processedData.filter((d) => Number.isFinite(d.value) && d.value > 0);
+      const totalValue = validData.reduce((acc, curr) => acc + curr.value, 0);
+      if (validData.length === 0 || totalValue === 0) {
+        pieContent.innerHTML = '<div style="color:#888; padding:30px; text-align:center;">No data available (Total count is 0)</div>';
+        return;
+      }
+      let chartWrapper = pieContent.querySelector(".pie-chart-wrapper");
+      if (!chartWrapper) {
+        pieContent.innerHTML = "";
+        chartWrapper = document.createElement("div");
+        chartWrapper.className = "pie-chart-wrapper";
+        chartWrapper.style.width = "180px";
+        chartWrapper.style.height = "180px";
+        chartWrapper.style.cursor = "pointer";
+        if (!isFirefox) {
+          chartWrapper.style.transformStyle = "preserve-3d";
+          chartWrapper.style.transform = "rotateX(40deg) rotateY(0deg)";
+          chartWrapper.style.transition = "transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275)";
+          const shadow = document.createElement("div");
+          shadow.style.position = "absolute";
+          shadow.style.top = "50%";
+          shadow.style.left = "50%";
+          shadow.style.width = "140px";
+          shadow.style.height = "140px";
+          shadow.style.transform = "translate(-50%, -50%) translateZ(-10px)";
+          shadow.style.borderRadius = "50%";
+          shadow.style.background = "rgba(0,0,0,0.2)";
+          shadow.style.filter = "blur(5px)";
+          chartWrapper.appendChild(shadow);
+          chartWrapper.addEventListener("mouseenter", () => {
+            chartWrapper.style.transform = "rotateX(0deg) scale(1.1)";
+            shadow.style.transform = "translate(-50%, -50%) translateZ(-30px) scale(0.9)";
+            shadow.style.opacity = "0.5";
+          });
+          chartWrapper.addEventListener("mouseleave", () => {
+            chartWrapper.style.transform = "rotateX(40deg)";
+            shadow.style.transform = "translate(-50%, -50%) translateZ(-10px)";
+            shadow.style.opacity = "1";
+          });
+        } else {
+          chartWrapper.style.transition = "transform 0.3s ease";
+          chartWrapper.addEventListener("mouseenter", () => {
+            chartWrapper.style.transform = "scale(1.05)";
+          });
+          chartWrapper.addEventListener("mouseleave", () => {
+            chartWrapper.style.transform = "none";
+          });
+        }
+        pieContent.appendChild(chartWrapper);
+        d3__namespace.select(chartWrapper).append("svg").attr("width", 180).attr("height", 180).style("overflow", "visible").append("g").attr("transform", "translate(90,90)");
+        const legendDiv2 = document.createElement("div");
+        legendDiv2.className = "danbooru-grass-legend-scroll";
+        legendDiv2.style.display = "flex";
+        legendDiv2.style.flexDirection = "column";
+        legendDiv2.style.marginLeft = "20px";
+        legendDiv2.style.maxHeight = "180px";
+        legendDiv2.style.overflowY = "auto";
+        legendDiv2.style.paddingRight = "5px";
+        const scrollbarStyle = document.createElement("style");
+        scrollbarStyle.innerHTML = `
+          .danbooru-grass-legend-scroll::-webkit-scrollbar { width: 6px; }
+          .danbooru-grass-legend-scroll::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 3px; }
+          .danbooru-grass-legend-scroll::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 3px; }
+          .danbooru-grass-legend-scroll::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+       `;
+        legendDiv2.appendChild(scrollbarStyle);
+        pieContent.appendChild(legendDiv2);
+      }
+      const width = 180;
+      const height = 180;
+      const radius = Math.min(width, height) / 2 - 20;
+      const svg = d3__namespace.select(chartWrapper).select("svg g");
+      const pie = d3__namespace.pie().value((d) => d.value).sort(null);
+      const arc = d3__namespace.arc().innerRadius(0).outerRadius(radius);
+      const arcHover = d3__namespace.arc().innerRadius(0).outerRadius(radius * 1.2);
+      const tooltip = d3__namespace.select("body").selectAll(".danbooru-grass-pie-tooltip").data([0]).join("div").attr("class", "danbooru-grass-pie-tooltip").style("position", "absolute").style("background", "rgba(30, 30, 30, 0.95)").style("color", "#fff").style("padding", "8px 12px").style("border-radius", "6px").style("font-size", "12px").style("pointer-events", "none").style("z-index", "2147483647").style("opacity", "0");
+      svg.selectAll("path").data(pie(validData), (d) => d.data.label).join(
+        (enter) => enter.append("path").attr("class", "danbooru-grass-pie-path").attr("d", arc).attr("fill", (d) => d.data.color).style("opacity", "0.9").style("cursor", "pointer"),
+        (update) => update.attr("class", "danbooru-grass-pie-path").attr("d", arc).call((update2) => update2.transition().duration(500).attr("fill", (d) => d.data.color))
+      ).attr("stroke", "#fff").style("stroke-width", "1px").on("mouseover", function(_event, d) {
+        d3__namespace.select(this).transition().duration(200).attr("d", (td) => arcHover(td) ?? "").style("opacity", "1").style("filter", "drop-shadow(0px 0px 8px rgba(255,255,255,0.4))");
+        let html = "";
+        const details = d.data.details;
+        const thumbUrl = details.thumb;
+        const thumbHtml = thumbUrl ? `
+        <div style="width: 80px; height: 80px; border-radius: 4px; overflow: hidden; background: #333; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+          <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+        </div>` : "";
+        if (currentPieTab === "rating") {
+          html = `
+          <div style="display: flex; gap: 12px; align-items: start;">
+            ${thumbHtml}
+            <div>
+              <div style="font-weight: bold; color: ${d.data.color}; margin-bottom: 4px; font-size: 14px;">${d.data.label}</div>
+              <div style="font-size: 11px; color: #ccc;">Count: <strong style="color:#fff;">${details.count.toLocaleString()}</strong></div>
+              <div style="font-size: 11px; color: #ccc;">Ratio: <strong style="color:#fff;">${Math.round(d.data.value / totalValue * 100)}%</strong></div>
+            </div>
+          </div>
+        `;
+        } else {
+          const percentage = (d.data.value / totalValue * 100).toFixed(1) + "%";
+          html = `
+          <div style="display: flex; gap: 12px; align-items: start;">
+            ${thumbHtml}
+            <div style="max-width: 180px;">
+              <div style="font-weight: bold; color: ${d.data.color}; margin-bottom: 4px; font-size: 14px; word-wrap: break-word;">${d.data.label}</div>
+              <div style="font-size: 11px; color: #ccc;">Freq: <strong style="color:#fff;">${percentage}</strong></div>
+              ${!details.isOther ? `<div style="font-size: 11px; color: #ccc;">Posts: <strong style="color:#fff;">${details.count ? details.count.toLocaleString() : "?"}</strong></div>` : ""}
+            </div>
+          </div>
+        `;
+        }
+        tooltip.html(html).style("opacity", 1);
+      }).on("mousemove", function(event) {
+        tooltip.style("left", event.pageX + 15 + "px").style("top", event.pageY + 15 + "px");
+      }).on("mouseout", function() {
+        d3__namespace.select(this).transition().duration(200).attr("d", (td) => arc(td) ?? "").style("opacity", "0.9").style("filter", "none");
+        tooltip.style("opacity", 0);
+      }).on("click", (_event, d) => handlePieClick(d));
+      const legendDiv = pieContent.querySelector(".danbooru-grass-legend-scroll");
+      if (legendDiv) {
+        let legendTitle = "DIST.";
+        if (currentPieTab === "copyright") legendTitle = "COPYRIGHTS";
+        else if (currentPieTab === "character") legendTitle = "CHARACTERS";
+        else if (currentPieTab === "fav_copyright") legendTitle = "FAVORITE COPYRIGHTS";
+        else if (currentPieTab === "status") legendTitle = "STATUS";
+        else if (currentPieTab === "rating") legendTitle = "RATINGS";
+        else if (currentPieTab === "hair_length") legendTitle = "HAIR LENGTH";
+        else if (currentPieTab === "hair_color") legendTitle = "HAIR COLOR";
+        else if (currentPieTab === "breasts") legendTitle = "BREASTS";
+        else if (currentPieTab === "gender") legendTitle = "GENDER";
+        else if (currentPieTab === "commentary") legendTitle = "COMMENTARY";
+        else if (currentPieTab === "translation") legendTitle = "TRANSLATION";
+        const styleTag = legendDiv.querySelector("style")?.outerHTML ?? "";
+        const listHtml = processedData.map((d) => {
+          const val = d.value / totalValue * 100;
+          const pct = val.toFixed(1) + "%";
+          let targetUrl = "#";
+          let query = "";
+          if (!d.details.isOther) {
+            if (currentPieTab === "rating") {
+              query = `rating:${d.details.rating}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
+            } else if (currentPieTab === "breasts") {
+              const tag = d.label.toLowerCase().replace(/ /g, "_");
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${tag}`)}`;
+            } else if (currentPieTab === "fav_copyright") {
+              query = `ordfav:${contextUser.normalizedName} ${d.details.tagName || d.label}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(query)}`;
+            } else if (currentPieTab === "status") {
+              query = `status:${d.details.name}`;
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
+            } else {
+              if (d.details.originalTag) {
+                query = d.details.originalTag;
+              } else if (d.details.tagName === "untagged_commentary") {
+                query = "has:commentary -commentary -commentary_request";
+              } else if (d.details.tagName === "untagged_translation") {
+                query = "*_text -english_text -translation_request -translated";
+              } else {
+                query = d.details.tagName || d.label;
+              }
+              targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
+            }
+          }
+          return `
+               <div style="display:flex; align-items:center; font-size:0.85em; margin-bottom:5px;">
+                  <div style="width:12px; height:12px; background:${d.color}; border-radius:2px; margin-right:8px; border:1px solid rgba(0,0,0,0.1); flex-shrink:0;"></div>
+                  ${d.details.isOther ? `<div style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${d.label}">${d.label}</div>` : `<a href="${targetUrl}" target="_blank" class="di-hover-underline" style="color:#555; width:90px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-decoration:none;" title="${d.label}">${d.label}</a>`}
+                  <div style="font-weight:bold; color:#333; margin-left:auto;" title="${d.details.count ? d.details.count.toLocaleString() : ""}">${pct}</div>
+               </div>`;
+        }).join("");
+        legendDiv.innerHTML = styleTag + `
+           <div style="font-size:0.8em; color:#888; margin-bottom:8px; text-transform:uppercase; position:sticky; top:0; background:#fff; padding-bottom:4px; border-bottom:1px solid #eee;">${legendTitle}</div>
+           ${listHtml}
+      `;
+      }
+    };
+    const updatePieTabs = () => {
+      const btns = container.querySelectorAll(".di-pie-tab");
+      btns.forEach((btn) => {
+        const el = btn;
+        const mode = el.getAttribute("data-mode");
+        if (mode === currentPieTab) {
+          el.style.background = "#555";
+          el.style.color = "#fff";
+          el.style.boxShadow = "0 1px 3px rgba(0,0,0,0.2)";
+        } else {
+          el.style.background = "#eee";
+          el.style.color = "#555";
+          el.style.boxShadow = "none";
+        }
+      });
+    };
+    container.innerHTML = `
+     <div style="width:100%; display:flex; flex-direction:column;">
+         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; width:100%;">
+             <div style="display:flex; flex-direction:column; gap:4px; max-width:100%;">
+                 <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                     <button class="di-pie-tab" data-mode="copyright" title="Copyright">Copy</button>
+                     <button class="di-pie-tab" data-mode="character" title="Character">Char</button>
+                     <button class="di-pie-tab" data-mode="fav_copyright" title="Favorite Copyright">Fav_Copy</button>
+                     <button class="di-pie-tab" data-mode="status" title="Post Status">Status</button>
+                     <button class="di-pie-tab" data-mode="rating" title="Content Rating">Rate</button>
+                     <button class="di-pie-tab" data-mode="commentary" title="Commentary">Cmnt</button>
+                     <button class="di-pie-tab" data-mode="translation" title="Translation">Tran</button>
+                 </div>
+                 <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                     <button class="di-pie-tab" data-mode="gender" title="Gender Distribution">Gender</button>
+                     <button class="di-pie-tab" data-mode="breasts" style="display:${isNsfwEnabled ? "block" : "none"};" title="Breast Size">Boobs</button>
+                     <button class="di-pie-tab" data-mode="hair_length" title="Hair Length">Hair_L</button>
+                     <button class="di-pie-tab" data-mode="hair_color" title="Hair Color">Hair_C</button>
+                 </div>
+             </div>
+         </div>
+         <div class="pie-content" style="flex:1; display:flex; justify-content:center; align-items:center; min-height:160px;">
+             Loading...
+         </div>
+     </div>
+  `;
+    const loadTab = async (tabName) => {
+      if (pieData[tabName]) {
+        renderPieContent();
+        return;
+      }
+      const pieContent = container.querySelector(".pie-content");
+      if (pieContent) pieContent.innerHTML = '<div style="color:#666;">Loading...</div>';
+      try {
+        let data = [];
+        if (tabName === "rating") {
+          data = await dataManager.getRatingDistribution(context.targetUser, firstUploadDate);
+        } else if (tabName === "status") {
+          data = await dataManager.getStatusDistribution(context.targetUser, firstUploadDate);
+          const statusColors = {
+            "active": "#2da44e",
+            "deleted": "#d73a49",
+            "pending": "#0969da",
+            "flagged": "#cf222e",
+            "banned": "#6e7781",
+            "appealed": "#bf3989"
+          };
+          data = data.map((d) => ({
+            ...d,
+            color: statusColors[d.name] || "#888"
+          }));
+        } else if (tabName === "character") {
+          data = await dataManager.getCharacterDistribution(context.targetUser);
+        } else if (tabName === "copyright") {
+          data = await dataManager.getCopyrightDistribution(context.targetUser);
+        } else if (tabName === "fav_copyright") {
+          data = await dataManager.getFavCopyrightDistribution(context.targetUser);
+        } else if (tabName === "breasts") {
+          data = await dataManager.getBreastsDistribution(context.targetUser);
+          const total = data.reduce((acc, c) => acc + c.count, 0);
+          data = data.map((d) => ({
+            ...d,
+            frequency: total > 0 ? d.count / total : 0,
+            value: total > 0 ? d.count / total : 0,
+            label: d.name,
+            details: { ...d, thumb: null }
+          }));
+        } else if (tabName === "gender") {
+          data = await dataManager.getGenderDistribution(context.targetUser);
+          const total = data.reduce((acc, c) => acc + c.count, 0);
+          data = data.map((d) => ({
+            ...d,
+            frequency: total > 0 ? d.count / total : 0,
+            value: total > 0 ? d.count / total : 0,
+            label: d.name,
+            details: { ...d, thumb: null }
+          }));
+        } else if (tabName === "commentary") {
+          data = await dataManager.getCommentaryDistribution(context.targetUser);
+          const total = data.reduce((acc, c) => acc + c.count, 0);
+          data = data.map((d) => ({
+            ...d,
+            frequency: total > 0 ? d.count / total : 0,
+            value: total > 0 ? d.count / total : 0,
+            label: d.name,
+            details: { ...d, thumb: null }
+          }));
+        } else if (tabName === "translation") {
+          data = await dataManager.getTranslationDistribution(context.targetUser);
+          const total = data.reduce((acc, c) => acc + c.count, 0);
+          data = data.map((d) => ({
+            ...d,
+            frequency: total > 0 ? d.count / total : 0,
+            value: total > 0 ? d.count / total : 0,
+            label: d.name,
+            details: { ...d, thumb: null }
+          }));
+        }
+        pieData[tabName] = data;
+        if (currentPieTab === tabName) {
+          renderPieContent();
+          updatePieTabs();
+        }
+      } catch (e) {
+        console.error(e);
+        const pieContent2 = container.querySelector(".pie-content");
+        if (pieContent2) pieContent2.innerHTML = "Error loading data.";
+      }
+    };
+    container.addEventListener("click", (e) => {
+      if (e.target.classList.contains("di-pie-tab")) {
+        const mode = e.target.getAttribute("data-mode") ?? "";
+        if (mode && currentPieTab !== mode) {
+          currentPieTab = mode;
+          updatePieTabs();
+          loadTab(mode);
+        }
+      }
+    });
+    updatePieTabs();
+    loadTab(currentPieTab);
+    return {
+      onNsfwChange: (enabled) => {
+        isNsfwEnabled = enabled;
+        const boobsBtn = container.querySelector('.di-pie-tab[data-mode="breasts"]');
+        if (boobsBtn) {
+          boobsBtn.style.display = isNsfwEnabled ? "block" : "none";
+        }
+        if (!isNsfwEnabled && currentPieTab === "breasts") {
+          currentPieTab = "copyright";
+          updatePieTabs();
+          loadTab("copyright");
+        }
+      }
+    };
+  }
+  function renderTopPostsWidget(container, topPosts, recentPopularPosts, randomPosts, initialNsfwEnabled, db, context) {
+    let isNsfwEnabled = initialNsfwEnabled;
+    const topPostGroups = {
+      most: topPosts,
+      recent: recentPopularPosts,
+      random: randomPosts
+    };
+    let currentWidgetMode = "recent";
+    let currentMostTab = "g";
+    let currentSfwTab = "sfw";
+    const renderTopPostContent = () => {
+      const group = topPostGroups[currentWidgetMode];
+      const tabKey = currentWidgetMode === "most" ? currentMostTab : currentSfwTab;
+      const data = group ? group[tabKey] : null;
+      const contentDiv = container.querySelector(".top-post-content");
+      if (!contentDiv) return;
+      if (!data) {
+        contentDiv.innerHTML = '<div style="color:#888; padding:20px 0;">No posts found or loading...</div>';
+        return;
+      }
+      const thumbUrl = getBestThumbnailUrl(data);
+      const dateStr = data.created_at ? new Date(data.created_at).toISOString().split("T")[0] : "N/A";
+      const link = `/posts/${data.id}`;
+      const ratingMap = { "g": "General", "s": "Sensitive", "q": "Questionable", "e": "Explicit" };
+      const ratingLabel = ratingMap[data.rating] || data.rating;
+      const refreshBtn2 = container.querySelector("#analytics-random-refresh");
+      if (refreshBtn2) {
+        refreshBtn2.style.display = currentWidgetMode === "random" ? "inline-block" : "none";
+      }
+      const searchLinkBtn = container.querySelector("#analytics-more-post-link");
+      if (searchLinkBtn) {
+        searchLinkBtn.style.display = currentWidgetMode === "recent" ? "inline-block" : "none";
+        const normalizedName = context.targetUser.normalizedName;
+        const ratingTag = currentSfwTab === "sfw" ? "is:sfw" : "is:nsfw";
+        const searchQuery = `user:${normalizedName} order:score age:<1w ${ratingTag}`;
+        searchLinkBtn.onclick = () => {
+          window.open(`/posts?tags=${encodeURIComponent(searchQuery)}`, "_blank");
+        };
+      }
+      const createTagLine = (label, icon, tags) => {
+        if (!tags) return "";
+        const tagList = tags.replace(/_/g, " ");
+        const displayTags = label === "Char" && tags.split(" ").length > 5 ? tagList.split(" ").slice(0, 5).join(", ") + "..." : tagList;
+        return `<div>${icon} <strong>${label}:</strong> ${displayTags}</div>`;
+      };
+      const artistLine = createTagLine("Artist", "🎨", data.tag_string_artist);
+      const copyrightLine = createTagLine("Copy", "©️", data.tag_string_copyright);
+      const charLine = createTagLine("Char", "👤", data.tag_string_character);
+      contentDiv.innerHTML = `
+      <div style="display:flex; gap:15px; align-items:flex-start;">
+          <a href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden; position:relative;">
+              <img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;" alt="#${data.id}">
+          </a>
+          <div style="flex:1;">
+              <div style="font-weight:bold; font-size:1.1em; color:#0969da; margin-bottom:4px;">
+                  <a href="${link}" target="_blank" style="text-decoration:none; color:inherit;">Post #${data.id}</a>
+              </div>
+              <div style="font-size:0.9em; color:#555; line-height:1.5;">
+                  📅 ${dateStr}<br>
+                  ❤️ Score: <strong>${data.score}</strong><br>
+                  ⭐ Favs: <strong>${data.fav_count || "?"}</strong><br>
+                  🤔 Rating: <strong>${ratingLabel}</strong>
+
+                  <div style="margin-top:8px; border-top:1px solid #eee; padding-top:6px;">
+                      ${artistLine}
+                      ${copyrightLine}
+                      ${charLine}
+                  </div>
+              </div>
+          </div>
+      </div>
+   `;
+    };
+    const updateTabs = () => {
+      const setStyle = (btn, isActive) => {
+        if (!btn) return;
+        btn.style.background = isActive ? "#0969da" : "#f6f8fa";
+        btn.style.color = isActive ? "#fff" : "#24292f";
+      };
+      const gsqeGroup = container.querySelector("#top-post-tabs-gsqe");
+      const sfwnsfwGroup = container.querySelector("#top-post-tabs-sfwnsfw");
+      if (currentWidgetMode === "most") {
+        if (gsqeGroup) gsqeGroup.style.display = "flex";
+        if (sfwnsfwGroup) sfwnsfwGroup.style.display = "none";
+        for (const mode of ["g", "s", "q", "e"]) {
+          const btn = container.querySelector(`button[data-mode="${mode}"]`);
+          setStyle(btn, currentMostTab === mode);
+        }
+      } else {
+        if (gsqeGroup) gsqeGroup.style.display = "none";
+        if (sfwnsfwGroup) sfwnsfwGroup.style.display = "flex";
+        for (const mode of ["sfw", "nsfw"]) {
+          const btn = container.querySelector(`button[data-mode="${mode}"]`);
+          setStyle(btn, currentSfwTab === mode);
+        }
+      }
+    };
+    container.style.padding = "15px";
+    container.innerHTML = `
+     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div style="font-size:0.85em; color:#666; letter-spacing:0.5px; display:flex; align-items:center; gap:5px;">
+           <select id="analytics-top-post-select" style="border:none; background:transparent; font-weight:bold; color:#666; cursor:pointer; text-transform:uppercase; font-size:1em; outline:none;">
+              <option value="recent">🔥 Recent Popular Post</option>
+              <option value="most">🏆 Most Popular Post</option>
+              <option value="random">🎲 Random Post</option>
+           </select>
+            <button id="analytics-random-refresh" style="display:none; border:none; background:transparent; cursor:pointer; font-size:1.2em; padding:0 4px; margin-left:5px; filter: grayscale(100%); opacity: 0.6;" title="Load New Random Post">
+                 🔄
+             </button>
+            <button id="analytics-more-post-link" style="border:none; background:transparent; cursor:pointer; font-size:1.1em; padding:0 4px; margin-left:2px; filter: grayscale(100%); opacity: 0.6;" title="See more posts">
+                 ↗️
+             </button>
+         </div>
+        <div id="top-post-tabs-sfwnsfw" style="display:flex; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
+           <button class="top-post-tab" data-mode="sfw" style="border:none; background:#0969da; color:#fff; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">SFW</button>
+           <button class="top-post-tab" id="analytics-top-nsfw-btn" data-mode="nsfw" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? "inline-block" : "none"};">NSFW</button>
+        </div>
+        <div id="top-post-tabs-gsqe" style="display:none; gap:0px; border:1px solid #d0d7de; border-radius:6px; overflow:hidden;">
+           <button class="top-post-tab" data-mode="g" style="border:none; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">G</button>
+           <button class="top-post-tab" data-mode="s" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s;">S</button>
+           <button class="top-post-tab" id="analytics-top-q-btn" data-mode="q" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? "inline-block" : "none"};">Q</button>
+           <button class="top-post-tab" id="analytics-top-e-btn" data-mode="e" style="border:none; border-left:1px solid #d0d7de; background:#f6f8fa; color:#24292f; padding:2px 8px; font-size:11px; cursor:pointer; transition: background 0.5s, color 0.5s; display: ${isNsfwEnabled ? "inline-block" : "none"};">E</button>
+        </div>
+     </div>
+     <div class="top-post-content">
+         <div style="color:#666; font-size:0.9em;">Loading stats...</div>
+     </div>
+  `;
+    const modeSelect = container.querySelector("#analytics-top-post-select");
+    if (modeSelect) {
+      modeSelect.addEventListener("change", (e) => {
+        currentWidgetMode = e.target.value;
+        updateTabs();
+        renderTopPostContent();
+      });
+    }
+    const refreshBtn = container.querySelector("#analytics-random-refresh");
+    if (refreshBtn) {
+      refreshBtn.onclick = async (e) => {
+        e.stopPropagation();
+        refreshBtn.style.transform = "rotate(360deg)";
+        setTimeout(() => refreshBtn.style.transform = "rotate(0deg)", 400);
+        const contentDiv = container.querySelector(".top-post-content");
+        contentDiv.style.opacity = "0.5";
+        try {
+          const newRandoms = await new AnalyticsDataManager(db).getRandomPosts(context.targetUser);
+          topPostGroups.random = newRandoms;
+          renderTopPostContent();
+        } catch (err) {
+          console.error("Failed to refresh random post:", err);
+        } finally {
+          contentDiv.style.opacity = "1";
+        }
+      };
+    }
+    container.addEventListener("click", (e) => {
+      if (e.target.classList.contains("top-post-tab")) {
+        const mode = e.target.getAttribute("data-mode") ?? "";
+        if (currentWidgetMode === "most") {
+          currentMostTab = mode || "g";
+        } else {
+          currentSfwTab = mode || "sfw";
+        }
+        updateTabs();
+        renderTopPostContent();
+      }
+    });
+    updateTabs();
+    renderTopPostContent();
+    return {
+      onNsfwChange: (enabled) => {
+        isNsfwEnabled = enabled;
+        for (const id of ["analytics-top-q-btn", "analytics-top-e-btn", "analytics-top-nsfw-btn"]) {
+          const btn = document.getElementById(id);
+          if (btn) btn.style.display = isNsfwEnabled ? "inline-block" : "none";
+        }
+        if (!isNsfwEnabled && (currentMostTab === "q" || currentMostTab === "e")) {
+          currentMostTab = "g";
+          updateTabs();
+          if (currentWidgetMode === "most") renderTopPostContent();
+        }
+        if (!isNsfwEnabled && currentSfwTab === "nsfw") {
+          currentSfwTab = "sfw";
+          updateTabs();
+          if (currentWidgetMode !== "most") renderTopPostContent();
+        }
+      }
+    };
+  }
+  async function renderMilestonesWidget(container, db, context, initialNsfwEnabled) {
+    let isNsfwEnabled = initialNsfwEnabled;
+    let currentMilestoneStep = "auto";
+    let isMilestoneExpanded = false;
+    const renderMilestones = async () => {
+      const milestones = await new AnalyticsDataManager(db).getMilestones(context.targetUser, isNsfwEnabled, currentMilestoneStep);
+      let msHtml = '<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:8px; margin-bottom:10px;">';
+      msHtml += '<h3 style="color:#333; margin:0;">🏆 Milestones</h3>';
+      msHtml += '<div style="display:flex; align-items:center; gap:10px;">';
+      msHtml += `<select id="analytics-milestone-step" style="border:1px solid #d0d7de; border-radius:4px; padding:2px 4px; font-size:0.85em; color:#555; background-color:#f6f8fa;">
+      <option value="auto" ${currentMilestoneStep === "auto" ? "selected" : ""}>Auto</option>
+      <option value="1000" ${currentMilestoneStep === 1e3 || String(currentMilestoneStep) === "1000" ? "selected" : ""}>Every 1k</option>
+      <option value="2500" ${currentMilestoneStep === 2500 || String(currentMilestoneStep) === "2500" ? "selected" : ""}>Every 2.5k</option>
+      <option value="5000" ${currentMilestoneStep === 5e3 || String(currentMilestoneStep) === "5000" ? "selected" : ""}>Every 5k</option>
+      <option value="10000" ${currentMilestoneStep === 1e4 || String(currentMilestoneStep) === "10000" ? "selected" : ""}>Every 10k</option>
+      <option value="repdigit" ${currentMilestoneStep === "repdigit" ? "selected" : ""}>Repdigit</option>
+    </select>`;
+      msHtml += '<button id="analytics-milestone-toggle" style="background:none; border:none; color:#0969da; cursor:pointer; font-size:0.9em; display:none;">Show More</button>';
+      msHtml += "</div>";
+      msHtml += "</div>";
+      if (milestones.length === 0) {
+        container.innerHTML = msHtml + '<div style="color:#888; font-size:0.9em;">No milestones found.</div>';
+        const sel = container.querySelector("#analytics-milestone-step");
+        if (sel) {
+          sel.onchange = (e) => {
+            const v = e.target.value;
+            currentMilestoneStep = v === "auto" ? "auto" : v === "repdigit" ? "repdigit" : parseInt(v);
+            renderMilestones();
+          };
+        }
+        return;
+      }
+      const containerId = "analytics-milestone-container";
+      msHtml += `<div id="${containerId}" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; max-height:110px; overflow:hidden; transition: max-height 0.3s ease;">`;
+      milestones.forEach((m) => {
+        const p = m.post;
+        const isSafe = p.rating === "s" || p.rating === "g";
+        const thumbUrl = getBestThumbnailUrl(p);
+        const showThumb = isNsfwEnabled || isSafe;
+        msHtml += `
+      <a href="/posts/${p.id}" target="_blank" class="di-hover-scale" style="
+         display:flex; justify-content:space-between; align-items:center; text-decoration:none; color:inherit;
+         background:#fff; border:1px solid #e1e4e8; border-radius:6px; padding:10px;
+      ">
+         <div>
+             <div style="font-size:0.8em; color:#888; letter-spacing:0.5px;">#${p.id}</div>
+             <div style="font-size:1.1em; font-weight:bold; color:#0969da; margin-top:4px;">${m.type}</div>
+             <div style="font-size:0.8em; color:#555; margin-top:2px;">${new Date(p.created_at).toLocaleDateString()}</div>
+             <div style="font-size:0.75em; color:#aaa; margin-top:4px;">Score: ${p.score}</div>
+         </div>
+         ${showThumb && thumbUrl ? `<div style="width:60px; height:60px; margin-left:10px; flex-shrink:0; background:#f0f0f0; border-radius:4px; overflow:hidden; display:flex; align-items:center; justify-content:center;"><img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;"></div>` : ""}
+      </a>
+    `;
+      });
+      msHtml += "</div>";
+      container.innerHTML = msHtml;
+      const stepSelect = container.querySelector("#analytics-milestone-step");
+      if (stepSelect) {
+        stepSelect.onchange = (e) => {
+          const v = e.target.value;
+          currentMilestoneStep = v === "auto" ? "auto" : v === "repdigit" ? "repdigit" : parseInt(v);
+          renderMilestones();
+        };
+      }
+      if (milestones.length > 6) {
+        const btn = container.querySelector("#analytics-milestone-toggle");
+        const milestoneContainer = container.querySelector(`#${containerId}`);
+        btn.style.display = "block";
+        if (isMilestoneExpanded) {
+          milestoneContainer.style.maxHeight = "2000px";
+          btn.textContent = "Show Less";
+        }
+        btn.onclick = () => {
+          isMilestoneExpanded = !isMilestoneExpanded;
+          if (isMilestoneExpanded) {
+            milestoneContainer.style.maxHeight = "2000px";
+            btn.textContent = "Show Less";
+          } else {
+            milestoneContainer.style.maxHeight = "110px";
+            btn.textContent = "Show More";
+          }
+        };
+      }
+    };
+    await renderMilestones();
+    return {
+      onNsfwChange: async (enabled) => {
+        isNsfwEnabled = enabled;
+        await renderMilestones();
+      }
+    };
+  }
+  async function renderHistoryChart(container, db, context, milestones1k, levelChanges) {
+    let minDate = null;
+    if (levelChanges.length > 0) {
+      minDate = levelChanges[0].date;
+    }
+    const monthly = await new AnalyticsDataManager(db).getMonthlyStats(context.targetUser, minDate);
+    if (monthly.length === 0) return;
+    const chartDiv = document.createElement("div");
+    chartDiv.style.marginTop = "24px";
+    let chartHtml = '<h3 style="color:#333; border-bottom:1px solid #eee; padding-bottom:10px; margin-bottom:15px;">📅 Monthly Activity</h3>';
+    const minBarWidth = 25;
+    const padLeftScroll = 10;
+    const padRight = 20;
+    const padBottom = 25;
+    const padTop = 20;
+    const yAxisWidth = 45;
+    const maxCount = Math.max(...monthly.map((m) => m.count));
+    const requiredWidth = padLeftScroll + padRight + monthly.length * minBarWidth;
+    const vWidth = Math.max(800, requiredWidth);
+    const vHeight = 200;
+    const mainWrapper = document.createElement("div");
+    mainWrapper.className = "chart-flex-wrapper";
+    mainWrapper.style.display = "flex";
+    mainWrapper.style.width = "100%";
+    mainWrapper.style.position = "relative";
+    mainWrapper.style.border = "1px solid #e1e4e8";
+    mainWrapper.style.borderRadius = "8px";
+    mainWrapper.style.backgroundColor = "#fff";
+    mainWrapper.style.overflow = "hidden";
+    const yAxisWrapper = document.createElement("div");
+    yAxisWrapper.style.width = `${yAxisWidth}px`;
+    yAxisWrapper.style.flexShrink = "0";
+    yAxisWrapper.style.borderRight = "1px solid #f0f0f0";
+    yAxisWrapper.style.zIndex = "5";
+    yAxisWrapper.style.backgroundColor = "#fff";
+    mainWrapper.appendChild(yAxisWrapper);
+    const chartWrapper = document.createElement("div");
+    chartWrapper.className = "scroll-wrapper";
+    chartWrapper.style.flex = "1";
+    chartWrapper.style.overflowX = "auto";
+    chartWrapper.style.overflowY = "hidden";
+    mainWrapper.appendChild(chartWrapper);
+    let tickMax = Math.ceil(maxCount / 500) * 500;
+    if (tickMax < 500) tickMax = 500;
+    let tickStep = 500;
+    if (tickMax <= 2e3) {
+      tickStep = tickMax / 4;
+    }
+    const numTicks = Math.round(tickMax / tickStep);
+    let ySvg = `<svg width="${yAxisWidth}" height="${vHeight}">`;
+    for (let i = 0; i <= numTicks; i++) {
+      const val = i * tickStep;
+      const y = vHeight - padBottom - val / tickMax * (vHeight - padBottom - padTop);
+      ySvg += `<text x="${yAxisWidth - 5}" y="${y + 4}" text-anchor="end" font-size="10" fill="#888">${val}</text>`;
+    }
+    ySvg += "</svg>";
+    yAxisWrapper.innerHTML = ySvg;
+    let svg = `<svg width="${vWidth}" height="${vHeight}">`;
+    for (let i = 1; i <= numTicks; i++) {
+      const val = i * tickStep;
+      const y = vHeight - padBottom - val / tickMax * (vHeight - padBottom - padTop);
+      svg += `<line x1="0" y1="${y}" x2="${vWidth}" y2="${y}" stroke="#eee" stroke-width="1" />`;
+    }
+    svg += `<line x1="0" y1="${vHeight - padBottom}" x2="${vWidth}" y2="${vHeight - padBottom}" stroke="#ccc" />`;
+    const barAreaWidth = vWidth - padLeftScroll - padRight;
+    const step = barAreaWidth / monthly.length;
+    const barWidth = step * 0.75;
+    monthly.forEach((m, idx) => {
+      const x = padLeftScroll + step * idx + (step - barWidth) / 2;
+      const barH = m.count / tickMax * (vHeight - padBottom - padTop);
+      const y = vHeight - padBottom - barH;
+      const colX = padLeftScroll + step * idx;
+      const colWidth = step;
+      const nextDate = idx < monthly.length - 1 ? monthly[idx + 1].date : null;
+      let dateFilter = `date:${m.date}-01`;
+      if (nextDate) {
+        dateFilter = `date:${m.date}-01...${nextDate}-01`;
+      } else {
+        const [yy, mm] = m.date.split("-").map(Number);
+        const nextMonth = new Date(yy, mm, 1);
+        const nextY = nextMonth.getFullYear();
+        const nextM = String(nextMonth.getMonth() + 1).padStart(2, "0");
+        dateFilter = `date:${m.date}-01...${nextY}-${nextM}-01`;
+      }
+      const searchUrl = `/posts?tags=user:${encodeURIComponent(context.targetUser.normalizedName)}+${dateFilter}`;
+      svg += `
+      <g class="month-column" style="cursor: pointer;" onclick="window.open('${searchUrl}', '_blank')">
+        <rect class="column-overlay" x="${colX}" y="0" width="${colWidth}" height="${vHeight - padBottom}" fill="transparent" />
+        <rect class="monthly-bar" x="${x}" y="${y}" width="${barWidth}" height="${barH}" fill="#40c463" rx="2" style="pointer-events: none;" />
+        <title>${m.label}: ${m.count} posts</title>
+      </g>
+    `;
+      const [year, month] = m.date.split("-");
+      const isJan = month === "01";
+      if (isJan || idx === 0) {
+        const tx = x + barWidth / 2;
+        const ty = vHeight - 5;
+        const text = isJan ? year : `${year}-${month}`;
+        svg += `<text x="${tx}" y="${ty}" text-anchor="middle" font-size="10" fill="#666">${text}</text>`;
+        svg += `<line x1="${tx}" y1="${vHeight - padBottom}" x2="${tx}" y2="${vHeight - padBottom + 3}" stroke="#ccc" />`;
+      }
+    });
+    if (levelChanges && levelChanges.length > 0) {
+      const [sY, sM] = monthly[0].date.split("-").map(Number);
+      levelChanges.forEach((lc) => {
+        const pY = lc.date.getFullYear();
+        const pM = lc.date.getMonth() + 1;
+        const pD = lc.date.getDate();
+        const monthDiff = (pY - sY) * 12 + (pM - sM);
+        const daysInMonth = new Date(pY, pM, 0).getDate();
+        const frac = (pD - 1) / daysInMonth;
+        const idx = monthDiff + frac;
+        if (idx < 0 || idx > monthly.length) return;
+        const x = padLeftScroll + step * idx;
+        svg += `
+        <g class="promotion-marker">
+           <line x1="${x}" y1="${padTop}" x2="${x}" y2="${vHeight - padBottom}" stroke="#ff5722" stroke-width="2" stroke-dasharray="4 2"></line>
+           <rect x="${x - 4}" y="${padTop}" width="8" height="${vHeight - padBottom - padTop}" fill="transparent">
+               <title>${lc.date.toLocaleDateString()}: ${lc.fromLevel} → ${lc.toLevel}</title>
+           </rect>
+        </g>
+     `;
+      });
+    }
+    monthly.forEach((mo, idx) => {
+      const mKey = mo.date;
+      const stars = milestones1k.filter((m) => {
+        const pDate = new Date(m.post.created_at);
+        const k = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, "0")}`;
+        return k === mKey;
+      });
+      if (stars.length > 0) {
+        const x = padLeftScroll + step * idx + step / 2;
+        stars.forEach((m, si) => {
+          const y = 14 + si * 18;
+          let fill = "#ffd700";
+          let stroke = "#b8860b";
+          let style = "filter: drop-shadow(0px 1px 1px rgba(0,0,0,0.3));";
+          let animClass = "";
+          if (m.index === 1) {
+            fill = "#00e676";
+            stroke = "#00a050";
+          } else if (m.index % 1e4 === 0) {
+            fill = "#ffb300";
+            animClass = "star-shiny";
+          }
+          svg += `
+             <a href="/posts/${m.post.id}" target="_blank" style="cursor: pointer; pointer-events: all;" onclick="event.stopPropagation()">
+                <text class="${animClass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${fill}" stroke="${stroke}" stroke-width="0.5" style="${style}">
+                   ★
+                   <title>Milestone #${m.index} (${new Date(m.post.created_at).toLocaleDateString()})</title>
+                </text>
+             </a>
+           `;
+        });
+      }
+    });
+    svg += "</svg>";
+    chartDiv.innerHTML = chartHtml;
+    chartWrapper.innerHTML = svg;
+    chartDiv.appendChild(mainWrapper);
+    container.appendChild(chartDiv);
+    setTimeout(() => {
+      if (chartWrapper) chartWrapper.scrollLeft = chartWrapper.scrollWidth;
+    }, 100);
+    requestAnimationFrame(() => {
+      chartWrapper.scrollLeft = chartWrapper.scrollWidth;
+    });
+  }
+  function renderScatterPlot(container, scatterData, context, levelChanges) {
+    const scatterWrapper = document.createElement("div");
+    scatterWrapper.style.marginTop = "24px";
+    scatterWrapper.style.marginBottom = "20px";
+    const headerContainer = document.createElement("div");
+    headerContainer.style.display = "flex";
+    headerContainer.style.alignItems = "center";
+    headerContainer.style.borderBottom = "1px solid #eee";
+    headerContainer.style.paddingBottom = "10px";
+    headerContainer.style.marginBottom = "15px";
+    const headerEl = document.createElement("h3");
+    headerEl.textContent = "📊 Post Performance";
+    headerEl.style.color = "#333";
+    headerEl.style.margin = "0";
+    headerContainer.appendChild(headerEl);
+    scatterWrapper.appendChild(headerContainer);
+    const scatterDiv = document.createElement("div");
+    scatterDiv.className = "dashboard-widget";
+    scatterDiv.style.background = "#fff";
+    scatterDiv.style.border = "1px solid #e1e4e8";
+    scatterDiv.style.borderRadius = "6px";
+    scatterDiv.style.padding = "15px";
+    scatterDiv.style.position = "relative";
+    scatterWrapper.appendChild(scatterDiv);
+    const toggleContainer = document.createElement("div");
+    toggleContainer.style.position = "absolute";
+    toggleContainer.style.top = "15px";
+    toggleContainer.style.left = "15px";
+    toggleContainer.style.zIndex = "5";
+    toggleContainer.style.display = "flex";
+    toggleContainer.style.gap = "10px";
+    toggleContainer.style.fontSize = "0.9em";
+    let currentScatterMode = "score";
+    let selectedYear = null;
+    const makeToggleBtn = (id, label, active, tooltip = null) => {
+      const btn = document.createElement("button");
+      btn.style.border = "1px solid #d0d7de";
+      btn.style.borderRadius = "20px";
+      btn.style.padding = "2px 10px";
+      btn.style.background = active ? "#0969da" : "#fff";
+      btn.style.color = active ? "#fff" : "#333";
+      btn.style.cursor = "pointer";
+      btn.style.transition = "all 0.2s";
+      btn.style.fontSize = "12px";
+      btn.style.display = "flex";
+      btn.style.alignItems = "center";
+      btn.style.gap = "5px";
+      const span = document.createElement("span");
+      span.textContent = label;
+      btn.appendChild(span);
+      if (tooltip) {
+        const help = document.createElement("span");
+        help.textContent = "❔";
+        help.style.cursor = "help";
+        help.title = tooltip;
+        help.style.fontSize = "0.9em";
+        help.style.opacity = "0.8";
+        btn.appendChild(help);
+      }
+      btn.onclick = () => {
+        if (currentScatterMode === id) return;
+        currentScatterMode = id;
+        Array.from(toggleContainer.children).forEach((b) => {
+          const bEl = b;
+          const isMe = bEl.textContent.includes(label);
+          bEl.style.background = "#fff";
+          bEl.style.color = "#333";
+          if (isMe) {
+            bEl.style.background = "#0969da";
+            bEl.style.color = "#fff";
+          }
+        });
+        renderScatter();
+      };
+      return btn;
+    };
+    toggleContainer.appendChild(makeToggleBtn("score", "Score", true));
+    toggleContainer.appendChild(makeToggleBtn("tags", "Tag Count", false, "General Tags Only"));
+    scatterDiv.appendChild(toggleContainer);
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "<";
+    resetBtn.style.position = "absolute";
+    resetBtn.style.bottom = "10px";
+    resetBtn.style.left = "15px";
+    resetBtn.style.zIndex = "5";
+    resetBtn.style.border = "1px solid #d0d7de";
+    resetBtn.style.background = "#fff";
+    resetBtn.style.borderRadius = "4px";
+    resetBtn.style.padding = "2px 8px";
+    resetBtn.style.cursor = "pointer";
+    resetBtn.style.fontSize = "11px";
+    resetBtn.style.display = "none";
+    resetBtn.onclick = () => {
+      selectedYear = null;
+      resetBtn.style.display = "none";
+      yearLabel.style.display = "none";
+      renderScatter();
+    };
+    scatterDiv.appendChild(resetBtn);
+    const yearLabel = document.createElement("div");
+    yearLabel.style.position = "absolute";
+    yearLabel.style.bottom = "40px";
+    yearLabel.style.left = "15px";
+    yearLabel.style.zIndex = "4";
+    yearLabel.style.fontSize = "16px";
+    yearLabel.style.fontWeight = "bold";
+    yearLabel.style.color = "#000000";
+    yearLabel.style.pointerEvents = "none";
+    yearLabel.style.display = "none";
+    scatterDiv.appendChild(yearLabel);
+    const filterContainer = document.createElement("div");
+    filterContainer.style.position = "absolute";
+    filterContainer.style.top = "15px";
+    filterContainer.style.right = "15px";
+    filterContainer.style.zIndex = "5";
+    filterContainer.style.background = "rgba(255,255,255,0.9)";
+    filterContainer.style.padding = "2px 8px";
+    filterContainer.style.borderRadius = "12px";
+    filterContainer.style.border = "1px solid #eee";
+    filterContainer.style.display = "flex";
+    filterContainer.style.alignItems = "center";
+    filterContainer.style.gap = "15px";
+    const countLabel = document.createElement("span");
+    countLabel.textContent = "...";
+    countLabel.style.fontSize = "12px";
+    countLabel.style.fontWeight = "bold";
+    countLabel.style.color = "#333";
+    countLabel.style.marginRight = "5px";
+    filterContainer.appendChild(countLabel);
+    const ratings = {
+      g: { label: "G", color: "#4caf50" },
+      s: { label: "S", color: "#ffb74d" },
+      q: { label: "Q", color: "#ab47bc" },
+      e: { label: "E", color: "#f44336" }
+    };
+    const activeFilters = { g: true, s: true, q: true, e: true };
+    Object.keys(ratings).forEach((key) => {
+      const btn = document.createElement("div");
+      const conf = ratings[key];
+      btn.style.display = "flex";
+      btn.style.alignItems = "center";
+      btn.style.cursor = "pointer";
+      btn.style.userSelect = "none";
+      btn.style.gap = "4px";
+      const label = document.createElement("span");
+      label.textContent = conf.label;
+      label.style.fontWeight = "normal";
+      label.style.color = "#000000";
+      label.style.fontSize = "12px";
+      const circle = document.createElement("div");
+      circle.style.width = "16px";
+      circle.style.height = "16px";
+      circle.style.borderRadius = "50%";
+      circle.style.background = conf.color;
+      circle.style.boxShadow = "0 1px 3px rgba(0,0,0,0.2)";
+      circle.style.transition = "background 0.3s, transform 0.3s";
+      btn.appendChild(label);
+      btn.appendChild(circle);
+      btn.onclick = () => {
+        activeFilters[key] = !activeFilters[key];
+        if (activeFilters[key]) {
+          circle.style.background = conf.color;
+          circle.style.opacity = "1";
+        } else {
+          circle.style.background = "#e0e0e0";
+          circle.style.opacity = "0.7";
+        }
+        renderScatter();
+      };
+      filterContainer.appendChild(btn);
+    });
+    const canvasContainer = document.createElement("div");
+    canvasContainer.style.width = "100%";
+    canvasContainer.style.height = "300px";
+    canvasContainer.style.position = "relative";
+    scatterDiv.appendChild(canvasContainer);
+    const canvas = document.createElement("canvas");
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvasContainer.appendChild(canvas);
+    scatterDiv.appendChild(filterContainer);
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const overlayDiv = document.createElement("div");
+    overlayDiv.style.position = "absolute";
+    overlayDiv.style.top = "0";
+    overlayDiv.style.left = "0";
+    overlayDiv.style.width = "100%";
+    overlayDiv.style.height = "100%";
+    overlayDiv.style.pointerEvents = "none";
+    canvasContainer.appendChild(overlayDiv);
+    const selectionDiv = document.createElement("div");
+    selectionDiv.style.position = "absolute";
+    selectionDiv.style.border = "1px dashed #007bff";
+    selectionDiv.style.backgroundColor = "rgba(0, 123, 255, 0.2)";
+    selectionDiv.style.display = "none";
+    selectionDiv.style.pointerEvents = "none";
+    canvasContainer.appendChild(selectionDiv);
+    const rangeLabel = document.createElement("div");
+    rangeLabel.style.cssText = "position:absolute;top:-38px;left:0;right:0;text-align:center;font-size:11px;color:#fff;background:rgba(0,0,0,0.75);padding:3px 10px;border-radius:4px;pointer-events:none;white-space:nowrap;display:none;width:fit-content;margin:0 auto;line-height:1.5;";
+    selectionDiv.appendChild(rangeLabel);
+    canvas.style.cursor = "crosshair";
+    const popover = document.createElement("div");
+    popover.id = "scatter-popover-ui";
+    popover.style.cssText = "position: fixed; z-index: 10000; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: none; max-height: 300px; width: 320px; flex-direction: column; font-family: sans-serif;";
+    document.body.appendChild(popover);
+    document.addEventListener("mousedown", (e) => {
+      if (popover.style.display !== "none" && !popover.contains(e.target)) {
+        popover.style.display = "none";
+      }
+    });
+    const currentScale = {};
+    const renderScatter = () => {
+      if (!scatterDiv.isConnected || !ctx) return;
+      const rect = canvasContainer.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+      }
+      const w = rect.width;
+      const h = rect.height;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      overlayDiv.innerHTML = "";
+      const padL = 40, padR = 20, padT = 60, padB = 50;
+      const drawW = w - padL - padR;
+      const drawH = h - padT - padB;
+      let minDateVal = Infinity;
+      let maxDateVal = -Infinity;
+      let maxVal = 0;
+      if (selectedYear) {
+        minDateVal = new Date(selectedYear, 0, 1).getTime();
+        maxDateVal = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
+        resetBtn.style.display = "block";
+        yearLabel.textContent = String(selectedYear);
+        yearLabel.style.display = "block";
+      } else {
+        resetBtn.style.display = "none";
+        yearLabel.style.display = "none";
+        for (const d of scatterData) {
+          if (d.d < minDateVal) minDateVal = d.d;
+          if (d.d > maxDateVal) maxDateVal = d.d;
+        }
+        if (minDateVal === Infinity) {
+          minDateVal = Date.now();
+          maxDateVal = minDateVal + 864e5;
+        } else {
+          const startY = new Date(minDateVal).getFullYear();
+          minDateVal = new Date(startY, 0, 1).getTime();
+        }
+      }
+      const timeRange = maxDateVal - minDateVal || 1;
+      for (const d of scatterData) {
+        if (d.d >= minDateVal && d.d <= maxDateVal) {
+          const val = currentScatterMode === "tags" ? d.t || 0 : d.s;
+          if (val > maxVal) maxVal = val;
+        }
+      }
+      if (maxVal === 0) maxVal = 100;
+      let stepY = 100;
+      if (currentScatterMode === "tags") {
+        if (maxVal < 50) stepY = 10;
+        else if (maxVal < 200) stepY = 25;
+        else stepY = 50;
+      } else {
+        if (maxVal < 200) stepY = 50;
+        else if (maxVal < 1e3) stepY = 100;
+        else stepY = 500;
+      }
+      maxVal = Math.ceil(maxVal / stepY) * stepY;
+      if (maxVal < stepY) maxVal = stepY;
+      Object.assign(currentScale, { minDate: minDateVal, maxDate: maxDateVal, maxVal, timeRange, padL, padT, drawW, drawH, mode: currentScatterMode });
+      const visiblePoints = scatterData.filter((d) => {
+        if (d.d < minDateVal || d.d > maxDateVal) return false;
+        return activeFilters[d.r];
+      });
+      countLabel.textContent = `${visiblePoints.length} items`;
+      ctx.beginPath();
+      ctx.strokeStyle = "#eee";
+      ctx.lineWidth = 1;
+      for (let val = 0; val <= maxVal; val += stepY) {
+        const y = padT + drawH - val / maxVal * drawH;
+        ctx.moveTo(padL, y);
+        ctx.lineTo(w - padR, y);
+        ctx.fillStyle = "#888";
+        ctx.font = "10px Arial";
+        ctx.textAlign = "right";
+        ctx.fillText(String(val), padL - 5, y + 3);
+      }
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.strokeStyle = "#ccc";
+      ctx.moveTo(padL, padT + drawH);
+      ctx.lineTo(w - padR, padT + drawH);
+      ctx.stroke();
+      ctx.fillStyle = "#666";
+      ctx.textAlign = "center";
+      if (selectedYear) {
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        months.forEach((m, i) => {
+          const stepW = drawW / 12;
+          const x = padL + stepW * i + stepW / 2;
+          ctx.fillText(m, x, padT + drawH + 15);
+          if (i > 0) {
+            const tickX = padL + stepW * i;
+            ctx.beginPath();
+            ctx.moveTo(tickX, padT + drawH);
+            ctx.lineTo(tickX, padT + drawH + 5);
+            ctx.stroke();
+          }
+        });
+      } else {
+        const startYear = new Date(minDateVal).getFullYear();
+        const endYear = new Date(maxDateVal).getFullYear();
+        for (let y = startYear; y <= endYear; y++) {
+          const d = new Date(y, 0, 1).getTime();
+          const x = padL + (d - minDateVal) / timeRange * drawW;
+          if (x >= padL - 5 && x <= w - padR + 5) {
+            const nextD = new Date(y + 1, 0, 1).getTime();
+            const xNext = padL + (nextD - minDateVal) / timeRange * drawW;
+            const xCenter = (x + xNext) / 2;
+            if (xCenter > padL - 10 && xCenter < w - padR + 10) {
+              ctx.fillText(String(y), xCenter, padT + drawH + 15);
+            }
+            ctx.beginPath();
+            ctx.moveTo(x, padT + drawH);
+            ctx.lineTo(x, padT + drawH + 5);
+            ctx.stroke();
+          }
+        }
+      }
+      visiblePoints.forEach((pt) => {
+        if (pt.d < minDateVal || pt.d > maxDateVal) return;
+        const val = currentScatterMode === "tags" ? pt.t || 0 : pt.s;
+        const x = padL + (pt.d - minDateVal) / timeRange * drawW;
+        const y = padT + drawH - val / maxVal * drawH;
+        let color = "#ccc";
+        if (pt.r === "g") color = "#4caf50";
+        else if (pt.r === "s") color = "#ffb74d";
+        else if (pt.r === "q") color = "#ab47bc";
+        else if (pt.r === "e") color = "#f44336";
+        ctx.fillStyle = color;
+        ctx.fillRect(x - 1, y - 1, 2, 2);
+      });
+      const addOverlayLine = (dateObjOrStr, color, title, isDashed, thickness = "2px") => {
+        const d = new Date(dateObjOrStr).getTime();
+        if (d < minDateVal || d > maxDateVal) return;
+        const x = padL + (d - minDateVal) / timeRange * drawW;
+        const line = document.createElement("div");
+        line.style.position = "absolute";
+        line.style.left = x + "px";
+        line.style.top = padT + "px";
+        line.style.height = drawH + "px";
+        line.style.borderLeft = `${thickness} ${"dashed"} ${color}`;
+        line.style.width = "4px";
+        line.style.cursor = "help";
+        line.style.pointerEvents = "auto";
+        line.title = title;
+        overlayDiv.appendChild(line);
+      };
+      if (context.targetUser && context.targetUser.joinDate) {
+        const jd = new Date(context.targetUser.joinDate);
+        addOverlayLine(jd, "#00E676", `${jd.toLocaleDateString()}: Joined Danbooru`, true, "2px");
+      }
+      if (levelChanges) {
+        levelChanges.forEach((lc) => {
+          addOverlayLine(lc.date, "#ff5722", `${lc.date.toLocaleDateString()}: ${lc.fromLevel} → ${lc.toLevel}`);
+        });
+      }
+      if (currentScatterMode === "score") {
+        addOverlayLine("2021-11-24", "#bbb", "All users could vote since this day.", true, "1px");
+      }
+    };
+    container.appendChild(scatterWrapper);
+    requestAnimationFrame(renderScatter);
+    window.addEventListener("resize", renderScatter);
+    let lastDragEndTime = 0;
+    canvas.addEventListener("click", (e) => {
+      if (Date.now() - lastDragEndTime < 100) return;
+      const rect = canvasContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const axisY = currentScale.padT + currentScale.drawH;
+      if (y > axisY && y < axisY + 40 && !selectedYear) {
+        const t = (x - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+        const clickedDate = new Date(t);
+        const clickedYear = clickedDate.getFullYear();
+        if (clickedYear >= new Date(currentScale.minDate).getFullYear() && clickedYear <= new Date(currentScale.maxDate).getFullYear()) {
+          selectedYear = clickedYear;
+          renderScatter();
+        }
+      }
+    });
+    canvas.addEventListener("mousemove", (e) => {
+      if (dragStart) return;
+      const rect = canvasContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      let isHand = false;
+      const axisY = currentScale.padT + currentScale.drawH;
+      if (y > axisY && y < axisY + 40 && !selectedYear) {
+        const t = (x - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+        const hoveredYear = new Date(t).getFullYear();
+        if (hoveredYear >= new Date(currentScale.minDate).getFullYear() && hoveredYear <= new Date(currentScale.maxDate).getFullYear()) {
+          isHand = true;
+        }
+      }
+      canvas.style.cursor = isHand ? "pointer" : "crosshair";
+    });
+    let dragStart = null;
+    canvas.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      const rect = canvasContainer.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (x < currentScale.padL || x > currentScale.padL + currentScale.drawW || y < currentScale.padT || y > currentScale.padT + currentScale.drawH) return;
+      dragStart = { x, y };
+      selectionDiv.style.left = x + "px";
+      selectionDiv.style.top = y + "px";
+      selectionDiv.style.width = "0px";
+      selectionDiv.style.height = "0px";
+      selectionDiv.style.display = "block";
+    });
+    let rangeLabelTimer = null;
+    const updateRangeLabel = (x1, x2, y1, y2) => {
+      if (rangeLabelTimer) clearTimeout(rangeLabelTimer);
+      rangeLabelTimer = setTimeout(() => {
+        const dateMin = (Math.min(x1, x2) - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+        const dateMax = (Math.max(x1, x2) - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+        const valMin = (currentScale.padT + currentScale.drawH - Math.max(y1, y2)) / currentScale.drawH * currentScale.maxVal;
+        const valMax = (currentScale.padT + currentScale.drawH - Math.min(y1, y2)) / currentScale.drawH * currentScale.maxVal;
+        const d1 = new Date(dateMin).toISOString().slice(0, 10);
+        const d2 = new Date(dateMax).toISOString().slice(0, 10);
+        const valLabel = currentScale.mode === "tags" ? "Tags" : "Score";
+        const count = scatterData.filter((d) => {
+          if (!activeFilters[d.r]) return false;
+          const val = currentScale.mode === "tags" ? d.t || 0 : d.s;
+          return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
+        }).length;
+        rangeLabel.innerHTML = `${d1} ~ ${d2}<br>${valLabel}: ${Math.round(valMin)} ~ ${Math.round(valMax)} · ${count.toLocaleString()} posts`;
+        rangeLabel.style.display = "block";
+      }, 50);
+    };
+    window.addEventListener("mousemove", (e) => {
+      if (!dragStart) return;
+      const rect = canvasContainer.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const rL = currentScale.padL;
+      const rT = currentScale.padT;
+      const rW = currentScale.drawW;
+      const currentX = Math.max(rL, Math.min(rL + rW, mx));
+      const currentY = Math.max(rT, Math.min(rect.height, my));
+      const x = Math.min(dragStart.x, currentX);
+      const y = Math.min(dragStart.y, currentY);
+      const w = Math.abs(currentX - dragStart.x);
+      const h = Math.abs(currentY - dragStart.y);
+      selectionDiv.style.left = x + "px";
+      selectionDiv.style.top = y + "px";
+      selectionDiv.style.width = w + "px";
+      selectionDiv.style.height = h + "px";
+      updateRangeLabel(dragStart.x, currentX, dragStart.y, currentY);
+    });
+    window.addEventListener("mouseup", (e) => {
+      if (!dragStart) return;
+      const ds = dragStart;
+      dragStart = null;
+      selectionDiv.style.display = "none";
+      rangeLabel.style.display = "none";
+      if (rangeLabelTimer) {
+        clearTimeout(rangeLabelTimer);
+        rangeLabelTimer = null;
+      }
+      const rect = canvasContainer.getBoundingClientRect();
+      const endX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const endY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+      if (Math.abs(endX - ds.x) >= 5 || Math.abs(endY - ds.y) >= 5) {
+        lastDragEndTime = Date.now();
+      }
+      if (Math.abs(endX - ds.x) < 5 && Math.abs(endY - ds.y) < 5) return;
+      const x1 = Math.min(ds.x, endX);
+      const x2 = Math.max(ds.x, endX);
+      const y1 = Math.min(ds.y, endY);
+      const y2 = Math.max(ds.y, endY);
+      const dateMin = (x1 - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+      const dateMax = (x2 - currentScale.padL) / currentScale.drawW * currentScale.timeRange + currentScale.minDate;
+      const valMin = (currentScale.padT + currentScale.drawH - y2) / currentScale.drawH * currentScale.maxVal;
+      const valMax = (currentScale.padT + currentScale.drawH - y1) / currentScale.drawH * currentScale.maxVal;
+      const result = scatterData.filter((d) => {
+        if (!activeFilters[d.r]) return false;
+        const val = currentScale.mode === "tags" ? d.t || 0 : d.s;
+        return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
+      });
+      if (result.length === 0) return;
+      const sortedList = result.sort((a, b) => {
+        const vA = currentScale.mode === "tags" ? a.t || 0 : a.s;
+        const vB = currentScale.mode === "tags" ? b.t || 0 : b.s;
+        return vB - vA;
+      });
+      let aDMin = Infinity, aDMax = -Infinity;
+      let aVMin = Infinity, aVMax = -Infinity;
+      sortedList.forEach((d) => {
+        if (d.d < aDMin) aDMin = d.d;
+        if (d.d > aDMax) aDMax = d.d;
+        const v = currentScale.mode === "tags" ? d.t || 0 : d.s;
+        if (v < aVMin) aVMin = v;
+        if (v > aVMax) aVMax = v;
+      });
+      showPopover(e.clientX, e.clientY, sortedList, aDMin, aDMax, aVMin, aVMax);
+    });
+    const showPopover = (mx, my, items, dMin, dMax, sMin, sMax) => {
+      const d1 = new Date(dMin).toLocaleDateString();
+      const d2 = new Date(dMax).toLocaleDateString();
+      const sm1 = Math.floor(sMin);
+      const sm2 = Math.ceil(sMax);
+      const totalCount = items.length;
+      const isTags = currentScale.mode === "tags";
+      let visibleLimit = 50;
+      const renderItems = (start, limit) => {
+        let chunkHtml = "";
+        const slice = items.slice(start, start + limit);
+        slice.forEach((it) => {
+          const itDate = new Date(it.d).toLocaleDateString();
+          const val = isTags ? it.t || 0 : it.s;
+          let color = "#ccc";
+          if (it.r === "g") color = "#4caf50";
+          else if (it.r === "s") color = "#ffb74d";
+          else if (it.r === "q") color = "#ab47bc";
+          else if (it.r === "e") color = "#f44336";
+          chunkHtml += `
+         <div class="pop-item" data-id="${it.id}" style="padding: 8px 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: bg 0.2s;">
+           <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
+           <span style="width: 60px; color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px;">#${it.id}</span>
+           <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
+           <span style="font-weight: bold; color: #333; font-size: 13px;">${val}</span>
+         </div>
+       `;
+        });
+        return chunkHtml;
+      };
+      const headerHtml = `
+     <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: start;">
+       <div style="display:flex; flex-direction:column;">
+          <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
+          <span style="font-size: 11px; color: #666; margin-top:2px;">${isTags ? "Tag Count" : "Score"}: ${sm1} ~ ${sm2}</span>
+       </div>
+       <div style="display:flex; align-items:center; gap: 10px; margin-top:2px;">
+         <span id="pop-count-label" style="font-size: 12px; color: #888;">${Math.min(visibleLimit, totalCount)} / ${totalCount} items</span>
+         <button id="scatter-pop-close" style="background:none; border:none; color:#999; font-size:16px; cursor:pointer; line-height:1; padding:0;">&times;</button>
+       </div>
+     </div>
+     <div id="pop-list-container" style="flex: 1; overflow-y: auto;">
+       ${renderItems(0, visibleLimit)}
+     </div>
+     <div id="pop-load-more" style="display: ${totalCount > visibleLimit ? "block" : "none"}; padding: 10px; text-align: center; border-top: 1px solid #eee; background: #fff;">
+        <button id="btn-load-more" style="width: 100%; padding: 6px; background: #f0f0f0; border: none; border-radius: 4px; color: #555; cursor: pointer; font-size: 12px;">Load More (+50)</button>
+     </div>
+   `;
+      popover.innerHTML = headerHtml;
+      const attachEvents = (parent) => {
+        if (!parent) return;
+        parent.querySelectorAll(".pop-item").forEach((el) => {
+          const htmlEl = el;
+          htmlEl.onmouseover = () => htmlEl.style.backgroundColor = "#f5f9ff";
+          htmlEl.onmouseout = () => htmlEl.style.backgroundColor = "transparent";
+          htmlEl.onclick = () => window.open(`/posts/${htmlEl.dataset.id}`, "_blank");
+        });
+      };
+      attachEvents(popover.querySelector("#pop-list-container"));
+      const closeBtn = popover.querySelector("#scatter-pop-close");
+      if (closeBtn) {
+        closeBtn.onclick = (e) => {
+          e.stopPropagation();
+          popover.style.display = "none";
+        };
+      }
+      const loadMoreContainer = popover.querySelector("#pop-load-more");
+      const loadMoreBtn = popover.querySelector("#btn-load-more");
+      const listContainer = popover.querySelector("#pop-list-container");
+      const popCountLabel = popover.querySelector("#pop-count-label");
+      if (loadMoreBtn) {
+        loadMoreBtn.onclick = () => {
+          const start = visibleLimit;
+          visibleLimit += 50;
+          const newHtml = renderItems(start, 50);
+          listContainer.insertAdjacentHTML("beforeend", newHtml);
+          attachEvents(listContainer);
+          popCountLabel.textContent = `${Math.min(visibleLimit, totalCount)} / ${totalCount} items`;
+          if (visibleLimit >= totalCount) {
+            loadMoreContainer.style.display = "none";
+          }
+        };
+      }
+      popover.style.display = "flex";
+      const pH = popover.offsetHeight || 300;
+      let posX = mx + 15;
+      let posY = my + 15;
+      if (posX + 320 > window.innerWidth) posX = window.innerWidth - 320 - 10;
+      if (posX < 10) posX = 10;
+      if (posY + pH > window.innerHeight) posY = window.innerHeight - pH - 10;
+      if (posY < 10) posY = 10;
+      popover.style.left = posX + "px";
+      popover.style.top = posY + "px";
+    };
+  }
+  const MIN_FONT = 11;
+  const MAX_FONT = 38;
+  const CLOUD_HEIGHT = 320;
+  const TOP_WEIGHT_PERCENTILE = 0.2;
+  const TRANSITION_MS = 350;
+  function computeFontSizes(items) {
+    if (items.length === 0) return [];
+    const freqs = items.map((d) => d.frequency);
+    const minFreq = Math.min(...freqs);
+    const maxFreq = Math.max(...freqs);
+    const logMin = Math.log(minFreq);
+    const logMax = Math.log(maxFreq);
+    const logRange = logMax - logMin;
+    const boldThreshold = Math.ceil(items.length * TOP_WEIGHT_PERCENTILE);
+    return items.map((item, i) => ({
+      text: item.name,
+      tagName: item.tagName,
+      frequency: item.frequency,
+      count: item.count,
+      size: logRange > 0 ? MIN_FONT + (Math.log(item.frequency) - logMin) / logRange * (MAX_FONT - MIN_FONT) : (MIN_FONT + MAX_FONT) / 2,
+      bold: i < boldThreshold
+    }));
+  }
+  function renderTagCloudWidget(container, options) {
+    const { initialData, fetchData, userName, categories } = options;
+    const cloudData = {};
+    const layoutCache = {};
+    let currentTab = categories[0]?.id ?? 0;
+    cloudData[currentTab] = initialData;
+    container.style.background = "#fff";
+    container.style.border = "1px solid #e1e4e8";
+    container.style.borderRadius = "8px";
+    container.style.padding = "15px";
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;";
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:0.9em;color:#666;font-weight:bold;";
+    title.textContent = "🏷️ Tag Cloud";
+    const tabsDiv = document.createElement("div");
+    tabsDiv.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
+    for (const cat of categories) {
+      const btn = document.createElement("button");
+      btn.className = "di-pie-tab";
+      btn.dataset.catId = String(cat.id);
+      btn.textContent = cat.label;
+      if (cat.id === currentTab) btn.classList.add("active");
+      tabsDiv.appendChild(btn);
+    }
+    header.appendChild(title);
+    header.appendChild(tabsDiv);
+    container.appendChild(header);
+    const cloudContainer = document.createElement("div");
+    cloudContainer.className = "di-tag-cloud-container";
+    cloudContainer.style.position = "relative";
+    cloudContainer.style.minHeight = `${CLOUD_HEIGHT}px`;
+    container.appendChild(cloudContainer);
+    const tooltip = d3__namespace.select("body").selectAll(".di-tag-cloud-tooltip").data([0]).join("div").attr("class", "di-tag-cloud-tooltip").style("position", "absolute").style("background", "rgba(30, 30, 30, 0.95)").style("color", "#fff").style("padding", "5px 10px").style("border-radius", "6px").style("font-size", "12px").style("pointer-events", "none").style("z-index", "2147483647").style("opacity", "0").style("white-space", "nowrap");
+    const getCurrentColor = () => {
+      return categories.find((c) => c.id === currentTab)?.color ?? "#0075f8";
+    };
+    const createCloudSvg = (placedWords, width, color, startOpacity) => {
+      const wrapper = document.createElement("div");
+      wrapper.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;opacity:${startOpacity};transition:opacity ${TRANSITION_MS}ms ease;`;
+      const svg = d3__namespace.select(wrapper).append("svg").attr("width", width).attr("height", CLOUD_HEIGHT);
+      const g = svg.append("g").attr("transform", `translate(${width / 2},${CLOUD_HEIGHT / 2})`);
+      g.selectAll("text").data(placedWords).join("text").attr("class", "di-tag-cloud-word").style("font-size", (d) => `${d.size}px`).style("font-weight", (d) => d.bold ? "700" : "500").style("font-family", "sans-serif").style("fill", color).attr("text-anchor", "middle").attr("transform", (d) => `translate(${d.x},${d.y})rotate(${d.rotate || 0})`).text((d) => d.text).on("mouseover", function(event, d) {
+        g.selectAll("text").style("opacity", 0.25);
+        d3__namespace.select(this).style("opacity", 1).style("font-size", `${d.size * 1.08}px`);
+        tooltip.html(`<strong>${d.text}</strong> — ${(d.frequency * 100).toFixed(2)}% · ${d.count.toLocaleString()} posts`).style("left", `${event.pageX + 15}px`).style("top", `${event.pageY + 15}px`).style("opacity", "1");
+      }).on("mousemove", (event) => {
+        tooltip.style("left", `${event.pageX + 15}px`).style("top", `${event.pageY + 15}px`);
+      }).on("mouseout", function(_event, d) {
+        g.selectAll("text").style("opacity", 1);
+        d3__namespace.select(this).style("font-size", `${d.size}px`);
+        tooltip.style("opacity", "0");
+      }).on("click", (_event, d) => {
+        const query = `user:${userName} ${d.tagName}`;
+        window.open(`/posts?tags=${encodeURIComponent(query)}`, "_blank");
+      });
+      return wrapper;
+    };
+    const crossfadeTo = (placedWords, width, color) => {
+      const oldChildren = Array.from(cloudContainer.children);
+      const newWrapper = createCloudSvg(placedWords, width, color, "0");
+      cloudContainer.appendChild(newWrapper);
+      requestAnimationFrame(() => {
+        for (const el of oldChildren) {
+          el.style.transition = `opacity ${TRANSITION_MS}ms ease`;
+          el.style.opacity = "0";
+        }
+        newWrapper.style.opacity = "1";
+        setTimeout(() => {
+          for (const el of oldChildren) {
+            if (el.parentNode === cloudContainer) cloudContainer.removeChild(el);
+          }
+        }, TRANSITION_MS);
+      });
+    };
+    const computeAndRender = (data, crossfade) => {
+      const width = Math.max(container.clientWidth - 30, 300);
+      const color = getCurrentColor();
+      if (layoutCache[currentTab]) {
+        if (crossfade) {
+          crossfadeTo(layoutCache[currentTab], width, color);
+        } else {
+          cloudContainer.innerHTML = "";
+          const wrapper = createCloudSvg(layoutCache[currentTab], width, color, "1");
+          cloudContainer.appendChild(wrapper);
+        }
+        return;
+      }
+      const words = computeFontSizes(data);
+      const cloud = d3__namespace.layout.cloud;
+      if (!cloud) {
+        cloudContainer.innerHTML = '<div style="color:#c00;">d3-cloud library not loaded</div>';
+        return;
+      }
+      cloud().size([width, CLOUD_HEIGHT]).words(words.map((w) => ({ ...w }))).padding(4).rotate(() => 0).font("sans-serif").fontSize((d) => d.size).on("end", (placedWords) => {
+        layoutCache[currentTab] = placedWords;
+        if (crossfade) {
+          crossfadeTo(placedWords, width, color);
+        } else {
+          cloudContainer.innerHTML = "";
+          const wrapper = createCloudSvg(placedWords, width, color, "1");
+          cloudContainer.appendChild(wrapper);
+        }
+      }).start();
+    };
+    const loadTab = async (categoryId, crossfade) => {
+      if (cloudData[categoryId]) {
+        computeAndRender(cloudData[categoryId], crossfade);
+        return;
+      }
+      const oldChildren = Array.from(cloudContainer.children);
+      const loadingDiv = document.createElement("div");
+      loadingDiv.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity ${TRANSITION_MS}ms ease;`;
+      loadingDiv.innerHTML = '<span style="color:#888;font-size:0.9em;">Loading...</span>';
+      cloudContainer.appendChild(loadingDiv);
+      requestAnimationFrame(() => {
+        for (const el of oldChildren) {
+          el.style.transition = `opacity ${TRANSITION_MS}ms ease`;
+          el.style.opacity = "0";
+        }
+        loadingDiv.style.opacity = "1";
+        setTimeout(() => {
+          for (const el of oldChildren) {
+            if (el.parentNode === cloudContainer) cloudContainer.removeChild(el);
+          }
+        }, TRANSITION_MS);
+      });
+      try {
+        const data = await fetchData(categoryId);
+        cloudData[categoryId] = data;
+        if (currentTab === categoryId) {
+          computeAndRender(data, true);
+        }
+      } catch (e) {
+        console.debug("[DI] Tag cloud tab load failed", e);
+        if (currentTab === categoryId) {
+          cloudContainer.innerHTML = '<div style="color:#c00;font-size:0.9em;">Failed to load data</div>';
+        }
+      }
+    };
+    tabsDiv.addEventListener("click", (e) => {
+      const btn = e.target.closest(".di-pie-tab");
+      if (!btn || !btn.dataset.catId) return;
+      const catId = parseInt(btn.dataset.catId);
+      if (catId === currentTab) return;
+      currentTab = catId;
+      tabsDiv.querySelectorAll(".di-pie-tab").forEach((t) => t.classList.remove("active"));
+      btn.classList.add("active");
+      loadTab(catId, true);
+    });
+    loadTab(currentTab, false);
+  }
+  const PAGE_SIZE = 20;
+  function renderCreatedTagsWidget(container, dataManager, targetUser) {
+    let items = [];
+    let sortMode = "posts";
+    let currentPage = 0;
+    container.style.background = "#fff";
+    container.style.border = "1px solid #e1e4e8";
+    container.style.borderRadius = "8px";
+    container.style.padding = "15px";
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;";
+    const titleDiv = document.createElement("div");
+    titleDiv.style.cssText = "font-size:0.9em;color:#666;font-weight:bold;";
+    titleDiv.textContent = `🏷️ Tags created by ${targetUser.name}`;
+    const controlsDiv = document.createElement("div");
+    controlsDiv.style.cssText = "display:flex;align-items:center;gap:8px;";
+    controlsDiv.style.display = "none";
+    const sortSelect = document.createElement("select");
+    sortSelect.style.cssText = "font-size:11px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;background:#fff;color:#555;";
+    sortSelect.innerHTML = `
+    <option value="posts">Posts ▼</option>
+    <option value="name">Name</option>
+    <option value="date">Date ▼</option>
+  `;
+    controlsDiv.appendChild(sortSelect);
+    header.appendChild(titleDiv);
+    header.appendChild(controlsDiv);
+    container.appendChild(header);
+    const contentDiv = document.createElement("div");
+    container.appendChild(contentDiv);
+    const getStatusHtml = (item) => {
+      if (item.aliasedTo) {
+        const aliasDisplay = item.aliasedTo.replace(/_/g, " ");
+        return `<span class="di-created-tags-status" style="color:#8250df;background:#f3e8ff;">🔀 <a href="/wiki_pages/${item.aliasedTo}" target="_blank" style="color:#8250df;">${aliasDisplay}</a></span>`;
+      }
+      if (item.isDeprecated) {
+        return '<span class="di-created-tags-status" style="color:#cf222e;background:#ffebe9;">⚠️ Deprecated</span>';
+      }
+      if (item.postCount === 0) {
+        return '<span class="di-created-tags-status" style="color:#888;background:#f0f0f0;">➖ Empty</span>';
+      }
+      return '<span class="di-created-tags-status" style="color:#1a7f37;background:#dafbe1;">✅ Active</span>';
+    };
+    const sortItems = () => {
+      if (sortMode === "posts") {
+        items.sort((a, b) => b.postCount - a.postCount);
+      } else if (sortMode === "name") {
+        items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      } else if (sortMode === "date") {
+        items.sort((a, b) => b.reportDate.localeCompare(a.reportDate));
+      }
+    };
+    const renderTable = () => {
+      const totalPages = Math.ceil(items.length / PAGE_SIZE);
+      const start = currentPage * PAGE_SIZE;
+      const pageItems = items.slice(start, start + PAGE_SIZE);
+      let html = `<table class="di-created-tags-table">
+      <thead><tr>
+        <th>Tag Name</th>
+        <th style="text-align:right;">Posts</th>
+        <th>Status</th>
+        <th>Date</th>
+      </tr></thead>
+      <tbody>`;
+      for (const item of pageItems) {
+        html += `<tr class="di-created-tags-row">
+        <td><a href="/wiki_pages/${item.tagName}" target="_blank" style="color:#0075f8;">${item.displayName}</a></td>
+        <td style="text-align:right;font-variant-numeric:tabular-nums;">${item.postCount.toLocaleString()}</td>
+        <td>${getStatusHtml(item)}</td>
+        <td style="color:#888;font-size:0.85em;">${item.reportDate}</td>
+      </tr>`;
+      }
+      html += "</tbody></table>";
+      if (totalPages > 1) {
+        html += '<div style="display:flex;justify-content:center;gap:4px;margin-top:10px;">';
+        for (let i = 0; i < totalPages; i++) {
+          const active = i === currentPage;
+          html += `<button class="di-pie-tab${active ? " active" : ""}" data-page="${i}" style="min-width:28px;">${i + 1}</button>`;
+        }
+        html += "</div>";
+      }
+      contentDiv.innerHTML = html;
+      contentDiv.querySelectorAll("[data-page]").forEach((btn) => {
+        btn.onclick = () => {
+          currentPage = parseInt(btn.dataset.page || "0");
+          renderTable();
+        };
+      });
+    };
+    const loadData = async () => {
+      const progressId = "di-created-tags-progress";
+      contentDiv.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:center;padding:30px;color:#888;">
+        <div class="di-spinner" style="width:24px;height:24px;border-width:3px;margin-right:10px;"></div>
+        <span id="${progressId}">Initializing...</span>
+      </div>`;
+      const progressEl = document.getElementById(progressId);
+      const onProgress = (msg) => {
+        if (progressEl) progressEl.textContent = msg;
+      };
+      try {
+        items = await dataManager.getCreatedTags(targetUser, onProgress);
+        if (items.length === 0) {
+          contentDiv.innerHTML = '<div style="color:#888;text-align:center;padding:20px;font-size:0.9em;">No created tags found in NNTBot reports.</div>';
+          return;
+        }
+        titleDiv.textContent = `🏷️ Tags created by ${targetUser.name} (${items.length})`;
+        controlsDiv.style.display = "flex";
+        sortItems();
+        renderTable();
+      } catch (e) {
+        console.debug("[DI] Created tags load failed", e);
+        contentDiv.innerHTML = '<div style="color:#c00;text-align:center;padding:20px;font-size:0.9em;">Failed to load created tags.</div>';
+      }
+    };
+    sortSelect.onchange = () => {
+      sortMode = sortSelect.value;
+      currentPage = 0;
+      sortItems();
+      renderTable();
+    };
+    contentDiv.innerHTML = `
+    <div style="text-align:center;padding:20px;">
+      <button id="di-load-created-tags" style="
+        background:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;
+        padding:8px 16px;cursor:pointer;color:#24292f;font-size:13px;
+        transition:background 0.2s;
+      ">Load Created Tags</button>
+      <div style="font-size:0.8em;color:#888;margin-top:6px;">Searches NNTBot tag reports for tags created by this user</div>
+    </div>`;
+    const loadBtn = contentDiv.querySelector("#di-load-created-tags");
+    if (loadBtn) {
+      loadBtn.onmouseover = () => {
+        loadBtn.style.background = "#eaeef2";
+      };
+      loadBtn.onmouseout = () => {
+        loadBtn.style.background = "#f6f8fa";
+      };
+      loadBtn.onclick = () => loadData();
+    }
+  }
+  class UserAnalyticsApp {
+    db;
+    settings;
+    context;
+    rateLimiter;
+    dataManager;
+    dataService;
+    modalId;
+    btnId;
+    isFullySynced;
+    isRendering;
+constructor(db, settings, context) {
+      this.db = db;
+      this.settings = settings;
+      this.context = context;
+      const rl = CONFIG.RATE_LIMITER;
+      this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+      this.dataManager = new AnalyticsDataManager(db);
+      this.dataService = new UserAnalyticsDataService(db);
+      this.modalId = "danbooru-grass-modal";
+      this.btnId = "danbooru-grass-analytics-btn";
+      this.isFullySynced = false;
+      this.isRendering = false;
+    }
+run() {
+      this.createModal();
+      this.injectButton();
+    }
+createModal() {
+      if (document.getElementById(`${this.modalId}-overlay`)) return;
+      const overlay = document.createElement("div");
+      overlay.id = `${this.modalId}-overlay`;
+      const windowDiv = document.createElement("div");
+      windowDiv.id = `${this.modalId}-window`;
+      const closeBtn = document.createElement("div");
+      closeBtn.id = `${this.modalId}-close`;
+      closeBtn.innerHTML = "&times;";
+      closeBtn.onclick = () => this.toggleModal(false);
+      windowDiv.appendChild(closeBtn);
+      const content = document.createElement("div");
+      content.id = `${this.modalId}-content`;
+      content.innerHTML = `
+      <h1 style="margin-top:0; color:#333;">Analytics Dashboard</h1>
+      <p style="color:#555;">Select a metric to view detailed reports.</p>
+      <!-- Placeholder for future charts -->
+    `;
+      windowDiv.appendChild(content);
+      overlay.appendChild(windowDiv);
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) {
+          this.toggleModal(false);
+        }
+      });
+      document.body.appendChild(overlay);
+    }
+injectButton() {
+      let targetElement = null;
+      const h1s = document.querySelectorAll("h1");
+      for (const h1 of h1s) {
+        if (h1.textContent.includes(this.context.targetUser.name)) {
+          targetElement = h1;
+          break;
+        }
+      }
+      if (!targetElement && h1s.length > 0) {
+        targetElement = h1s[0];
+      }
+      if (targetElement) {
+        const container = document.createElement("span");
+        container.style.display = "inline-flex";
+        container.style.alignItems = "center";
+        container.style.marginLeft = "10px";
+        container.style.verticalAlign = "middle";
+        const btn = document.createElement("span");
+        btn.className = "di-analytics-entry-btn";
+        btn.title = "Open Analytics Report";
+        btn.setAttribute("role", "button");
+        btn.setAttribute("aria-label", "Open user analytics report");
+        btn.innerHTML = "📊";
+        btn.style.margin = "0";
+        btn.onclick = async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (this.isFullySynced === false) {
+            try {
+              await this.performPartialSync(btn, false);
+            } catch (err) {
+              console.error("[Danbooru Grass] Auto-sync failed:", err);
+            }
+          }
+          this.toggleModal(true);
+        };
+        container.appendChild(btn);
+        const statusText = document.createElement("div");
+        statusText.id = `${this.modalId}-header-status`;
+        statusText.style.fontSize = "0.5em";
+        statusText.style.fontWeight = "normal";
+        statusText.style.color = "#888";
+        statusText.style.marginLeft = "12px";
+        statusText.style.lineHeight = "1.2";
+        statusText.innerHTML = "";
+        container.appendChild(statusText);
+        targetElement.appendChild(container);
+        this.updateHeaderStatus();
+      } else {
+        console.warn("[AnalyticsApp] Could not find H1 to inject button");
+      }
+    }
+async performPartialSync(btn = null, shouldRender = true) {
+      if (AnalyticsDataManager.isGlobalSyncing) return;
+      const originalText = btn ? btn.innerHTML : "";
+      let animInterval = null;
+      let dotCount = 0;
+      const state = {
+        current: 0,
+        total: 0,
+        phase: "FETCHING",
+message: ""
+      };
+      if (btn) {
+        btn.disabled = true;
+        btn.style.cursor = "wait";
+      }
+      const render = () => {
+        dotCount = dotCount % 3 + 1;
+        const dotStr = ".".repeat(dotCount);
+        const percent = state.total > 0 ? Math.floor(state.current / state.total * 100) : 0;
+        let headerHtml = "";
+        let subHtml = "";
+        let containerColor = "#ff4444";
+        if (state.phase === "PREPARING") {
+          containerColor = "inherit";
+          headerHtml = `<div style="color:#00ba7c; font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#ffeb3b; margin-top:2px;">${state.message || "Preparing Report"}${dotStr}</div>`;
+        } else {
+          containerColor = "#ff4444";
+          headerHtml = `<div style="font-weight:bold;">Synced: ${state.current.toLocaleString()} / ${state.total.toLocaleString()} (${percent}%)</div>`;
+          subHtml = `<div style="font-size:0.8em; color:#888; margin-top:2px;">${state.message || `Fetching data${dotStr}`}</div>`;
+        }
+        this.updateHeaderStatus(headerHtml + subHtml, containerColor);
+      };
+      render();
+      animInterval = setInterval(render, 500);
+      const onProgress = (current, total, msg) => {
+        state.current = current;
+        state.total = total;
+        if (msg) state.message = msg;
+        const isComplete = total > 0 && current >= total;
+        if (msg === "PREPARING" || isComplete) {
+          state.phase = "PREPARING";
+        } else {
+          state.phase = "FETCHING";
+        }
+      };
+      try {
+        const MAX_QUICK_SYNC_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
+        const syncTotal = await this.dataManager.getTotalPostCount(this.context.targetUser);
+        if (syncTotal > 0 && syncTotal <= MAX_QUICK_SYNC_POSTS) {
+          await this.dataManager.quickSyncAllPosts(this.context.targetUser, onProgress);
+        } else {
+          await this.dataManager.syncAllPosts(this.context.targetUser, onProgress);
+        }
+        if (animInterval) clearInterval(animInterval);
+        if (shouldRender) {
+          const finalStats = await this.dataManager.getSyncStats(this.context.targetUser);
+          this.updateHeaderStatus(`Synced: ${finalStats.count.toLocaleString()} / ${finalStats.count.toLocaleString()}`, "#00ba7c");
+        }
+        if (btn) {
+          btn.innerHTML = originalText;
+          btn.disabled = false;
+          btn.style.cursor = "pointer";
+        }
+        if (shouldRender) {
+          this.toggleModal(true);
+        }
+      } catch (e) {
+        if (animInterval) clearInterval(animInterval);
+        console.error(e);
+        if (btn) {
+          btn.innerHTML = "ERR";
+          btn.disabled = false;
+          btn.style.cursor = "pointer";
+        }
+        this.updateHeaderStatus("Sync Failed", "#ff4444");
+      }
+    }
+async updateHeaderStatus(progressText = null, customColor = null) {
+      const el = document.getElementById(`${this.modalId}-header-status`);
+      if (!el) return;
+      if (progressText) {
+        el.innerHTML = progressText;
+        el.style.color = customColor || "#d73a49";
+        return;
+      }
+      const dataManager = new AnalyticsDataManager(this.db);
+      const stats = await dataManager.getSyncStats(this.context.targetUser);
+      const total = await dataManager.getTotalPostCount(this.context.targetUser);
+      const count = stats.count;
+      const lastSyncKey = `danbooru_grass_last_sync_${this.context.targetUser.id}`;
+      const lastSync = localStorage.getItem(lastSyncKey);
+      const lastSyncText = lastSync ? new Date(lastSync).toLocaleDateString() : "Never";
+      const settingsManager = new SettingsManager();
+      const tolerance = settingsManager.getSyncThreshold();
+      const isSynced = total > 0 && count >= total - tolerance;
+      this.isFullySynced = isSynced;
+      const statusColor = stats.lastSync && isSynced ? "#28a745" : "#d73a49";
+      el.innerHTML = "";
+      el.style.color = statusColor;
+      el.title = `Last synced: ${lastSyncText}`;
+      const row1 = document.createElement("div");
+      row1.style.display = "flex";
+      row1.style.alignItems = "center";
+      const text1 = document.createElement("span");
+      text1.textContent = `Synced: ${count.toLocaleString()} / ${(total || "?").toLocaleString()}`;
+      text1.style.color = statusColor;
+      text1.style.fontWeight = "bold";
+      row1.appendChild(text1);
+      const settingBtn = document.createElement("span");
+      settingBtn.innerHTML = "⚙️";
+      settingBtn.style.cursor = "pointer";
+      settingBtn.style.marginLeft = "6px";
+      settingBtn.style.fontSize = "12px";
+      settingBtn.title = "Configure Sync Threshold";
+      settingBtn.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.showSyncSettingsPopover(settingBtn);
+      };
+      row1.appendChild(settingBtn);
+      el.appendChild(row1);
+      const row2 = document.createElement("div");
+      if (stats.lastSync && isSynced) {
+        row2.innerHTML = `<span style="font-size:1em; font-weight:normal; color:#28a745;">${lastSyncText}</span>`;
+      } else {
+        row2.textContent = "Not fully synced";
+      }
+      el.appendChild(row2);
+    }
+showSyncSettingsPopover(target) {
+      const existing = document.getElementById("danbooru-grass-sync-settings");
+      if (existing) existing.remove();
+      const settingsManager = new SettingsManager();
+      const currentVal = settingsManager.getSyncThreshold();
+      const popover = document.createElement("div");
+      popover.id = "danbooru-grass-sync-settings";
+      popover.style.position = "absolute";
+      popover.style.zIndex = "10001";
+      popover.style.background = "#fff";
+      popover.style.border = "1px solid #ccc";
+      popover.style.borderRadius = "6px";
+      popover.style.padding = "12px";
+      popover.style.boxShadow = "0 2px 10px rgba(0,0,0,0.1)";
+      popover.style.fontSize = "11px";
+      popover.style.color = "#333";
+      popover.style.width = "220px";
+      const rect = target.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+      popover.style.top = `${rect.top + scrollTop}px`;
+      popover.style.left = `${rect.right + scrollLeft + 10}px`;
+      popover.innerHTML = `
+      <div style="margin-bottom:8px; line-height:1.4;">
+        <strong>Partial Sync Threshold</strong><br>
+        Allow report view without sync if: <br>
+        (Total - Synced) <= Threshold
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+         <input type="number" id="sync-thresh-input" value="${currentVal}" min="0" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#ffffff; color:#000000;">
+         <button id="sync-thresh-save" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
+      </div>
+    `;
+      document.body.appendChild(popover);
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && e.target !== target) {
+          popover.remove();
+          document.removeEventListener("click", closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener("click", closeHandler), 0);
+      const saveBtn = popover.querySelector("#sync-thresh-save");
+      saveBtn.onclick = () => {
+        const input = popover.querySelector("#sync-thresh-input");
+        const val = parseInt(input.value, 10);
+        if (!isNaN(val) && val >= 0) {
+          settingsManager.setSyncThreshold(val);
+          popover.remove();
+          document.removeEventListener("click", closeHandler);
+          this.updateHeaderStatus();
+        } else {
+          alert("Please enter a valid number.");
+        }
+      };
+    }
+toggleModal(show) {
+      const overlay = document.getElementById(`${this.modalId}-overlay`);
+      if (!overlay) return;
+      if (show) {
+        overlay.style.display = "flex";
+        requestAnimationFrame(() => {
+          overlay.classList.add("visible");
+        });
+        document.body.style.overflow = "hidden";
+        this.renderDashboard();
+      } else {
+        overlay.classList.remove("visible");
+        setTimeout(() => {
+          overlay.style.display = "none";
+          document.body.style.overflow = "";
+          this.updateHeaderStatus();
+        }, 200);
+      }
+    }
+showSubModal(title, contentHtml, helpHtml = null) {
+      let subOverlay = document.getElementById(`${this.modalId}-sub-overlay`);
+      if (subOverlay) {
+        subOverlay.remove();
+      }
+      subOverlay = document.createElement("div");
+      subOverlay.id = `${this.modalId}-sub-overlay`;
+      Object.assign(subOverlay.style, {
+        position: "fixed",
+        top: "0",
+        left: "0",
+        width: "100%",
+        height: "100%",
+        backgroundColor: "rgba(0, 0, 0, 0.4)",
+        backdropFilter: "blur(2px)",
+        zIndex: "11000",
+display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: "0",
+        transition: "opacity 0.2s ease",
+        cursor: "default"
+});
+      const subWindow = document.createElement("div");
+      Object.assign(subWindow.style, {
+        backgroundColor: "#fff",
+        borderRadius: "12px",
+        boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
+        width: "90%",
+        maxWidth: "800px",
+maxHeight: "90vh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        transform: "scale(0.95)",
+        transition: "transform 0.2s ease"
+      });
+      const header = document.createElement("div");
+      Object.assign(header.style, {
+        padding: "15px 20px",
+        borderBottom: "1px solid #eee",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        backgroundColor: "#f9f9f9",
+        position: "relative"
+      });
+      const titleWrapper = document.createElement("div");
+      titleWrapper.style.display = "flex";
+      titleWrapper.style.alignItems = "center";
+      titleWrapper.innerHTML = `<h3 style="margin:0; font-size:1.2em; color:#333;">${title}</h3>`;
+      if (helpHtml) {
+        const helpBtn = document.createElement("div");
+        helpBtn.innerHTML = "❓";
+        Object.assign(helpBtn.style, {
+          marginLeft: "10px",
+          cursor: "help",
+          fontSize: "14px",
+          color: "#888",
+position: "relative"
+        });
+        const tooltip = document.createElement("div");
+        Object.assign(tooltip.style, {
+          position: "absolute",
+          top: "100%",
+          left: "0",
+width: "550px",
+          background: "#000",
+          color: "#fff",
+          padding: "10px",
+          borderRadius: "4px",
+          fontSize: "12px",
+          zIndex: "11001",
+          display: "none",
+          boxShadow: "0 4px 10px rgba(0,0,0,0.3)",
+          marginTop: "5px"
+        });
+        tooltip.innerHTML = helpHtml;
+        helpBtn.appendChild(tooltip);
+        helpBtn.onmouseover = () => tooltip.style.display = "block";
+        helpBtn.onmouseout = () => tooltip.style.display = "none";
+        titleWrapper.appendChild(helpBtn);
+      }
+      header.appendChild(titleWrapper);
+      const closeBtn = document.createElement("button");
+      closeBtn.innerHTML = "&times;";
+      Object.assign(closeBtn.style, {
+        background: "none",
+        border: "none",
+        fontSize: "1.5em",
+        lineHeight: "1",
+        cursor: "pointer",
+        color: "#666"
+      });
+      closeBtn.onclick = () => closeSubModal();
+      header.appendChild(closeBtn);
+      subWindow.appendChild(header);
+      const contentDiv = document.createElement("div");
+      Object.assign(contentDiv.style, {
+        padding: "20px",
+        overflowY: "auto"
+      });
+      contentDiv.innerHTML = contentHtml;
+      subWindow.appendChild(contentDiv);
+      subOverlay.appendChild(subWindow);
+      document.body.appendChild(subOverlay);
+      requestAnimationFrame(() => {
+        subOverlay.style.opacity = "1";
+        subWindow.style.transform = "scale(1)";
+      });
+      const closeSubModal = () => {
+        subOverlay.style.opacity = "0";
+        subWindow.style.transform = "scale(0.95)";
+        setTimeout(() => {
+          if (subOverlay.parentElement) subOverlay.remove();
+        }, 200);
+      };
+      subOverlay.addEventListener("click", (e) => {
+        if (e.target === subOverlay) closeSubModal();
+      });
+    }
+async renderDashboard() {
+      if (this.isRendering) return;
+      this.isRendering = true;
+      try {
+        const content = document.getElementById(`${this.modalId}-content`);
+        if (!content) return;
+        content.innerHTML = `
+        <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+           <div class="di-spinner"></div>
+           <div style="font-size:1.2em; font-weight:600; margin-top: 20px;">Generating Report...</div>
+           <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
+        </div>
+      `;
+        const MAX_QUICK_SYNC_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
+        {
+          const [preStats, preTotal] = await Promise.all([
+            this.dataManager.getSyncStats(this.context.targetUser),
+            this.dataManager.getTotalPostCount(this.context.targetUser)
+          ]);
+          if (preTotal > 0 && preTotal <= MAX_QUICK_SYNC_POSTS && preStats.count < preTotal) {
+            content.innerHTML = `
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+              <div class="di-spinner"></div>
+              <div style="font-size:1.2em; font-weight:600; margin-top:20px;">Syncing Data...</div>
+              <div id="analytics-quick-sync-msg" style="font-size:0.9em; color:#888; margin-top:10px;">Fetching posts...</div>
+              <div style="width:300px; height:8px; background:#e1e4e8; border-radius:4px; overflow:hidden; margin-top:15px;">
+                <div id="analytics-quick-sync-bar" style="width:0%; height:100%; background:#2da44e; transition:width 0.2s;"></div>
+              </div>
+            </div>
+          `;
+            const qBar = content.querySelector("#analytics-quick-sync-bar");
+            const qMsg = content.querySelector("#analytics-quick-sync-msg");
+            await this.dataManager.quickSyncAllPosts(this.context.targetUser, (c, t, msg) => {
+              if (qBar && t > 0) qBar.style.width = `${Math.round(c / t * 100)}%`;
+              if (qMsg && msg && msg !== "PREPARING") qMsg.textContent = msg;
+            });
+            this.isFullySynced = true;
+            this.updateHeaderStatus();
+            content.innerHTML = `
+            <div id="analytics-loading-report" style="display:flex; flex-direction:column; align-items:center; justify-content:center; padding:100px 0; color:#555;">
+               <div class="di-spinner"></div>
+               <div style="font-size:1.2em; font-weight:600; margin-top: 20px;">Generating Report...</div>
+               <div style="font-size:0.9em; color:#888; margin-top:10px;">Analyzing contributions and trends</div>
+            </div>
+          `;
+          }
+        }
+        const dashboardData = await this.dataService.fetchDashboardData(this.context);
+        const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral } = dashboardData;
+        const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
+        const today = new Date();
+        const oneDay = 1e3 * 60 * 60 * 24;
+        const nsfwKey = "danbooru_grass_nsfw_enabled";
+        let isNsfwEnabled = localStorage.getItem(nsfwKey) === "true";
+        let applyNsfwUpdate = null;
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "flex-start";
+        header.style.marginBottom = "25px";
+        header.innerHTML = `
+      <div>
+         <h2 style="margin-top:0; color:#333; margin-bottom:4px;">Analytics Dashboard</h2>
+         <p style="color:#555; margin:0;">Detailed statistics and history for <span class="${getLevelClass(this.context.targetUser.level_string)}">${this.context.targetUser.name}</span></p>
+      </div>
+       <div id="analytics-header-controls" style="display:none; align-items:center;">
+         <label style="display:flex; align-items:center; margin-right:15px; font-size:13px; color:#57606a; cursor:pointer; user-select:none;">
+            <input type="checkbox" id="user-analytics-nsfw-toggle" ${isNsfwEnabled ? "checked" : ""} style="margin-right:6px;">
+            Enable NSFW
+         </label>
+          <button id="analytics-reset-btn" title="Full Reset (Delete All Data)" style="
+             background: none; 
+             border: 1px solid #e1e4e8; 
+             border-radius: 6px; 
+             padding: 6px 10px; 
+             cursor: pointer;
+             color: #d73a49;
+             transition: all 0.2s;
+          ">🗑️</button>
+       </div>
+    `;
+        content.appendChild(header);
+        const dBtn = header.querySelector("#analytics-reset-btn");
+        setTimeout(() => {
+          const nsfwToggle = header.querySelector("#user-analytics-nsfw-toggle");
+          if (nsfwToggle) {
+            nsfwToggle.onchange = (e) => {
+              isNsfwEnabled = e.target.checked;
+              localStorage.setItem(nsfwKey, String(isNsfwEnabled));
+              if (applyNsfwUpdate) applyNsfwUpdate();
+            };
+          }
+          if (dBtn) {
+            dBtn.onclick = async () => {
+              if (confirm("⚠ FULL RESET WARNING ⚠\n\nThis will DELETE all local analytics data for this user and require a full re-sync.\n\nContinue?")) {
+                dBtn.innerHTML = "⌛";
+                await this.dataManager.clearUserData(this.context.targetUser);
+                alert("Data cleared.");
+                this.toggleModal(false);
+              }
+            };
+            dBtn.onmouseover = () => {
+              dBtn.style.background = "#ffeef0";
+              dBtn.style.borderColor = "#d73a49";
+            };
+            dBtn.onmouseout = () => {
+              dBtn.style.background = "none";
+              dBtn.style.borderColor = "#e1e4e8";
+            };
+          }
+          const lastSyncKey = `danbooru_grass_last_sync_${this.context.targetUser.id}`;
+          const lastSyncStr = localStorage.getItem(lastSyncKey);
+          if (lastSyncStr) {
+            const lastSyncDate = new Date(lastSyncStr);
+            const now = new Date();
+            const diffTime = Math.abs(now.getTime() - lastSyncDate.getTime());
+            const diffDays = Math.ceil(diffTime / (1e3 * 60 * 60 * 24));
+            if (diffDays > 7 && dBtn) {
+              const bubble = document.createElement("div");
+              bubble.innerHTML = "Full data refresh recommended";
+              bubble.style.cssText = `
+              position: absolute;
+              top: -45px;
+              right: 0px; 
+              background: #ffeb3b;
+              color: #333;
+              padding: 8px 12px;
+              border-radius: 6px;
+              font-size: 12px;
+              z-index: 10001;
+              white-space: nowrap;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            `;
+              const arrow = document.createElement("div");
+              arrow.style.cssText = `
+              position: absolute;
+              bottom: -6px;
+              right: 12px;
+              width: 0;
+              height: 0;
+              border-left: 6px solid transparent;
+              border-right: 6px solid transparent;
+              border-top: 6px solid #ffeb3b;
+            `;
+              bubble.appendChild(arrow);
+              dBtn.parentNode.style.position = "relative";
+              dBtn.parentNode?.appendChild(bubble);
+              setTimeout(() => {
+                if (bubble.parentNode) bubble.parentNode.removeChild(bubble);
+              }, 1e4);
+            }
+          }
+        }, 0);
+        content.innerHTML = "";
+        content.appendChild(header);
+        const tolerance = 10;
+        const needsSync = total > 0 && stats.count < total - tolerance || total === 0 && stats.count === 0;
+        if (needsSync) {
+          const syncDiv = document.createElement("div");
+          syncDiv.style.textAlign = "center";
+          syncDiv.style.padding = "40px 20px";
+          syncDiv.style.color = "#555";
+          let msg = `We have <strong>${stats.count}</strong> posts synced, but the user has <strong>${total || "more"}</strong>.`;
+          if (total === 0 && stats.count > 0) msg = `We have <strong>${stats.count}</strong> posts synced. Total count unavailable.`;
+          if (stats.count === 0) msg = `To generate the report, we need to fetch all post metadata for <strong>${this.context.targetUser.name}</strong>.`;
+          syncDiv.innerHTML = `
+        <div style="font-size:48px; margin-bottom:20px;">💾</div>
+        <h3 style="margin-top:0;">Data Synchronization Required</h3>
+        <p>${msg}</p>
+        <p style="font-size:0.9em; color:#777; margin-bottom:30px;">
+           This one-time process might take a while depending on the post count.<br>
+           You can close this window - data collection will continue in the background.
+        </p>
+        <button id="analytics-start-sync" style="
+          background-color: #0969da; color: white; border: none; padding: 10px 20px;
+          font-size: 16px; font-weight: 600; border-radius: 6px; cursor: pointer;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.12); transition: background 0.2s;
+        ">${stats.count > 0 ? "Resume Sync" : "Start Data Fetch"}</button>
+        
+        <div id="analytics-main-progress" style="margin-top:25px; display:none; max-width:400px; margin-left:auto; margin-right:auto;">
+           <div style="display:flex; justify-content:space-between; font-size:0.85em; margin-bottom:5px; color:#555;">
+              <span>Fetching metadata...</span>
+              <span id="analytics-main-percent">0%</span>
+           </div>
+           <div style="width:100%; height:8px; background:#e1e4e8; border-radius:4px; overflow:hidden;">
+              <div id="analytics-main-bar" style="width:0%; height:100%; background:#2da44e; transition: width 0.2s;"></div>
+           </div>
+           <div id="analytics-main-count" style="font-size:0.8em; color:#666; margin-top:5px; text-align:right;"></div>
+        </div>
+      `;
+          content.appendChild(syncDiv);
+          const btn = syncDiv.querySelector("#analytics-start-sync");
+          if (AnalyticsDataManager.isGlobalSyncing) {
+            btn.innerHTML = "Fetching in background...";
+            btn.disabled = true;
+            btn.style.backgroundColor = "#94d3a2";
+            btn.style.cursor = "not-allowed";
+            const progressDiv = syncDiv.querySelector("#analytics-main-progress");
+            const bar = syncDiv.querySelector("#analytics-main-bar");
+            const percent = syncDiv.querySelector("#analytics-main-percent");
+            const countText = syncDiv.querySelector("#analytics-main-count");
+            progressDiv.style.display = "block";
+            const { current, total: total2 } = AnalyticsDataManager.syncProgress;
+            if (total2 > 0) {
+              const p = Math.round(current / total2 * 100);
+              bar.style.width = `${p}%`;
+              percent.textContent = `${p}%`;
+              countText.textContent = `${current} / ${total2}`;
+            }
+            AnalyticsDataManager.onProgressCallback = (c, max) => {
+              const p = max > 0 ? Math.round(c / max * 100) : 0;
+              bar.style.width = `${p}%`;
+              percent.textContent = max > 0 ? `${p}%` : "Scanning...";
+              countText.textContent = `${c} / ${max > 0 ? max : "?"}`;
+            };
+          }
+          btn.onclick = async () => {
+            btn.innerHTML = "Fetching...";
+            btn.disabled = true;
+            btn.style.opacity = "0.7";
+            const progressDiv = syncDiv.querySelector("#analytics-main-progress");
+            const bar = syncDiv.querySelector("#analytics-main-bar");
+            const percent = syncDiv.querySelector("#analytics-main-percent");
+            const countText = syncDiv.querySelector("#analytics-main-count");
+            progressDiv.style.display = "block";
+            AnalyticsDataManager.onProgressCallback = (c, max) => {
+              const p = max > 0 ? Math.round(c / max * 100) : 0;
+              bar.style.width = `${p}%`;
+              percent.textContent = max > 0 ? `${p}%` : "Scanning...";
+              countText.textContent = `${c} / ${max > 0 ? max : "?"}`;
+            };
+            await this.dataManager.syncAllPosts(this.context.targetUser, () => {
+            });
+            this.updateHeaderStatus();
+            this.renderDashboard();
+          };
+          return;
+        }
+        const headerControls = header.querySelector("#analytics-header-controls");
+        if (headerControls) headerControls.style.display = "flex";
+        const dashboardDiv = document.createElement("div");
+        const summaryWrapper = document.createElement("div");
+        summaryWrapper.style.display = "grid";
+        summaryWrapper.style.gridTemplateColumns = "repeat(auto-fit, minmax(300px, 1fr))";
+        summaryWrapper.style.gap = "15px";
+        summaryWrapper.style.marginBottom = "35px";
+        const makeCard = (title, val, icon, details = "") => `
+          <div style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start;">
+             <div style="font-size:2em; margin-right:15px; margin-top:5px;">${icon}</div>
+             <div style="flex:1; min-width:0;">
+                <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">${title}</div>
+                ${val ? `<div style="font-size:1.5em; font-weight:bold; color:#333;">${val}</div>` : ""}
+                ${details ? `<div style="font-size:0.85em; color:#555;">${details}</div>` : ""}
+             </div>
+          </div>
+       `;
+        let avgUploads = 0;
+        let daysSinceFirst = 0;
+        if (firstUploadDate) {
+          daysSinceFirst = Math.floor((today.getTime() - firstUploadDate.getTime()) / oneDay);
+          if (daysSinceFirst > 0) {
+            avgUploads = (stats.count / daysSinceFirst).toFixed(2);
+          }
+        }
+        const uploadDetailsAll = `
+       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
+           <div>📈 <strong>Average:</strong> ${avgUploads} posts / day</div>
+           <div>🔥 <strong>Max:</strong> ${maxUploads} posts <span style="color:#888;">(${maxDate})</span></div>
+       </div>
+    `;
+        const { count1Year, maxUploads1Year, maxDate1Year } = summaryStats;
+        let avgUploads1Year = 0;
+        const daysSinceFirst1Year = Math.min(daysSinceFirst, 365);
+        if (daysSinceFirst1Year > 0) {
+          avgUploads1Year = ((count1Year || 0) / daysSinceFirst1Year).toFixed(2);
+        }
+        const uploadDetails1Year = `
+       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
+           <div>📈 <strong>Average:</strong> ${avgUploads1Year} posts / day</div>
+           <div>🔥 <strong>Max:</strong> ${maxUploads1Year || 0} posts <span style="color:#888;">(${maxDate1Year || "N/A"})</span></div>
+       </div>
+    `;
+        const { maxStreak, maxStreakStart, maxStreakEnd, activeDays } = summaryStats;
+        let activeRatio = "0.0";
+        if (daysSinceFirst > 0) {
+          activeRatio = (activeDays / daysSinceFirst * 100).toFixed(1);
+        } else if (activeDays > 0) {
+          activeRatio = "100.0";
+        }
+        let activeAvg = "0.0";
+        if (activeDays > 0) {
+          activeAvg = (stats.count / activeDays).toFixed(1);
+        }
+        const streakPeriod = maxStreakStart && maxStreakEnd ? ` <span style="color:#888;">(${maxStreakStart} ~ ${maxStreakEnd})</span>` : "";
+        const consistencyDetails = `
+       <div style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px;">
+           <div>🏃‍♂️ <strong>Max Streak:</strong> ${maxStreak} days${streakPeriod}</div>
+           <div>🌟 <strong>Active Ratio:</strong> ${activeRatio}% <span style="color:#888;">(${activeDays}/${daysSinceFirst.toLocaleString()} days)</span></div>
+           <div>🎯 <strong>Active Avg:</strong> ${activeAvg} posts/day</div>
+       </div>
+    `;
+        const uploadCardHtml = `
+          <div id="danbooru-insights-upload-card" style="background:#fff; border:1px solid #e1e4e8; border-radius:8px; padding:15px; display:flex; align-items:flex-start; overflow:hidden; position:relative; min-height:106px;">
+                 <div style="font-size:2em; margin-right:15px; margin-top:5px; flex-shrink:0;">🖼️</div>
+                 
+                 <div style="position:relative; flex-grow:1; display:grid; height:100%;">
+                     <!-- All Time Pane -->
+                     <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-a;">
+                        <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">TOTAL UPLOADS</div>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="font-size:1.5em; font-weight:bold; color:#333;">${stats.count.toLocaleString()}</div>
+                            <div style="font-size:0.85em; color:#555;">${uploadDetailsAll}</div>
+                        </div>
+                     </div>
+
+                     <!-- Last 1 Year Pane -->
+                     <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-b;">
+                        <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">LAST 1 YEAR</div>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="font-size:1.5em; font-weight:bold; color:#333;">${(count1Year || 0).toLocaleString()}</div>
+                            <div style="font-size:0.85em; color:#555;">${uploadDetails1Year}</div>
+                        </div>
+                     </div>
+                     
+                     <!-- Consistency Pane -->
+                     <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-c;">
+                        <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">UPLOAD HABITS</div>
+                        <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="font-size:0.85em; color:#555; margin-left: -12px;">${consistencyDetails}</div>
+                        </div>
+                     </div>
+                 </div>
+
+                 <button id="analytics-upload-btn-play-pause" class="di-play-pause-btn" title="Pause Animation">
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                         <rect x="5" y="4" width="4" height="16"></rect>
+                         <rect x="15" y="4" width="4" height="16"></rect>
+                     </svg>
+                 </button>
+          </div>
+      `;
+        summaryWrapper.innerHTML += uploadCardHtml;
+        const lastDate = lastUploadDate ? lastUploadDate.toISOString().split("T")[0] : "N/A";
+        let daysSinceJoin = 0;
+        let joinDateStr = "";
+        if (this.context.targetUser.created_at) {
+          const joinDate = new Date(this.context.targetUser.created_at);
+          daysSinceJoin = Math.floor((today.getTime() - joinDate.getTime()) / oneDay);
+          joinDateStr = joinDate.toISOString().split("T")[0];
+        }
+        const firstUploadDateStr = firstUploadDate ? firstUploadDate.toISOString().split("T")[0] : "";
+        const tlEvents = [];
+        if (this.context.targetUser.created_at) {
+          const joinDate = new Date(this.context.targetUser.created_at);
+          tlEvents.push({
+            date: joinDate,
+            icon: "🎊",
+            html: `🎊 <strong>Join:</strong> ${daysSinceJoin.toLocaleString()} days ago <span style="color:#888;">(${joinDateStr})</span>`
+          });
+        }
+        if (firstUploadDate) {
+          tlEvents.push({
+            date: firstUploadDate,
+            icon: "🚀",
+            html: `🚀 <strong>1st Post:</strong> ${daysSinceFirst.toLocaleString()} days ago <span style="color:#888;">(${firstUploadDateStr})</span>`
+          });
+        }
+        const milestoneIcons = { 100: "💯" };
+        timelineMilestones.forEach((m) => {
+          const icon = milestoneIcons[m.index] ?? "🏅";
+          const label = `${m.index.toLocaleString()}th Post`;
+          const dateStr = m.date.toISOString().split("T")[0];
+          const daysAgo = Math.floor((today.getTime() - m.date.getTime()) / oneDay);
+          tlEvents.push({
+            date: m.date,
+            icon,
+            html: `${icon} <strong>${label}:</strong> ${daysAgo.toLocaleString()} days ago <span style="color:#888;">(${dateStr})</span>`
+          });
+        });
+        levelChanges.forEach((lc) => {
+          const icon = lc.isPromotion ? "⬆️" : "⬇️";
+          const dateStr = lc.date.toISOString().split("T")[0];
+          const daysAgo = Math.floor((today.getTime() - lc.date.getTime()) / oneDay);
+          const fromLevelClass = getLevelClass(lc.fromLevel);
+          const toLevelClass = getLevelClass(lc.toLevel);
+          tlEvents.push({
+            date: lc.date,
+            icon,
+            html: `${icon} <strong class="${fromLevelClass}">${lc.fromLevel}</strong> → <strong class="${toLevelClass}">${lc.toLevel}</strong> ${daysAgo.toLocaleString()} days ago <span style="color:#888;">(${dateStr})</span>`
+          });
+        });
+        if (lastUploadDate) {
+          const daysAgoLast = Math.floor((today.getTime() - lastUploadDate.getTime()) / oneDay);
+          const latestLabel = total > 0 ? `${total.toLocaleString()}th Post` : "Latest Post";
+          tlEvents.push({
+            date: lastUploadDate,
+            icon: "📌",
+            html: `📌 <strong>${latestLabel}:</strong> ${daysAgoLast.toLocaleString()} days ago <span style="color:#888;">(${lastDate})</span>`
+          });
+        }
+        tlEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
+        const timelineRows = tlEvents.map(
+          (ev) => `<div style="white-space:nowrap;">${ev.html}</div>`
+        ).join("");
+        const dateDetails = `
+       <div class="di-user-history-wrap">
+         <div class="di-user-history-timeline" style="display:flex; flex-direction:column; gap:4px; border-left:2px solid #eee; padding-left:12px; max-height:66px; overflow-y:auto;">
+             ${timelineRows}
+         </div>
+       </div>
+    `;
+        summaryWrapper.innerHTML += makeCard("User History", "", "📅", dateDetails);
+        dashboardDiv.appendChild(summaryWrapper);
+        const historyTimeline = dashboardDiv.querySelector(".di-user-history-timeline");
+        const historyWrap = historyTimeline?.parentElement;
+        if (historyTimeline && historyWrap) {
+          if (historyTimeline.scrollHeight > historyTimeline.clientHeight + 1) {
+            historyWrap.classList.add("has-overflow");
+            historyTimeline.addEventListener("scroll", () => {
+              const atBottom = historyTimeline.scrollTop + historyTimeline.clientHeight >= historyTimeline.scrollHeight - 1;
+              historyWrap.classList.toggle("scrolled-to-bottom", atBottom);
+            });
+          }
+        }
+        const btnPlayPause = dashboardDiv.querySelector("#analytics-upload-btn-play-pause");
+        const uploadCard = dashboardDiv.querySelector("#danbooru-insights-upload-card");
+        if (btnPlayPause && uploadCard) {
+          let isPaused = false;
+          btnPlayPause.addEventListener("click", () => {
+            isPaused = !isPaused;
+            if (isPaused) {
+              uploadCard.classList.add("paused");
+              btnPlayPause.title = "Play Animation";
+              btnPlayPause.innerHTML = `
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                         <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                     </svg>
+                  `;
+            } else {
+              uploadCard.classList.remove("paused");
+              btnPlayPause.title = "Pause Animation";
+              btnPlayPause.innerHTML = `
+                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                         <rect x="5" y="4" width="4" height="16"></rect>
+                         <rect x="15" y="4" width="4" height="16"></rect>
+                     </svg>
+                  `;
+            }
+          });
+        }
+        const topStatsRow = document.createElement("div");
+        topStatsRow.style.display = "grid";
+        topStatsRow.style.gridTemplateColumns = "repeat(auto-fit, minmax(300px, 1fr))";
+        topStatsRow.style.gap = "15px";
+        topStatsRow.style.marginBottom = "35px";
+        const pieContainer = document.createElement("div");
+        pieContainer.style.background = "#fff";
+        pieContainer.style.border = "1px solid #e1e4e8";
+        pieContainer.style.borderRadius = "8px";
+        pieContainer.style.padding = "15px";
+        pieContainer.style.display = "flex";
+        pieContainer.style.flexDirection = "column";
+        pieContainer.style.color = "#888";
+        const topPostContainer = document.createElement("div");
+        topPostContainer.style.background = "#fff";
+        topPostContainer.style.border = "1px solid #e1e4e8";
+        topPostContainer.style.borderRadius = "8px";
+        topPostContainer.style.padding = "15px";
+        topPostContainer.style.display = "flex";
+        topPostContainer.style.flexDirection = "column";
+        const pieResult = renderPieWidget(pieContainer, distributions, isNsfwEnabled, this.dataManager, this.context, firstUploadDate);
+        const topPostsResult = renderTopPostsWidget(topPostContainer, topPosts, recentPopularPosts, randomPosts, isNsfwEnabled, this.db, this.context);
+        topStatsRow.appendChild(pieContainer);
+        topStatsRow.appendChild(topPostContainer);
+        dashboardDiv.appendChild(topStatsRow);
+        content.appendChild(dashboardDiv);
+        const milestonesDiv = document.createElement("div");
+        milestonesDiv.style.marginTop = "20px";
+        dashboardDiv.appendChild(milestonesDiv);
+        const milestonesResult = await renderMilestonesWidget(milestonesDiv, this.db, this.context, isNsfwEnabled);
+        applyNsfwUpdate = async () => {
+          pieResult.onNsfwChange(isNsfwEnabled);
+          topPostsResult.onNsfwChange(isNsfwEnabled);
+          await milestonesResult.onNsfwChange(isNsfwEnabled);
+        };
+        await renderHistoryChart(dashboardDiv, this.db, this.context, milestones1k, levelChanges);
+        const createdTagsContainer = document.createElement("div");
+        createdTagsContainer.style.marginTop = "35px";
+        dashboardDiv.appendChild(createdTagsContainer);
+        renderCreatedTagsWidget(createdTagsContainer, this.dataManager, this.context.targetUser);
+        const tagCloudContainer = document.createElement("div");
+        tagCloudContainer.style.marginTop = "35px";
+        dashboardDiv.appendChild(tagCloudContainer);
+        renderTagCloudWidget(tagCloudContainer, {
+          initialData: tagCloudGeneral,
+          fetchData: (catId) => this.dataManager.getTagCloudData(
+            this.context.targetUser,
+            catId
+          ),
+          userName: this.context.targetUser.normalizedName,
+          categories: [
+            { id: 0, label: "General", color: "#0075f8" },
+            { id: 1, label: "Artist", color: "#a00" },
+            { id: 3, label: "Copy", color: "#a800aa" },
+            { id: 4, label: "Char", color: "#00ab2c" }
+          ]
+        });
+        if (scatterData.length > 0) {
+          renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges);
+        }
+        this.updateHeaderStatus();
+      } finally {
+        this.isRendering = false;
+      }
+    }
+  }
+  class TagAnalyticsDataService {
+    db;
+    rateLimiter;
+    tagName;
+    userNames;
+    constructor(db, rateLimiter, tagName) {
+      this.db = db;
+      this.rateLimiter = rateLimiter;
+      this.tagName = tagName;
+      this.userNames = {};
+    }
+async loadFromCache() {
+      if (!this.db || !this.db.tag_analytics) return null;
+      try {
+        const cached = await this.db.tag_analytics.get(this.tagName);
+        if (cached) {
+          const age = Date.now() - cached.updatedAt;
+          if (age < CONFIG.CACHE_EXPIRY_MS) {
+            return {
+              ...cached.data,
+              updatedAt: cached.updatedAt
+            };
+          }
+        }
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cache load failed", e);
+      }
+      return null;
+    }
+async saveToCache(data) {
+      if (!this.db || !this.db.tag_analytics) return;
+      try {
+        await this.db.tag_analytics.put({
+          tagName: this.tagName,
+          updatedAt: Date.now(),
+          data
+        });
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cache save failed", e);
+      }
+    }
+getRetentionDays() {
+      try {
+        const val = localStorage.getItem("danbooru_tag_analytics_retention");
+        if (val) return parseInt(val, 10);
+      } catch (e) {
+      }
+      return 7;
+    }
+getSyncThreshold() {
+      try {
+        const val = localStorage.getItem("danbooru_tag_analytics_sync_threshold");
+        if (val) return parseInt(val, 10);
+      } catch (e) {
+      }
+      return 50;
+    }
+setSyncThreshold(count) {
+      localStorage.setItem("danbooru_tag_analytics_sync_threshold", count.toString());
+    }
+setRetentionDays(days) {
+      if (typeof days === "number" && days > 0) {
+        localStorage.setItem("danbooru_tag_analytics_retention", String(days));
+      }
+    }
+async cleanupOldCache() {
+      if (!this.db || !this.db.tag_analytics) return;
+      const retentionDays = this.getRetentionDays();
+      const cutoff = Date.now() - retentionDays * DAY_MS;
+      try {
+        await this.db.tag_analytics.where("updatedAt").below(cutoff).delete();
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Cleanup failed", e);
+      }
+    }
+async fetchInitialStats(tagName, cachedData, absoluteOldest, foundEarliestDate) {
+      const tagData = await this.fetchTagData(tagName);
+      if (!tagData) return null;
+      if (cachedData && cachedData.firstPost) {
+        return {
+          firstPost: cachedData.firstPost,
+          hundredthPost: cachedData.hundredthPost,
+          totalCount: tagData.post_count,
+          startDate: new Date(cachedData.firstPost.created_at),
+          timeToHundred: cachedData.timeToHundred,
+          meta: tagData,
+          initialPosts: null
+};
+      }
+      let tagCreatedAt = tagData.created_at;
+      if (foundEarliestDate) {
+        tagCreatedAt = foundEarliestDate;
+      } else if (absoluteOldest) {
+        tagCreatedAt = "2005-01-01";
+      }
+      let posts = [];
+      const MAX_OPTIMIZED_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
+      const isSmallTag = tagData.post_count <= MAX_OPTIMIZED_POSTS;
+      const targetFetchCount = Math.min(tagData.post_count, MAX_OPTIMIZED_POSTS);
+      const limit = isSmallTag ? 200 : 100;
+      let currentPage = "a0";
+      let hasMore = true;
+      try {
+        while (hasMore && posts.length < targetFetchCount) {
+          const fetchLimit = Math.min(limit, targetFetchCount - posts.length);
+          let params = new URLSearchParams({
+            tags: `${tagName} date:>=${tagCreatedAt}`,
+            limit: fetchLimit,
+            page: currentPage,
+            only: "id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character"
+          });
+          let url = `/posts.json?${params.toString()}`;
+          let batch = await this.rateLimiter.fetch(url).then((r) => r.json());
+          if (!Array.isArray(batch) || batch.length === 0) {
+            break;
+          }
+          if (batch.length > 1) {
+            if (batch[0].id > batch[batch.length - 1].id) {
+              batch.reverse();
+            }
+          }
+          posts = posts.concat(batch);
+          if (batch.length < fetchLimit || posts.length >= targetFetchCount || !isSmallTag) {
+            hasMore = false;
+          } else {
+            currentPage = `a${batch[batch.length - 1].id}`;
+          }
+        }
+        if (isSmallTag && posts.length < targetFetchCount) {
+          posts = [];
+          currentPage = "a0";
+          hasMore = true;
+          while (hasMore && posts.length < targetFetchCount) {
+            const fetchLimit = Math.min(limit, targetFetchCount - posts.length);
+            const fbParams = new URLSearchParams({
+              tags: `${tagName}`,
+              limit: fetchLimit,
+              page: currentPage,
+              only: "id,created_at,uploader_id,approver_id,file_url,preview_file_url,variants,rating,score,tag_string_copyright,tag_string_character"
+            });
+            let fbBatch = await this.rateLimiter.fetch(`/posts.json?${fbParams.toString()}`).then((r) => r.json());
+            if (!Array.isArray(fbBatch) || fbBatch.length === 0) {
+              break;
+            }
+            if (fbBatch.length > 1 && fbBatch[0].id > fbBatch[fbBatch.length - 1].id) {
+              fbBatch.reverse();
+            }
+            posts = posts.concat(fbBatch);
+            if (fbBatch.length < fetchLimit || posts.length >= targetFetchCount) {
+              hasMore = false;
+            } else {
+              currentPage = `a${fbBatch[fbBatch.length - 1].id}`;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn(`[TagAnalyticsApp] Fetch failed for initial stats gather`, e);
+      }
+      if (!posts || posts.length === 0) {
+        return { totalCount: tagData.post_count, meta: tagData, updatedAt: Date.now() };
+      }
+      const firstPost = posts[0];
+      const hundredthPost = posts.length >= 100 ? posts[99] : null;
+      const startDate = new Date(firstPost.created_at);
+      let timeToHundred = null;
+      if (hundredthPost) {
+        const hundredthDate = new Date(hundredthPost.created_at);
+        timeToHundred = hundredthDate.getTime() - startDate.getTime();
+      }
+      return {
+        firstPost,
+        hundredthPost,
+        totalCount: tagData.post_count,
+        startDate,
+        timeToHundred,
+        meta: tagData,
+        initialPosts: posts
+};
+    }
+async fetchCountWithRetry(url, retries = 1) {
+      for (let i = 0; i <= retries; i++) {
+        try {
+          const resp = await this.rateLimiter.fetch(url);
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+          }
+          const data = await resp.json();
+          const count = data && data.counts && typeof data.counts === "object" ? data.counts.posts : data ? data.posts : void 0;
+          if (count !== void 0 && count !== null) {
+            return count;
+          }
+          throw new Error("Invalid count data");
+        } catch (e) {
+          if (i === retries) {
+            console.warn(`[TagAnalyticsApp] Failed to fetch count after ${retries + 1} attempts: ${url}`, e);
+            return 0;
+          }
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
+      return 0;
+    }
+async fetchCommentaryCounts(tagName) {
+      const queries = {
+        total: `tags=${encodeURIComponent(tagName)}+has:commentary`,
+        translated: `tags=${encodeURIComponent(tagName)}+has:commentary+commentary`,
+        requested: `tags=${encodeURIComponent(tagName)}+has:commentary+commentary_request`
+      };
+      const results = {};
+      const keys = Object.keys(queries);
+      await Promise.all(keys.map(async (key) => {
+        const query = queries[key];
+        const url = `/counts/posts.json?${query}`;
+        results[key] = await this.fetchCountWithRetry(url);
+      }));
+      keys.forEach((key) => {
+        if (results[key] == null) {
+          console.warn(`[TagAnalyticsApp] Missing commentary key: ${key}. Defaulting to 0.`);
+          results[key] = 0;
+        }
+      });
+      return results;
+    }
+async fetchStatusCounts(tagName) {
+      const statuses = ["active", "appealed", "banned", "deleted", "flagged", "pending"];
+      const results = {};
+      const tasks = statuses.map(async (status) => {
+        const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+status:${status}`;
+        results[status] = await this.fetchCountWithRetry(url);
+      });
+      await Promise.all(tasks);
+      statuses.forEach((status) => {
+        if (results[status] == null) {
+          console.warn(`[TagAnalyticsApp] Missing status key: ${status}. Defaulting to 0.`);
+          results[status] = 0;
+        }
+      });
+      return results;
+    }
+async fetchRatingCounts(tagName, startDate = null) {
+      const ratings = ["g", "s", "q", "e"];
+      const results = {};
+      const tasks = ratings.map(async (rating) => {
+        let qs = `tags=${encodeURIComponent(tagName)}+rating:${rating}`;
+        if (startDate) {
+          qs += `+date:>=${startDate}`;
+        }
+        const url = `/counts/posts.json?${qs}`;
+        results[rating] = await this.fetchCountWithRetry(url);
+      });
+      await Promise.all(tasks);
+      ratings.forEach((rating) => {
+        if (results[rating] == null) {
+          console.warn(`[TagAnalyticsApp] Missing rating key: ${rating}. Defaulting to 0.`);
+          results[rating] = 0;
+        }
+      });
+      return results;
+    }
+    async fetchRelatedTagDistribution(tagName, categoryId, totalTagCount) {
+      const catName = categoryId === 3 ? "Copyright" : "Character";
+      const relatedUrl = `/related_tag.json?commit=Search&search[category]=${categoryId}&search[order]=Frequency&search[query]=${encodeURIComponent(tagName)}`;
+      try {
+        const resp = await this.rateLimiter.fetch(relatedUrl).then((r) => r.json());
+        if (!resp || !resp.related_tags || !Array.isArray(resp.related_tags)) return null;
+        const tags = resp.related_tags;
+        const candidates = tags.slice(0, 20);
+        const checks = await Promise.all(candidates.map(
+          async (item) => await isTopLevelTag(this.rateLimiter, item.tag.name) ? item : null
+        ));
+        const filtered = checks.filter((item) => item !== null);
+        const topTags = filtered.slice(0, 10).map((item) => ({
+          name: item.tag.name.replace(/_/g, " "),
+          key: item.tag.name,
+          frequency: item.related_tag ? item.related_tag.frequency : item.frequency || 0,
+          count: 0
+        }));
+        await Promise.all(topTags.map(async (obj) => {
+          try {
+            const query = `${tagName} ${obj.key}`;
+            const cUrl = `/counts/posts.json?tags=${encodeURIComponent(query)}`;
+            const cResp = await this.rateLimiter.fetch(cUrl).then((r) => r.json());
+            const c = (cResp && cResp.counts ? cResp.counts.posts : cResp ? cResp.posts : 0) || 0;
+            obj.count = c;
+          } catch (e) {
+            console.debug("[DI] Failed to fetch combined tag count", e);
+          }
+        }));
+        let finalTags = [];
+        let currentSumFreq = 0;
+        const threshold = 0.95;
+        topTags.sort((a, b) => b.frequency - a.frequency);
+        for (const t of topTags) {
+          finalTags.push(t);
+          currentSumFreq += t.frequency;
+          if (currentSumFreq > threshold) break;
+        }
+        const remainFreq = Math.max(0, 1 - currentSumFreq);
+        if (remainFreq > 5e-3) {
+          const othersCount = Math.floor(totalTagCount * remainFreq);
+          if (othersCount > 0) {
+            finalTags.push({
+              name: "Others",
+              key: "others",
+              count: othersCount,
+              isOther: true
+            });
+          }
+        }
+        const result = {};
+        finalTags.forEach((t) => {
+          result[t.key] = t.count;
+        });
+        return result;
+      } catch (e) {
+        console.warn(`[TagAnalyticsApp] Failed to fetch ${catName} distribution`, e);
+        return null;
+      }
+    }
+    async fetchHistoryBackwards(tagName, forwardStartDate, targetTotal, currentForwardTotal) {
+      console.log(`[TagAnalyticsApp] Starting Reverse Scan. Tag: ${tagName}, Start: ${forwardStartDate}, Target: ${targetTotal}, Current: ${currentForwardTotal}`);
+      const history = [];
+      let totalSum = currentForwardTotal;
+      let currentMonth = new Date(forwardStartDate);
+      currentMonth.setMonth(currentMonth.getMonth() - 1);
+      const hardLimit = new Date("2005-01-01");
+      while (totalSum < targetTotal && currentMonth > hardLimit) {
+        const year = currentMonth.getFullYear();
+        const month = currentMonth.getMonth() + 1;
+        const nextDate = new Date(currentMonth);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+        const nYear = nextDate.getFullYear();
+        const nMonth = nextDate.getMonth() + 1;
+        const dateRange = `${year}-${String(month).padStart(2, "0")}-01...${nYear}-${String(nMonth).padStart(2, "0")}-01`;
+        const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+date:${dateRange}`;
+        try {
+          const data = await this.rateLimiter.fetch(url).then((r) => r.json());
+          const count = data.counts && typeof data.counts === "object" ? data.counts.posts || 0 : data.counts || 0;
+          if (count > 0) {
+            history.unshift({
+              date: `${year}-${String(month).padStart(2, "0")}-01`,
+              count,
+              cumulative: 0
+});
+            totalSum += count;
+            console.log(`[TagAnalyticsApp] Reverse Scan Hit: ${year}-${month} => ${count} posts. Total: ${totalSum}/${targetTotal}`);
+          }
+        } catch (e) {
+          console.warn(`[TagAnalyticsApp] Backward fetch failed for ${year}-${month}`, e);
+        }
+        currentMonth.setMonth(currentMonth.getMonth() - 1);
+      }
+      console.log(`[TagAnalyticsApp] Reverse Scan Completed. Total: ${totalSum}/${targetTotal}, Months Checked: ${history.length} (hits)`);
+      let runningSum = 0;
+      for (let i = 0; i < history.length; i++) {
+        runningSum += history[i].count;
+        history[i].cumulative = runningSum;
+      }
+      return history;
+    }
+    async fetchHistoryDelta(tagName, lastDate, startDate) {
+      if (!lastDate) return this.fetchMonthlyCounts(tagName, startDate);
+      const now = new Date();
+      const twoMonthsAgo = new Date(now);
+      twoMonthsAgo.setMonth(now.getMonth() - 2);
+      twoMonthsAgo.setDate(1);
+      const effectiveStart = lastDate && lastDate > twoMonthsAgo ? twoMonthsAgo : lastDate || startDate;
+      return this.fetchMonthlyCounts(tagName, effectiveStart);
+    }
+    mergeHistory(oldHistory, newHistory) {
+      if (!oldHistory || oldHistory.length === 0) return newHistory;
+      if (!newHistory || newHistory.length === 0) return oldHistory;
+      const newStart = newHistory[0].date;
+      const filteredOld = oldHistory.filter((h) => h.date < newStart);
+      let merged = filteredOld.concat(newHistory);
+      let runningSum = 0;
+      merged = merged.map((h) => {
+        runningSum += h.count;
+        return { ...h, cumulative: runningSum };
+      });
+      return merged;
+    }
+    async fetchMilestonesDelta(tagName, currentTotal, cachedMilestones, fullHistory) {
+      const allTargets = this.getMilestoneTargets(currentTotal);
+      const existingTargets = new Set(cachedMilestones.map((m) => m.milestone));
+      const missingTargets = allTargets.filter((t) => !existingTargets.has(t));
+      if (missingTargets.length === 0) return [];
+      return this.fetchMilestones(tagName, fullHistory, missingTargets);
+    }
+    mergeMilestones(oldMilestones, newMilestones) {
+      if (!newMilestones || newMilestones.length === 0) return oldMilestones;
+      return [...oldMilestones, ...newMilestones].sort((a, b) => a.milestone - b.milestone);
+    }
+    async fetchLatestPost(tagName) {
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}&limit=1&only=id,created_at,variants,uploader_id,rating,preview_file_url`;
+      try {
+        const posts = await this.rateLimiter.fetch(url).then((r) => r.json());
+        return posts && posts.length > 0 ? posts[0] : null;
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Failed to fetch latest post:", e);
+        return null;
+      }
+    }
+    async fetchNewPostCount(tagName) {
+      const url = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+age:..1d`;
+      try {
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        return (resp && resp.counts ? resp.counts.posts : resp ? resp.posts : 0) || 0;
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Failed to fetch new post count:", e);
+        return 0;
+      }
+    }
+    async fetchTrendingPost(tagName, isNSFW = false) {
+      const ratingQuery = isNSFW ? "is:nsfw" : "is:sfw";
+      const url = `/posts.json?tags=${encodeURIComponent(tagName)}+age:..3d+order:score+${ratingQuery}&limit=1&only=id,created_at,variants,uploader_id,rating,score,preview_file_url`;
+      try {
+        const posts = await this.rateLimiter.fetch(url).then((r) => r.json());
+        return posts && posts.length > 0 ? posts[0] : null;
+      } catch (e) {
+        console.warn("[TagAnalyticsApp] Failed to fetch trending post:", e);
+        return null;
+      }
+    }
+calculateLocalStats(posts) {
+      const ratingCounts = { g: 0, s: 0, q: 0, e: 0 };
+      const uploaders = {};
+      const approvers = {};
+      posts.forEach((p) => {
+        if (ratingCounts[p.rating] !== void 0) ratingCounts[p.rating]++;
+        if (p.uploader_id) {
+          uploaders[p.uploader_id] = (uploaders[p.uploader_id] || 0) + 1;
+        }
+        if (p.approver_id) {
+          approvers[p.approver_id] = (approvers[p.approver_id] || 0) + 1;
+        }
+      });
+      const sortMap = (map) => Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 100).map(([id, count], index) => ({ id, count, rank: index + 1 }));
+      return {
+        ratingCounts,
+        uploaderRanking: sortMap(uploaders),
+        approverRanking: sortMap(approvers)
+      };
+    }
+    async fetchReportRanking(tagName, group, from, to) {
+      const params = new URLSearchParams({
+        "search[tags]": tagName,
+        "search[group]": group,
+        "search[mode]": "table",
+        "search[group_limit]": 10,
+"commit": "Search"
+      });
+      if (from) params.append("search[from]", from);
+      if (to) params.append("search[to]", to);
+      const url = `/reports/posts.json?${params.toString()}`;
+      try {
+        const resp = await this.rateLimiter.fetch(url, { headers: { "Accept": "application/json" } });
+        const data = await resp.json();
+        if (Array.isArray(data) && data.length > 0) {
+        }
+        return data;
+      } catch (e) {
+        console.warn(`[TagAnalyticsApp] Ranking fetch failed (${group}):`, e);
+        return [];
+      }
+    }
+
+async fetchMonthlyCounts(tagName, startDate) {
+      const startDateObj = startDate instanceof Date ? startDate : new Date(startDate);
+      const startYear = startDateObj.getFullYear();
+      const startMonth = startDateObj.getMonth();
+      const now = new Date();
+      const monthlyData = [];
+      let cumulative = 0;
+      const tasks = [];
+      let current = new Date(Date.UTC(startYear, startMonth, 1));
+      while (current <= now) {
+        const y = current.getUTCFullYear();
+        const m = current.getUTCMonth() + 1;
+        const dateStr = `${y}-${String(m).padStart(2, "0")}-01`;
+        const nextMonth = new Date(current);
+        nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+        const nextY = nextMonth.getUTCFullYear();
+        const nextM = nextMonth.getUTCMonth() + 1;
+        let rangeEnd = `${nextY}-${String(nextM).padStart(2, "0")}-01`;
+        if (nextMonth > now) {
+          rangeEnd = now.toISOString();
+        }
+        const queryDate = `${y}-${String(m).padStart(2, "0")}-01...${rangeEnd}`;
+        tasks.push({
+          dateObj: new Date(current),
+dateStr,
+          queryDate
+        });
+        current.setUTCMonth(current.getUTCMonth() + 1);
+      }
+      const promises = tasks.map((task) => {
+        const params = new URLSearchParams({
+          tags: `${tagName} status:any date:${task.queryDate}`
+});
+        const url = `/counts/posts.json?${params.toString()}`;
+        return this.rateLimiter.fetch(url).then((r) => r.json()).then((data) => {
+          const count = (data && data.counts ? data.counts.posts : data ? data.posts : 0) || 0;
+          return {
+            date: task.dateStr,
+            count,
+            cumulative: 0
+          };
+        }).catch((e) => {
+          console.warn(`[TagAnalyticsApp] Failed month ${task.dateStr}`, e);
+          return { date: task.dateStr, count: 0, cumulative: 0 };
+        });
+      });
+      const results = await Promise.all(promises);
+      results.sort((a, b) => a.date.localeCompare(b.date));
+      results.forEach((item) => {
+        cumulative += item.count;
+        item.cumulative = cumulative;
+        monthlyData.push(item);
+      });
+      monthlyData.historyCutoff = now.toISOString();
+      return monthlyData;
+    }
+async fetchMilestones(tagName, monthlyData, targets) {
+      const milestones = [];
+      targets.sort((a, b) => a - b);
+      if (!monthlyData || monthlyData.length === 0) return [];
+      for (const target of targets) {
+        let targetData = null;
+        let prevCumulative = 0;
+        for (const mData of monthlyData) {
+          if (mData.cumulative >= target) {
+            targetData = mData;
+            break;
+          }
+          prevCumulative = mData.cumulative;
+        }
+        if (targetData) {
+          const offset = target - prevCumulative;
+          let y, m;
+          if (targetData.date instanceof Date) {
+            y = targetData.date.getFullYear();
+            m = targetData.date.getMonth() + 1;
+          } else {
+            const dParts = targetData.date.split("-");
+            y = parseInt(dParts[0], 10);
+            m = parseInt(dParts[1], 10);
+          }
+          const prevMonthEnd = new Date(y, m - 1, 0);
+          const prevDateStr = `${prevMonthEnd.getFullYear()}-${String(prevMonthEnd.getMonth() + 1).padStart(2, "0")}-${String(prevMonthEnd.getDate()).padStart(2, "0")}`;
+          const limit = 200;
+          const page = Math.ceil(offset / limit);
+          const indexInPage = (offset - 1) % limit;
+          const params = new URLSearchParams({
+            tags: `${tagName} status:any date:>${prevDateStr} order:id`,
+            limit,
+            page,
+            only: "id,created_at,uploader_id,uploader_name,variants,rating,preview_file_url"
+          });
+          const url = `/posts.json?${params.toString()}`;
+          try {
+            const posts = await this.rateLimiter.fetch(url).then((r) => r.json());
+            if (posts && posts[indexInPage]) {
+              milestones.push({ milestone: target, post: posts[indexInPage] });
+            } else {
+              console.warn(`[TagAnalyticsApp] Milestone ${target} post not found at index ${indexInPage} (Page ${page}). Posts len: ${posts ? posts.length : 0}`);
+            }
+          } catch (e) {
+            console.warn(`[TagAnalyticsApp] Failed milestone ${target}`, e);
+          }
+        }
+      }
+      await this.backfillUploaderNames(milestones);
+      return milestones;
+    }
+async backfillUploaderNames(items) {
+      const userIds = new Set();
+      items.forEach((item) => {
+        const p = item.post || item;
+        if (p.uploader_id) userIds.add(p.uploader_id);
+        if (p.approver_id) userIds.add(p.approver_id);
+      });
+      if (userIds.size > 0) {
+        const userMap = await this.fetchUserMap(Array.from(userIds));
+        userMap.forEach((uObj, id) => {
+          this.userNames[id] = uObj;
+        });
+        items.forEach((item) => {
+          const p = item.post || item;
+          const uId = String(p.uploader_id);
+          if (p.uploader_id && userMap.has(uId)) {
+            const u = userMap.get(uId);
+            p.uploader_name = u.name;
+            p.uploader_level = u.level;
+          }
+          const aId = String(p.approver_id);
+          if (p.approver_id && userMap.has(aId)) {
+            const a = userMap.get(aId);
+            p.approver_name = a.name;
+            p.approver_level = a.level;
+          }
+        });
+      }
+      return items;
+    }
+async fetchUserMap(userIds) {
+      const userMap = new Map();
+      if (!userIds || userIds.length === 0) return userMap;
+      const uniqueIds = Array.from(new Set(userIds));
+      const batchSize = 20;
+      const userBatches = [];
+      for (let i = 0; i < uniqueIds.length; i += batchSize) {
+        userBatches.push(uniqueIds.slice(i, i + batchSize));
+      }
+      const userPromises = userBatches.map((batch) => {
+        const params = new URLSearchParams({
+          "search[id]": batch.join(","),
+          "only": "id,name,level_string"
+        });
+        const url = `/users.json?${params.toString()}`;
+        return this.rateLimiter.fetch(url).then((r) => r.json()).then((users) => {
+          if (Array.isArray(users)) {
+            users.forEach((u) => userMap.set(String(u.id), { name: u.name, level: u.level_string }));
+          }
+        }).catch((e) => console.warn("[TagAnalyticsApp] Failed to fetch user batch", e));
+      });
+      await Promise.all(userPromises);
+      return userMap;
+    }
+async fetchUserMapByNames(userNames) {
+      const userMap = new Map();
+      if (!userNames || userNames.length === 0) return userMap;
+      const uniqueNames = Array.from(new Set(userNames));
+      const userPromises = uniqueNames.map((name) => {
+        const params = new URLSearchParams({
+          "search[name]": name,
+"only": "id,name,level_string"
+        });
+        const url = `/users.json?${params.toString()}`;
+        return this.rateLimiter.fetch(url).then((r) => r.json()).then((users) => {
+          if (Array.isArray(users) && users.length > 0) {
+            const u = users[0];
+            if (u) {
+              userMap.set(name, { id: u.id, name: u.name, level: u.level_string });
+              userMap.set(u.name, { id: u.id, name: u.name, level: u.level_string });
+            }
+          } else {
+            console.warn(`[TagAnalyticsApp] User not found by name: "${name}"`);
+          }
+        }).catch((e) => console.warn(`[TagAnalyticsApp] Failed to fetch user: "${name}"`, e));
+      });
+      await Promise.all(userPromises);
+      return userMap;
+    }
+async resolveFirst100Names(stats) {
+      const ids = new Set();
+      if (stats.uploaderRanking) stats.uploaderRanking.forEach((u) => ids.add(String(u.id)));
+      if (stats.approverRanking) stats.approverRanking.forEach((u) => ids.add(String(u.id)));
+      const userMap = await this.fetchUserMap(Array.from(ids));
+      if (stats.uploaderRanking) {
+        stats.uploaderRanking.forEach((u) => {
+          const uid = String(u.id);
+          if (userMap.has(uid)) {
+            const uObj = userMap.get(uid);
+            u.name = uObj.name;
+            u.level = uObj.level;
+          }
+        });
+      }
+      if (stats.approverRanking) {
+        stats.approverRanking.forEach((u) => {
+          const uid = String(u.id);
+          if (userMap.has(uid)) {
+            const uObj = userMap.get(uid);
+            u.name = uObj.name;
+            u.level = uObj.level;
+          }
+        });
+      }
+      return stats;
+    }
+calculateHistoryFromPosts(posts) {
+      if (!posts || posts.length === 0) return [];
+      const sorted = [...posts].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      const counts = {};
+      sorted.forEach((p) => {
+        const d = new Date(p.created_at);
+        if (isNaN(d.getTime())) return;
+        const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      const startDate = new Date(sorted[0].created_at);
+      const now = new Date();
+      const history = [];
+      let cumulative = 0;
+      let current = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), 1));
+      while (current <= now) {
+        const key = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, "0")}`;
+        const count = counts[key] || 0;
+        cumulative += count;
+        const dateStr = `${current.getUTCFullYear()}-${String(current.getUTCMonth() + 1).padStart(2, "0")}-${String(current.getUTCDate()).padStart(2, "0")}`;
+        history.push({
+          date: dateStr,
+count,
+          cumulative
+        });
+        current.setUTCMonth(current.getUTCMonth() + 1);
+      }
+      return history;
+    }
+getMilestoneTargets(total) {
+      const milestones = new Set([1]);
+      if (total >= 100) milestones.add(100);
+      if (total >= 1e3) milestones.add(1e3);
+      if (total >= 1e4) milestones.add(1e4);
+      if (total >= 1e5) milestones.add(1e5);
+      if (total >= 1e6) milestones.add(1e6);
+      let step = 100;
+      if (total < 2500) step = 100;
+      else if (total < 5e3) step = 250;
+      else if (total < 1e4) step = 500;
+      else if (total < 25e3) step = 1e3;
+      else if (total < 5e4) step = 2500;
+      else if (total < 1e5) step = 5e3;
+      else if (total < 25e4) step = 1e4;
+      else if (total < 5e5) step = 25e3;
+      else if (total < 1e6) step = 5e4;
+      else if (total < 25e5) step = 1e5;
+      else if (total < 5e6) step = 25e4;
+      else step = 5e5;
+      for (let i = step; i <= total; i += step) {
+        milestones.add(i);
+      }
+      const res = Array.from(milestones).sort((a, b) => a - b);
+      return res;
+    }
+    async fetchRankingsAndResolve(tagName, dateStr1Y, dateStrTomorrow, measure) {
+      const [uAll, aAll, uYear, aYear] = await Promise.all([
+        measure("Ranking (Uploader All)", this.fetchReportRanking(tagName, "uploader", "2005-01-01", dateStrTomorrow)),
+        measure("Ranking (Approver All)", this.fetchReportRanking(tagName, "approver", "2005-01-01", dateStrTomorrow)),
+        measure("Ranking (Uploader Year)", this.fetchReportRanking(tagName, "uploader", dateStr1Y, dateStrTomorrow)),
+        measure("Ranking (Approver Year)", this.fetchReportRanking(tagName, "approver", dateStr1Y, dateStrTomorrow))
+      ]);
+      const uRankingIds = new Set();
+      const uRankingNames = new Set();
+      const getKey = (r) => r.name || r.uploader || r.approver || r.user;
+      const normalize = (n) => n ? n.replace(/ /g, "_") : "";
+      [uAll, uYear, aAll, aYear].forEach((report) => {
+        if (Array.isArray(report)) report.forEach((r) => {
+          if (r.id) uRankingIds.add(String(r.id));
+          else {
+            const n = normalize(getKey(r));
+            if (n && n !== "Unknown") uRankingNames.add(n);
+          }
+        });
+      });
+      if (uRankingIds.size > 0) {
+        const userMap = await this.fetchUserMap(Array.from(uRankingIds));
+        userMap.forEach((uObj, id) => {
+          this.userNames[id] = uObj;
+        });
+      }
+      if (uRankingNames.size > 0) {
+        const nameMap = await this.fetchUserMapByNames(Array.from(uRankingNames));
+        nameMap.forEach((uObj, name) => {
+          this.userNames[name] = uObj;
+          if (uObj.id) this.userNames[String(uObj.id)] = uObj;
+        });
+      }
+      const processReport = (report) => {
+        if (Array.isArray(report)) {
+          return report.map((r) => {
+            const rawKey = getKey(r) || "Unknown";
+            const nName = normalize(rawKey);
+            const u = (r.id ? this.userNames[String(r.id)] : null) || this.userNames[nName];
+            const level = u ? u.level : null;
+            const finalName = u ? u.name : rawKey;
+            const count = r.posts || r.count || r.post_count || 0;
+            return { id: r.id || (u ? u.id : null), name: finalName, level, count };
+          });
+        }
+        return [];
+      };
+      const result = {
+        uploaderAll: processReport(uAll),
+        approverAll: processReport(aAll),
+        uploaderYear: processReport(uYear),
+        approverYear: processReport(aYear)
+      };
+      return result;
+    }
+    async fetchTagData(tagName) {
+      try {
+        const url = `/tags.json?search[name_matches]=${encodeURIComponent(tagName)}`;
+        const resp = await this.rateLimiter.fetch(url).then((r) => r.json());
+        if (Array.isArray(resp) && resp.length > 0) {
+          const exact = resp.find((t) => t.name === tagName);
+          return exact || resp[0];
+        }
+        return null;
+      } catch (e) {
+        console.error("[TagAnalyticsApp] Tag fetch error:", e);
+        return null;
+      }
+    }
+getTagNameFromUrl() {
+      const path = window.location.pathname;
+      const match = path.match(/\/wiki_pages\/([^/]+)/);
+      if (match) {
+        return decodeURIComponent(match[1]);
+      }
+      return null;
+    }
+  }
+  class TagAnalyticsChartRenderer {
+    currentData;
+    currentMilestones;
+    resizeObserver;
+    resizeTimeout;
+    isMilestoneExpanded;
+    constructor() {
+      this.currentData = null;
+      this.currentMilestones = null;
+      this.resizeObserver = null;
+      this.resizeTimeout = null;
+      this.isMilestoneExpanded = false;
+    }
+cleanup() {
+      if (this.resizeTimeout) {
+        clearTimeout(this.resizeTimeout);
+        this.resizeTimeout = null;
+      }
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+        this.resizeObserver = null;
+      }
+    }
+renderPieChart(type, tagData) {
+      const container = document.getElementById("status-pie-chart");
+      const legendContainer = document.getElementById("status-pie-legend");
+      const loading = document.getElementById("status-pie-loading");
+      const wrapper = document.getElementById("status-pie-chart-wrapper");
+      if (!container || !tagData) return;
+      let counts = null;
+      if (type === "status") counts = tagData.statusCounts;
+      else if (type === "rating") counts = tagData.ratingCounts;
+      else if (type === "copyright") counts = tagData.copyrightCounts;
+      else if (type === "character") counts = tagData.characterCounts;
+      else if (type === "commentary") {
+        const c = tagData.commentaryCounts;
+        const translated = c.translated || 0;
+        const requested = c.requested || 0;
+        const total = c.total || 0;
+        const untagged = Math.max(0, total - (translated + requested));
+        counts = {
+          "commentary": translated,
+          "commentary_request": requested,
+          "has:commentary -commentary -commentary_request": untagged
+        };
+      }
+      if (!counts) return;
+      const ratingLabels = { "g": "General", "s": "Sensitive", "q": "Questionable", "e": "Explicit" };
+      const data = Object.entries(counts).map(([key, count]) => {
+        let name = key;
+        if (type === "status") name = key.charAt(0).toUpperCase() + key.slice(1);
+        else if (type === "rating") name = ratingLabels[key] || key;
+        else if (type === "commentary") {
+          if (key === "commentary") name = "Commentary";
+          else if (key === "commentary_request") name = "Requested";
+          else if (key === "has:commentary -commentary -commentary_request") name = "Untagged";
+        } else name = key.replace(/_/g, " ");
+        if (key === "others") name = "Others";
+        const validCount = Number(count);
+        return {
+          name,
+          count: isNaN(validCount) ? 0 : validCount,
+          key
+        };
+      }).filter((d) => d.count > 0).sort((a, b) => {
+        if (a.key === "others") return 1;
+        if (b.key === "others") return -1;
+        return b.count - a.count;
+      });
+      if (data.length === 0) {
+        if (loading) {
+          loading.style.display = "block";
+          loading.textContent = `No ${type} data available.`;
+        }
+        if (wrapper) wrapper.style.opacity = "0";
+        return;
+      }
+      if (loading) loading.style.display = "none";
+      if (wrapper) wrapper.style.opacity = "1";
+      const width = 120;
+      const height = 120;
+      const radius = Math.min(width, height) / 2 - 8;
+      const statusColors = {
+        "active": "#28a745",
+        "deleted": "#dc3545",
+        "pending": "#ffc107",
+        "flagged": "#fd7e14",
+        "banned": "#6c757d",
+        "appealed": "#007bff"
+      };
+      const ratingColors = {
+        "g": "#28a745",
+        "s": "#fd7e14",
+        "q": "#6f42c1",
+        "e": "#dc3545"
+      };
+      const ordinalColor = d3__namespace.scaleOrdinal(d3__namespace.schemeCategory10);
+      const getColor = (key) => {
+        if (type === "status") return statusColors[key] || "#999";
+        if (type === "rating") return ratingColors[key] || "#999";
+        if (type === "commentary") {
+          if (key === "commentary") return "#007bff";
+          if (key === "commentary_request") return "#ffc107";
+          if (key === "has:commentary -commentary -commentary_request") return "#6c757d";
+        }
+        if (key === "others") return "#888";
+        return ordinalColor(key);
+      };
+      const pie = d3__namespace.pie().value((d) => d.count).sort(null);
+      const arc = d3__namespace.arc().innerRadius(radius * 0.4).outerRadius(radius);
+      const arcHover = d3__namespace.arc().innerRadius(radius * 0.4).outerRadius(radius * 1.1);
+      let svg = d3__namespace.select(container).select("svg");
+      let g;
+      if (svg.empty()) {
+        svg = d3__namespace.select(container).append("svg").attr("width", width).attr("height", height);
+        g = svg.append("g").attr("transform", `translate(${width / 2},${height / 2})`);
+      } else {
+        g = svg.select("g");
+      }
+      const tooltip = d3__namespace.select("body").selectAll(".tag-pie-tooltip").data([0]).join("div").attr("class", "tag-pie-tooltip").style("position", "absolute").style("background", "rgba(30, 30, 30, 0.9)").style("color", "#fff").style("padding", "5px 10px").style("border-radius", "4px").style("font-size", "11px").style("pointer-events", "none").style("z-index", "2147483647").style("opacity", "0").style("box-shadow", "0 2px 5px rgba(0,0,0,0.2)");
+      const totalValue = d3__namespace.sum(data, (d) => d.count);
+      const arcs = pie(data);
+      const path = g.selectAll("path").data(arcs, (d) => d.data.key);
+      path.exit().transition().duration(500).attrTween("d", function(d) {
+        const start = d.startAngle;
+        const end = d.endAngle;
+        const i = d3__namespace.interpolate(start, end);
+        return function(t) {
+          return arc({ ...d, startAngle: i(t) }) || "";
+        };
+      }).remove();
+      path.transition().duration(500).attrTween("d", function(d) {
+        const prev = this._current || { startAngle: 0, endAngle: 0, padAngle: 0 };
+        const i = d3__namespace.interpolate(prev, d);
+        const self = this;
+        return function(t) {
+          const val = i(t);
+          self._current = val;
+          return arc(val) || "";
+        };
+      }).attr("fill", (d) => getColor(d.data.key));
+      path.enter().append("path").attr("fill", (d) => getColor(d.data.key)).attr("stroke", "#fff").style("stroke-width", "1px").style("opacity", 0.8).style("cursor", "pointer").transition().duration(500).attrTween("d", function(d) {
+        const i = d3__namespace.interpolate({ startAngle: 0, endAngle: 0, padAngle: 0 }, d);
+        const self = this;
+        return function(t) {
+          const val = i(t);
+          self._current = val;
+          return arc(val) || "";
+        };
+      });
+      g.selectAll("path").on("mouseover", function(event, d) {
+        d3__namespace.select(this).transition().duration(200).attr("d", arcHover).style("opacity", 1);
+        const percent = Math.round(d.data.count / totalValue * 100);
+        tooltip.transition().duration(200).style("opacity", 1);
+        tooltip.html(`<strong>${escapeHtml(d.data.name)}</strong>: ${d.data.count.toLocaleString()} (${percent}%)`).style("left", event.pageX + 10 + "px").style("top", event.pageY - 20 + "px");
+      }).on("mousemove", function(event) {
+        tooltip.style("left", event.pageX + 10 + "px").style("top", event.pageY - 20 + "px");
+      }).on("mouseout", function() {
+        d3__namespace.select(this).transition().duration(200).attr("d", arc).style("opacity", 0.8);
+        tooltip.transition().duration(200).style("opacity", 0);
+      }).on("click", (_event, d) => {
+        if (d.data.key === "others") return;
+        let query = "";
+        if (type === "status") {
+          query = `${tagData.name} status:${d.data.key}`;
+        } else if (type === "rating") {
+          query = `${tagData.name} rating:${d.data.key}`;
+        } else {
+          query = `${tagData.name} ${d.data.key}`;
+        }
+        const url = `/posts?tags=${encodeURIComponent(query)}`;
+        window.open(url, "_blank");
+      });
+      if (legendContainer) {
+        legendContainer.innerHTML = "";
+        data.forEach((d) => {
+          const item = document.createElement("div");
+          item.style.display = "flex";
+          item.style.alignItems = "center";
+          item.style.marginBottom = "2px";
+          item.style.whiteSpace = "nowrap";
+          const colorBox = document.createElement("div");
+          colorBox.style.width = "10px";
+          colorBox.style.height = "10px";
+          colorBox.style.backgroundColor = getColor(d.key);
+          colorBox.style.marginRight = "5px";
+          colorBox.style.borderRadius = "2px";
+          const label = document.createElement("a");
+          let query = "";
+          if (type === "status") {
+            query = `${tagData.name} status:${d.key}`;
+          } else if (type === "rating") {
+            query = `${tagData.name} rating:${d.key}`;
+          } else {
+            if (d.key === "others") ;
+            else {
+              query = `${tagData.name} ${d.key}`;
+            }
+          }
+          if (d.key !== "others") {
+            label.href = `/posts?tags=${encodeURIComponent(query)}`;
+            label.target = "_blank";
+            label.style.cursor = "pointer";
+            label.classList.add("di-hover-text-primary");
+          } else {
+            label.style.cursor = "default";
+          }
+          label.textContent = `${d.name} (${d.count.toLocaleString()})`;
+          label.style.textDecoration = "none";
+          label.style.color = "#555";
+          label.style.transition = "color 0.2s";
+          item.appendChild(colorBox);
+          item.appendChild(label);
+          legendContainer.appendChild(item);
+        });
+      }
+    }
+renderMilestones(milestonePosts, onNsfwUpdate) {
+      const grid = document.querySelector("#tag-analytics-milestones .milestones-grid");
+      const toggleBtn = document.getElementById("tag-milestones-toggle");
+      const loading = document.querySelector("#milestones-loading");
+      if (loading) loading.style.display = "none";
+      if (!grid) return;
+      grid.innerHTML = "";
+      if (milestonePosts.length === 0) {
+        grid.innerHTML = '<div style="color:#888; grid-column:1/-1; text-align:center;">No milestones found.</div>';
+        if (toggleBtn) toggleBtn.style.display = "none";
+        return;
+      }
+      if (toggleBtn && milestonePosts.length > 6) {
+        toggleBtn.style.display = "block";
+        toggleBtn.textContent = this.isMilestoneExpanded ? "Show Less" : "Show More";
+        grid.style.maxHeight = this.isMilestoneExpanded ? "2000px" : "120px";
+        toggleBtn.onclick = () => {
+          this.isMilestoneExpanded = !this.isMilestoneExpanded;
+          grid.style.maxHeight = this.isMilestoneExpanded ? "2000px" : "120px";
+          toggleBtn.textContent = this.isMilestoneExpanded ? "Show Less" : "Show More";
+        };
+      } else if (toggleBtn) {
+        toggleBtn.style.display = "none";
+        grid.style.maxHeight = "none";
+      }
+      milestonePosts.forEach((item) => {
+        const m = item.milestone;
+        const p = item.post;
+        let label = `#${m}`;
+        if (m === 1) label = "First";
+        else if (m >= 1e6) {
+          const val = m / 1e6;
+          label = `${Number.isInteger(val) ? val : val.toFixed(1).replace(/\.0$/, "")} M`;
+        } else if (m >= 1e3) {
+          const val = m / 1e3;
+          label = `${val} k`;
+        }
+        const dateStr = new Date(p.created_at).toISOString().slice(0, 10);
+        const thumbUrl = getBestThumbnailUrl(p);
+        const uploaderName = p.uploader_name || `User ${p.uploader_id}`;
+        const card = document.createElement("div");
+        card.className = "di-milestone-card di-nsfw-monitor";
+        card.setAttribute("data-rating", p.rating);
+        card.style.background = "#fff";
+        card.style.border = "1px solid #ddd";
+        card.style.borderRadius = "8px";
+        card.style.padding = "10px";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        card.style.boxShadow = "0 2px 4px rgba(0,0,0,0.05)";
+        card.classList.add("di-hover-translate-up");
+        card.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
+                <div>
+                    <div style="font-size: 0.8em; color: #888; margin-bottom: 3px; text-transform: uppercase;">#${p.id}</div>
+                    <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.2em; color: #007bff; text-decoration: none; display: block; margin-bottom: 3px;">${label}</a>
+                    <div style="font-size: 0.85em; color: #555;">${dateStr}</div>
+                </div>
+                <a href="/posts/${p.id}" target="_blank" style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; flex-shrink: 0; background: #eee; margin-left: 10px;">
+                    <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+                </a>
+            </div>
+            <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
+                <a href="/users/${p.uploader_id}" target="_blank" class="${getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
+            </div>
+        `;
+        const link = card.querySelector(".di-milestone-link");
+        if (link) link.classList.add("di-hover-underline");
+        grid.appendChild(card);
+      });
+      onNsfwUpdate();
+    }
+renderHistoryCharts(data, tagName, milestones) {
+      if (!window.d3) {
+        console.error("D3.js not loaded");
+        return;
+      }
+      this.currentMilestones = milestones;
+      const chartData = data.map((d) => {
+        let dateStr = d.date;
+        if (d.date instanceof Date) {
+          dateStr = d.date.toISOString().slice(0, 10);
+        }
+        return {
+          ...d,
+          date: dateStr
+        };
+      });
+      this.currentData = chartData;
+      this.renderBarChart(chartData, "#history-chart-monthly", "Monthly Posts", tagName, milestones);
+      this.renderAreaChart(chartData, "#history-chart-cumulative", "Cumulative Posts");
+      if (!this.resizeObserver) {
+        const modalContent = document.querySelector("#tag-analytics-content")?.parentElement;
+        if (modalContent) {
+          this.resizeObserver = new ResizeObserver(() => {
+            if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
+            this.resizeTimeout = setTimeout(() => {
+              if (this.currentData && document.getElementById("history-chart-monthly")) {
+                this.renderBarChart(this.currentData, "#history-chart-monthly", "Monthly Posts", tagName, this.currentMilestones);
+                this.renderAreaChart(this.currentData, "#history-chart-cumulative", "Cumulative Posts");
+              }
+            }, 100);
+          });
+          this.resizeObserver.observe(modalContent);
+        }
+      }
+    }
+renderBarChart(data, selector, title, tagName, milestones) {
+      const container = document.querySelector(selector);
+      if (!container) return;
+      container.innerHTML = "";
+      container.style.display = "flex";
+      container.style.flexDirection = "column";
+      container.style.height = "100%";
+      const titleEl = document.createElement("div");
+      titleEl.textContent = title;
+      titleEl.style.fontSize = "14px";
+      titleEl.style.fontWeight = "bold";
+      titleEl.style.color = "#444";
+      titleEl.style.marginBottom = "5px";
+      titleEl.style.textAlign = "left";
+      titleEl.style.borderLeft = "4px solid #007bff";
+      titleEl.style.paddingLeft = "10px";
+      container.appendChild(titleEl);
+      const mainWrapper = document.createElement("div");
+      mainWrapper.className = "chart-flex-wrapper";
+      mainWrapper.style.display = "flex";
+      mainWrapper.style.width = "100%";
+      mainWrapper.style.position = "relative";
+      container.appendChild(mainWrapper);
+      const yAxisContainer = document.createElement("div");
+      yAxisContainer.className = "y-axis-container";
+      yAxisContainer.style.width = "45px";
+      yAxisContainer.style.flexShrink = "0";
+      yAxisContainer.style.background = "#fff";
+      yAxisContainer.style.zIndex = "5";
+      mainWrapper.appendChild(yAxisContainer);
+      const scrollWrapper = document.createElement("div");
+      scrollWrapper.className = "scroll-wrapper";
+      scrollWrapper.style.flex = "1";
+      scrollWrapper.style.overflowX = "auto";
+      scrollWrapper.style.overflowY = "hidden";
+      mainWrapper.appendChild(scrollWrapper);
+      const barWidth = 20;
+      const margin = { top: 20, right: 30, bottom: 40, left: 10 };
+      const yAxisMargin = { top: 20, left: 40 };
+      const containerWidth = mainWrapper.clientWidth - 45;
+      const calculatedWidth = data.length * barWidth;
+      const width = Math.max(containerWidth, calculatedWidth + margin.left + margin.right);
+      const height = 300;
+      const yAxisSvg = d3__namespace.select(yAxisContainer).append("svg").attr("width", 45).attr("height", height).append("g").attr("transform", `translate(${yAxisMargin.left},${yAxisMargin.top})`);
+      const svg = d3__namespace.select(scrollWrapper).append("svg").attr("width", width).attr("height", height).append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+      const x = d3__namespace.scaleBand().domain(data.map((d) => {
+        if (d.date instanceof Date) return d.date.toLocaleDateString("en-CA");
+        return d.date;
+      })).range([0, width - margin.left - margin.right]).padding(0.2);
+      const y = d3__namespace.scaleLinear().domain([0, d3__namespace.max(data, (d) => d.count)]).nice().range([height - margin.top - margin.bottom, 0]);
+      yAxisSvg.call(d3__namespace.axisLeft(y).ticks(8));
+      svg.append("g").attr("class", "grid").attr("stroke-opacity", 0.05).call(
+        d3__namespace.axisLeft(y).ticks(8).tickSize(-(width - margin.left - margin.right)).tickFormat(() => "")
+      ).call((g) => g.select(".domain").remove());
+      const overlayGroups = svg.append("g").attr("class", "monthly-overlays");
+      data.forEach((d) => {
+        const dateStr = d.date instanceof Date ? d.date.toLocaleDateString("en-CA") : d.date;
+        const dateObj = d.date instanceof Date ? d.date : new Date(dateStr);
+        const nextDate = new Date(dateObj);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+        const nextDateStr = nextDate.toLocaleDateString("en-CA");
+        const dateRange = `${dateStr}...${nextDateStr}`;
+        const searchUrl = `/posts?tags=${encodeURIComponent(tagName)}+date:${dateRange}`;
+        const colWidth = x.step();
+        const colX = (x(dateStr) ?? 0) - (x.step() - x.bandwidth()) / 2;
+        overlayGroups.append("rect").attr("x", colX).attr("y", 0).attr("width", colWidth).attr("height", height - margin.top - margin.bottom).attr("fill", "transparent").style("cursor", "pointer").style("pointer-events", "all").on("mouseover", function() {
+          d3__namespace.select(this).attr("fill", "rgba(0, 123, 255, 0.05)");
+          const bar = svg.select(`.monthly-bar-${dateStr}`);
+          if (bar.node()) bar.attr("fill", "#2e7d32");
+        }).on("mouseout", function() {
+          d3__namespace.select(this).attr("fill", "transparent");
+          const bar = svg.select(`.monthly-bar-${dateStr}`);
+          if (bar.node()) bar.attr("fill", "#69b3a2");
+        }).on("click", () => {
+          window.open(searchUrl, "_blank");
+        }).append("title").text(`${dateStr}
+Count: ${d.count.toLocaleString()}`);
+      });
+      svg.selectAll("rect.monthly-bar").data(data).enter().append("rect").attr("class", (d) => `monthly-bar monthly-bar-${d.date instanceof Date ? d.date.toLocaleDateString("en-CA") : d.date}`).attr("x", (d) => x(d.date instanceof Date ? d.date.toLocaleDateString("en-CA") : d.date) ?? 0).attr("y", (d) => y(d.count)).attr("width", x.bandwidth()).attr("height", (d) => height - margin.top - margin.bottom - y(d.count)).attr("fill", "#69b3a2").style("pointer-events", "none").append("title").text((d) => `${d.date instanceof Date ? d.date.toLocaleDateString("en-CA") : d.date}: ${d.count} posts`);
+      if (milestones && milestones.length > 0) {
+        const milestonesByMonth = {};
+        milestones.forEach((m) => {
+          if (!m.post) return;
+          if (m.milestone !== 1 && m.milestone % 1e3 !== 0) return;
+          const pDate = new Date(m.post.created_at);
+          const mKey = `${pDate.getFullYear()}-${String(pDate.getMonth() + 1).padStart(2, "0")}-01`;
+          if (!milestonesByMonth[mKey]) milestonesByMonth[mKey] = [];
+          milestonesByMonth[mKey].push(m);
+        });
+        const starGroups = svg.append("g").attr("class", "di-milestone-stars");
+        data.forEach((d) => {
+          const mKey = d.date instanceof Date ? d.date.toISOString().slice(0, 10) : d.date;
+          const monthMilestones = milestonesByMonth[mKey];
+          if (monthMilestones) {
+            const bx = (x(d.date) ?? 0) + x.bandwidth() / 2;
+            monthMilestones.forEach((m, si) => {
+              const starY = 12 + si * 14;
+              let fill = "#ffd700";
+              let stroke = "#b8860b";
+              let animClass = "";
+              let fontSize = "12px";
+              if (m.milestone === 1) {
+                fill = "#00e676";
+                stroke = "#00a050";
+              } else if (m.milestone % 1e4 === 0) {
+                fill = "#ffb300";
+                animClass = "star-shiny";
+                fontSize = "15px";
+              }
+              const star = starGroups.append("a").attr("href", `${window.location.origin}/posts/${m.post.id}`).attr("target", "_blank").style("text-decoration", "none").append("text").attr("class", animClass).attr("x", bx).attr("y", starY).attr("text-anchor", "middle").attr("dominant-baseline", "central").attr("font-size", fontSize).attr("fill", fill).attr("stroke", stroke).attr("stroke-width", "0.5").style("cursor", "pointer").style("filter", "drop-shadow(0px 1px 1px rgba(0,0,0,0.3))").style("pointer-events", "all").text("★");
+              star.append("title").text(`Milestone #${m.milestone} (${new Date(m.post.created_at).toLocaleDateString()})`);
+            });
+          }
+        });
+      }
+      const xAxis = d3__namespace.axisBottom(x).tickValues(x.domain().filter((d) => new Date(d).getMonth() === 0)).tickFormat((d) => d3__namespace.timeFormat("%Y")(new Date(d)));
+      svg.append("g").attr("transform", `translate(0,${height - margin.top - margin.bottom})`).call(xAxis);
+      setTimeout(() => {
+        if (scrollWrapper) scrollWrapper.scrollLeft = scrollWrapper.scrollWidth;
+      }, 50);
+    }
+renderAreaChart(data, selector, title) {
+      const container = document.querySelector(selector);
+      if (!container) return;
+      container.innerHTML = "";
+      container.style.position = "relative";
+      const titleEl = document.createElement("div");
+      titleEl.textContent = title;
+      titleEl.style.fontSize = "14px";
+      titleEl.style.fontWeight = "bold";
+      titleEl.style.color = "#444";
+      titleEl.style.marginBottom = "5px";
+      titleEl.style.textAlign = "left";
+      titleEl.style.borderLeft = "4px solid #007bff";
+      titleEl.style.paddingLeft = "10px";
+      container.appendChild(titleEl);
+      const width = container.getBoundingClientRect().width;
+      const margin = { top: 30, right: 30, bottom: 40, left: 50 };
+      if (width <= margin.left + margin.right) {
+        console.warn("[TagAnalyticsApp] Container too narrow for chart, skipping render.");
+        return;
+      }
+      const height = 300;
+      const svg = d3__namespace.select(selector).append("svg").attr("width", width).attr("height", height).append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+      const x = d3__namespace.scaleTime().domain(d3__namespace.extent(data, (d) => new Date(d.date))).range([0, width - margin.left - margin.right]);
+      const y = d3__namespace.scaleLinear().domain([0, d3__namespace.max(data, (d) => d.cumulative) ?? 0]).nice().range([height - margin.top - margin.bottom, 0]);
+      svg.append("path").datum(data).attr("fill", "#cce5df").attr("stroke", "#69b3a2").attr("stroke-width", 1.5).attr(
+        "d",
+        d3__namespace.area().x((d) => x(new Date(d.date))).y0(y(0)).y1((d) => y(d.cumulative))
+      );
+      svg.append("g").attr("transform", `translate(0,${height - margin.top - margin.bottom})`).call(d3__namespace.axisBottom(x).tickFormat((d) => {
+        return d3__namespace.timeFormat("%Y")(d);
+      }));
+      svg.append("g").call(d3__namespace.axisLeft(y));
+      const focus = svg.append("g").attr("class", "focus").style("display", "none");
+      focus.append("circle").attr("r", 5).attr("fill", "#69b3a2").attr("stroke", "#fff").attr("stroke-width", 2);
+      d3__namespace.select("body").selectAll(".tag-analytics-tooltip").remove();
+      const tooltip = d3__namespace.select("body").append("div").attr("class", "tag-analytics-tooltip").style("position", "absolute").style("z-index", "11000").style("background", "rgba(0, 0, 0, 0.8)").style("color", "#fff").style("padding", "8px").style("border-radius", "4px").style("font-size", "12px").style("pointer-events", "none").style("opacity", 0).style("transition", "opacity 0.2s");
+      svg.append("rect").attr("class", "overlay").attr("width", width - margin.left - margin.right).attr("height", height - margin.top - margin.bottom).style("fill", "none").style("pointer-events", "all").on("mouseover", () => {
+        focus.style("display", null);
+        tooltip.style("opacity", 1);
+      }).on("mouseout", () => {
+        focus.style("display", "none");
+        tooltip.style("opacity", 0);
+      }).on("mousemove", (event) => {
+        try {
+          const bisectDate = d3__namespace.bisector((d2) => new Date(d2.date)).left;
+          const [mx] = d3__namespace.pointer(event);
+          const x0 = x.invert(mx);
+          const i = bisectDate(data, x0, 1);
+          const d0 = data[i - 1];
+          const d1 = data[i];
+          let d = d0;
+          if (d1 && d0) {
+            const date0 = new Date(d0.date);
+            const date1 = new Date(d1.date);
+            d = x0 - date0.getTime() > date1.getTime() - x0 ? d1 : d0;
+          } else if (d1) {
+            d = d1;
+          }
+          if (!d) return;
+          const dateObj = new Date(d.date);
+          const dateStr = dateObj.toLocaleDateString("en-CA");
+          focus.attr("transform", `translate(${x(dateObj)},${y(d.cumulative)})`);
+          let left = event.pageX + 15;
+          let top = event.pageY - 28;
+          if (left + 150 > document.documentElement.clientWidth) {
+            left = event.pageX - 160;
+          }
+          tooltip.html(`<strong>${dateStr}</strong><br>Cumulative: ${d.cumulative.toLocaleString()}`).style("left", left + "px").style("top", top + "px");
+        } catch (e) {
+        }
+      });
+    }
+    renderRankingColumn(title, data, role, tagName, userNames, limitId = null) {
+      if (!data || data.length === 0) {
+        return `
+          <div class="di-card-sm">
+              <h4 style="margin: 0 0 10px 0; font-size: 0.9em; color: #555; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${title}</h4>
+              <div style="text-align: center; color: #999; font-size: 0.8em; padding: 20px 0;">No Data</div>
+          </div>`;
+      }
+      const maxCount = Math.max(...data.map((u) => u.count || u.post_count || 0));
+      const list = data.slice(0, 10).map((u, i) => {
+        let nameHtml = "Unknown";
+        const name = u.name || `user_${u.id} `;
+        const normalizedName = name.replace(/ /g, "_");
+        const userCached = userNames[String(u.id)] || userNames[name];
+        const level = u.level || (userCached && typeof userCached === "object" ? userCached.level : null);
+        const userClass = getLevelClass(level);
+        let query = "";
+        if (role && tagName) {
+          const queryRole = role === "uploader" ? "user" : role;
+          query = `${queryRole}:${normalizedName} ${tagName} `;
+          if (limitId) {
+            query += `id:..${limitId} `;
+          }
+        }
+        const safeName = escapeHtml(name);
+        if (query) {
+          nameHtml = `<a href="/posts?tags=${encodeURIComponent(query)}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
+        } else if (u.id) {
+          nameHtml = `<a href="/users/${u.id}" target="_blank" class="di-ranking-username ${userClass}" style="text-decoration: none;">${safeName}</a>`;
+        } else {
+          nameHtml = `<span class="di-ranking-username ${userClass}" style="cursor: default;">${safeName}</span>`;
+        }
+        const count = u.count || u.post_count || 0;
+        const percentage = maxCount > 0 ? count / maxCount * 100 : 0;
+        return `
+          <div style="display: flex; justify-content: space-between; font-size: 0.85em; padding: 3px 5px; border-bottom: 1px solid #f5f5f5; background: linear-gradient(90deg, rgba(0,0,0,0.06) ${percentage}%, transparent ${percentage}%);">
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;" title="${safeName}">${i + 1}. ${nameHtml}</span>
+              <span style="color: #666; font-weight: bold;">${count}</span>
+          </div>`;
+      }).join("");
+      return `
+      <div class="di-card-sm">
+          <h4 style="margin: 0 0 10px 0; font-size: 0.9em; color: #555; text-align: center; border-bottom: 1px solid #ddd; padding-bottom: 5px;">${title}</h4>
+          <div>${list}</div>
+      </div>`;
+    }
+    updateRankingTabs(role, tagData, userNames) {
+      const container = document.getElementById("ranking-container");
+      if (!container || !tagData.rankings || !tagData.rankings[role]) return;
+      const rData = tagData.rankings[role];
+      console.log("[TagAnalytics] updateRankingTabs - hundredthPost:", tagData.hundredthPost);
+      const limitId = tagData.hundredthPost ? tagData.hundredthPost.id : null;
+      container.innerHTML = `
+          ${this.renderRankingColumn("All-time", rData.allTime, role, tagData.name, userNames)}
+          ${this.renderRankingColumn("Last 1 Year", rData.year, role, tagData.name, userNames)}
+          ${this.renderRankingColumn("First 100 Post", rData.first100, role, tagData.name, userNames, limitId)}
+`;
+    }
+  }
+  class TagAnalyticsApp {
+    db;
+    settings;
+    tagName;
+    rateLimiter;
+    dataService;
+    isFetching;
+    chartRenderer;
+constructor(db, settings, tagName) {
+      this.db = db;
+      this.settings = settings;
+      this.tagName = tagName;
+      const rl = CONFIG.RATE_LIMITER;
+      this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+      this.dataService = new TagAnalyticsDataService(db, this.rateLimiter, tagName);
+      this.chartRenderer = new TagAnalyticsChartRenderer();
+      this.isFetching = false;
+    }
+async run() {
+      if (!this.tagName) return;
+      try {
+        const tagData = await this.dataService.fetchTagData(this.tagName);
+        const validCategories = [1, 3, 4];
+        if (!tagData || !validCategories.includes(tagData.category)) {
+          return;
+        }
+      } catch (e) {
+        return;
+      }
+      this.injectAnalyticsButton(null);
+      try {
+        const rawCache = this.db && this.db.tag_analytics ? await this.db.tag_analytics.get(this.tagName) : null;
+        const statusLabel = document.getElementById("tag-analytics-status");
+        if (!statusLabel) return;
+        if (rawCache) {
+          const age = Date.now() - rawCache.updatedAt;
+          const isStale = age >= CONFIG.CACHE_EXPIRY_MS;
+          const date = new Date(rawCache.updatedAt).toLocaleDateString();
+          if (isStale) {
+            statusLabel.textContent = `Updated: ${date} · Sync needed`;
+            statusLabel.style.color = "#d73a49";
+          } else {
+            statusLabel.textContent = `Updated: ${date}`;
+            statusLabel.style.color = "#28a745";
+          }
+        } else {
+          statusLabel.textContent = "Sync needed";
+          statusLabel.style.color = "#d73a49";
+        }
+        statusLabel.style.display = "inline";
+      } catch (e) {
+      }
+    }
+_showUpdatedStatus(updatedAt) {
+      const statusLabel = document.getElementById("tag-analytics-status");
+      if (!statusLabel) return;
+      const date = new Date(updatedAt).toLocaleDateString();
+      statusLabel.textContent = `Updated: ${date}`;
+      statusLabel.style.color = "#28a745";
+      statusLabel.style.display = "inline";
+    }
+async _fetchAndRender() {
+      const tagName = this.tagName;
+      if (!tagName || this.isFetching) return;
+      this.isFetching = true;
+      try {
+        this.injectAnalyticsButton(null, 0, "Waiting...");
+        this.dataService.cleanupOldCache();
+        const cachedData = await this.dataService.loadFromCache();
+        let runDelta = false;
+        let baseData = null;
+        if (cachedData) {
+          const age = Date.now() - cachedData.updatedAt;
+          const isTimeExpired = age >= CONFIG.CACHE_EXPIRY_MS;
+          let postCountDiff = 0;
+          try {
+            const currentTagData = await this.dataService.fetchTagData(tagName);
+            if (currentTagData) {
+              const currentTotal = currentTagData.post_count;
+              const cachedTotal = cachedData.post_count || 0;
+              postCountDiff = Math.max(0, currentTotal - cachedTotal);
+            }
+          } catch (e) {
+            console.warn("Failed to check post count diff", e);
+          }
+          const threshold = this.dataService.getSyncThreshold();
+          const isCountThresholdMet = postCountDiff >= threshold;
+          if (isTimeExpired || isCountThresholdMet) {
+            console.log(`[TagAnalyticsApp] Partial Sync Triggered. TimeExpired=${isTimeExpired} (${(age / 36e5).toFixed(1)}h), CountThreshold=${isCountThresholdMet} (${postCountDiff} >= ${threshold})`);
+            baseData = cachedData;
+            runDelta = true;
+          } else {
+            cachedData._isCached = true;
+            try {
+              const newPostCount24h = await this.dataService.fetchNewPostCount(tagName);
+              const [latestPost2, trendingPost2, trendingPostNSFW2] = await Promise.all([
+                this.dataService.fetchLatestPost(tagName),
+                this.dataService.fetchTrendingPost(tagName, false),
+                this.dataService.fetchTrendingPost(tagName, true)
+              ]);
+              cachedData.latestPost = latestPost2;
+              cachedData.trendingPost = trendingPost2;
+              cachedData.trendingPostNSFW = trendingPostNSFW2;
+              cachedData.newPostCount = newPostCount24h;
+              this.dataService.saveToCache(cachedData);
+            } catch (e) {
+              console.warn("[TagAnalyticsApp] Failed to update volatile data for cache:", e);
+            }
+            this.injectAnalyticsButton(cachedData);
+            this._showUpdatedStatus(cachedData.updatedAt);
+            this.toggleModal(true);
+            this.renderDashboard(cachedData);
+            return;
+          }
+        }
+        const t0 = performance.now();
+        this.rateLimiter.requestCounter = 0;
+        const initialStats = await this.dataService.fetchInitialStats(tagName, baseData);
+        if (!initialStats || initialStats.totalCount === 0) {
+          console.warn(`[TagAnalyticsApp] Could not fetch initial stats for tag: "${tagName}"`);
+          return;
+        }
+        let {
+          firstPost,
+          hundredthPost,
+          totalCount,
+          startDate,
+          timeToHundred,
+          meta,
+          initialPosts
+        } = initialStats;
+        let realFirst100Stats = null;
+        meta.updatedAt = Date.now();
+        const validCategories = [1, 3, 4];
+        if (validCategories.includes(meta.category)) {
+          this.injectAnalyticsButton(meta);
+        } else {
+          const btn = document.getElementById("tag-analytics-btn");
+          if (btn) btn.remove();
+          const status = document.getElementById("tag-analytics-status");
+          if (status) status.remove();
+          return;
+        }
+        const MAX_OPTIMIZED_POSTS = CONFIG.MAX_OPTIMIZED_POSTS;
+        if (initialPosts && totalCount <= MAX_OPTIMIZED_POSTS && initialPosts.length >= totalCount) {
+          this.injectAnalyticsButton(null, 0, "Calculating history... (0%)");
+          const historyData2 = this.dataService.calculateHistoryFromPosts(initialPosts);
+          const targets = this.dataService.getMilestoneTargets(totalCount);
+          const milestones2 = [];
+          targets.forEach((target) => {
+            const index = target - 1;
+            if (initialPosts[index]) {
+              milestones2.push({ milestone: target, post: initialPosts[index] });
+            }
+          });
+          this.injectAnalyticsButton(null, 15, "Calculating rankings... (15%)");
+          const localStatsAllTime = this.dataService.calculateLocalStats(initialPosts);
+          const oneYearAgo = new Date();
+          oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+          const yearPosts = initialPosts.filter((p) => p.created_at && new Date(p.created_at) >= oneYearAgo);
+          const localStatsYear = this.dataService.calculateLocalStats(yearPosts);
+          const localStatsFirst100 = this.dataService.calculateLocalStats(initialPosts.slice(0, 100));
+          this.injectAnalyticsButton(null, 25, "Fetching stats... (25%)");
+          let smallTagFetched = 0;
+          const smallTagTotalFetches = 6;
+          const trackSmall = (label, promise) => promise.then((res) => {
+            smallTagFetched++;
+            const pct = 25 + Math.round(smallTagFetched / smallTagTotalFetches * 55);
+            this.injectAnalyticsButton(null, pct, `${label}... (${pct}%)`);
+            return res;
+          });
+          const [statusCounts2, latestPost2, trendingPost2, trendingPostNSFW2, newPostCount2, commentaryCounts2] = await Promise.all([
+            trackSmall("Fetching status", this.dataService.fetchStatusCounts(tagName)),
+            trackSmall("Fetching latest post", this.dataService.fetchLatestPost(tagName)),
+            trackSmall("Finding trending post", this.dataService.fetchTrendingPost(tagName, false)),
+            trackSmall("Finding trending NSFW", this.dataService.fetchTrendingPost(tagName, true)),
+            trackSmall("Counting new posts", this.dataService.fetchNewPostCount(tagName)),
+            trackSmall("Analyzing commentary", this.dataService.fetchCommentaryCounts(tagName)),
+            this.dataService.backfillUploaderNames(initialPosts)
+]);
+          meta.historyData = historyData2;
+          meta.firstPost = firstPost;
+          meta.hundredthPost = hundredthPost;
+          meta.timeToHundred = timeToHundred;
+          meta.statusCounts = statusCounts2;
+          meta.commentaryCounts = commentaryCounts2;
+          meta.ratingCounts = localStatsAllTime.ratingCounts;
+          meta.precalculatedMilestones = milestones2;
+          meta.latestPost = latestPost2;
+          meta.newPostCount = newPostCount2;
+          meta.trendingPost = trendingPost2;
+          meta.trendingPostNSFW = trendingPostNSFW2;
+          const mapNames = (ranking) => ranking.map((r) => {
+            const u = this.dataService.userNames[r.id];
+            return {
+              ...r,
+              name: (u ? u.name : null) || `user_${r.id}`,
+              level: u ? u.level : null
+            };
+          });
+          meta.rankings = {
+            uploader: {
+              allTime: mapNames(localStatsAllTime.uploaderRanking),
+              year: mapNames(localStatsYear.uploaderRanking),
+              first100: mapNames(localStatsFirst100.uploaderRanking)
+            },
+            approver: {
+              allTime: mapNames(localStatsAllTime.approverRanking),
+              year: mapNames(localStatsYear.approverRanking),
+              first100: mapNames(localStatsFirst100.approverRanking)
+            }
+          };
+          this.injectAnalyticsButton(null, 85, "Analyzing tag distribution... (85%)");
+          if (meta.category === 1 || meta.category === 3) {
+            const copyrightMap = {};
+            const characterMap = {};
+            initialPosts.forEach((p) => {
+              if (p.tag_string_copyright) {
+                p.tag_string_copyright.split(" ").forEach((tag) => {
+                  if (tag) copyrightMap[tag] = (copyrightMap[tag] || 0) + 1;
+                });
+              }
+              if (p.tag_string_character) {
+                p.tag_string_character.split(" ").forEach((tag) => {
+                  if (tag) characterMap[tag] = (characterMap[tag] || 0) + 1;
+                });
+              }
+            });
+            if (meta.category === 1) {
+              const copyrightCandidates = Object.entries(copyrightMap).sort((a, b) => b[1] - a[1]).slice(0, 20);
+              const filteredCopyright = (await Promise.all(
+                copyrightCandidates.map(
+                  async ([tag, count]) => await isTopLevelTag(this.dataService.rateLimiter, tag) ? [tag, count] : null
+                )
+              )).filter((e) => e !== null);
+              meta.copyrightCounts = {};
+              filteredCopyright.slice(0, 10).forEach(([name, count]) => {
+                meta.copyrightCounts[name] = count;
+              });
+            }
+            meta.characterCounts = {};
+            Object.entries(characterMap).sort((a, b) => b[1] - a[1]).slice(0, 10).forEach(([name, count]) => {
+              meta.characterCounts[name] = count;
+            });
+          }
+          this.injectAnalyticsButton(meta, 100, "");
+          this._showUpdatedStatus(meta.updatedAt);
+          this.dataService.saveToCache(meta);
+          const finalTime = performance.now();
+          console.log(`[TagAnalytics] [Small Tag Optimization] Finished analysis for tag: ${tagName} (Category: ${meta.category}, Count: ${totalCount}) in ${(finalTime - t0).toFixed(2)}ms`);
+          this.toggleModal(true);
+          this.renderDashboard(meta);
+          return;
+        }
+        const milestoneTargets = this.dataService.getMilestoneTargets(totalCount);
+        const now = new Date();
+        const oneYearAgoDate = new Date(now);
+        oneYearAgoDate.setFullYear(oneYearAgoDate.getFullYear() - 1);
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dateStr1Y = oneYearAgoDate.toISOString().split("T")[0];
+        const dateStrTomorrow = tomorrow.toISOString().split("T")[0];
+        const measure = (label, promise) => {
+          const start = performance.now();
+          return promise.then((res) => {
+            console.log(`[TagAnalytics] [Task] Finished: ${label} (${(performance.now() - start).toFixed(2)}ms)`);
+            return res;
+          });
+        };
+        console.time("TagAnalytics:Total");
+        console.log(`[TagAnalytics] Starting analysis for tag: ${tagName} (Category: ${meta.category}, Count: ${totalCount})`);
+        console.log("[TagAnalytics] [Group 1] Queueing Quick Stats (Status, Rating, Latest, Trending, Related)...");
+        const tGroup1Start = performance.now();
+        const statusPromise = measure("Status Counts", this.dataService.fetchStatusCounts(tagName));
+        const latestPromise = measure("Latest Post", this.dataService.fetchLatestPost(tagName));
+        const newPostPromise = measure("New Post Count", this.dataService.fetchNewPostCount(tagName));
+        const trendingPromise = measure("Trending Post (SFW)", this.dataService.fetchTrendingPost(tagName, false));
+        const trendingNsfwPromise = measure("Trending Post (NSFW)", this.dataService.fetchTrendingPost(tagName, true));
+        let copyrightPromise = Promise.resolve(null);
+        let characterPromise = Promise.resolve(null);
+        if (meta.category === 1) {
+          copyrightPromise = measure("Related Copyrights", this.dataService.fetchRelatedTagDistribution(tagName, 3, totalCount));
+          characterPromise = measure("Related Characters", this.dataService.fetchRelatedTagDistribution(tagName, 4, totalCount));
+        } else if (meta.category === 3) {
+          characterPromise = measure("Related Characters", this.dataService.fetchRelatedTagDistribution(tagName, 4, totalCount));
+        }
+        const quickTasks = [
+          { id: "status", label: "Analyzing post status...", promise: statusPromise },
+{ id: "latest", label: "Fetching latest info...", promise: latestPromise },
+          { id: "new_count", label: "Counting new posts...", promise: newPostPromise },
+          { id: "trending", label: "Finding trending posts...", promise: trendingPromise },
+          { id: "trending_nsfw", label: "Finding trending NSFW...", promise: trendingNsfwPromise },
+          { id: "related_copy", label: "Analyzing related copyrights...", promise: copyrightPromise },
+          { id: "related_char", label: "Analyzing related characters...", promise: characterPromise },
+          { id: "commentary", label: "Analyzing commentary status...", promise: measure("Commentary Status", this.dataService.fetchCommentaryCounts(tagName)) }
+        ];
+        let completedCount = 0;
+        const totalEstimatedTasks = 12;
+        this.injectAnalyticsButton(null, 0, "Initializing...");
+        const trackProgress = (task) => {
+          return task.promise.then((res) => {
+            completedCount++;
+            const pct = Math.round(completedCount / totalEstimatedTasks * 100);
+            this.injectAnalyticsButton(null, pct, `${task.label} ${pct}%`);
+            return res;
+          });
+        };
+        console.log("[TagAnalytics] [Phase 1] Executing Quick Stats...");
+        const quickResults = await Promise.all(quickTasks.map(trackProgress));
+        const [
+          statusCounts,
+latestPost,
+          newPostCount,
+          trendingPost,
+          trendingPostNSFW,
+          copyrightCounts,
+          characterCounts,
+          commentaryCounts
+        ] = quickResults;
+        console.log(`[TagAnalytics] [Phase 1] Finished Quick Stats in ${(performance.now() - tGroup1Start).toFixed(2)}ms`);
+        console.log("[TagAnalytics] [Phase 2] Starting Rankings & History...");
+        const rankingPromise = this.dataService.fetchRankingsAndResolve(tagName, dateStr1Y, dateStrTomorrow, measure);
+        let historyPromise, milestonesPromise, first100StatsPromise;
+        if (runDelta && baseData) {
+          const lastHistory = baseData.historyData[baseData.historyData.length - 1];
+          const lastDate = lastHistory ? new Date(lastHistory.date) : startDate;
+          const deltaStart = new Date(lastDate);
+          deltaStart.setDate(deltaStart.getDate() - 7);
+          historyPromise = this.dataService.fetchHistoryDelta(tagName, deltaStart, startDate).then((delta) => this.dataService.mergeHistory(baseData.historyData, delta));
+          milestonesPromise = historyPromise.then((fullHistory) => {
+            return this.dataService.fetchMilestonesDelta(tagName, totalCount, baseData.precalculatedMilestones, fullHistory).then((delta) => this.dataService.mergeMilestones(baseData.precalculatedMilestones, delta));
+          });
+          if (baseData.rankings && baseData.rankings.uploader && baseData.rankings.uploader.first100) {
+            initialStats.first100Stats = {
+              uploaderRanking: baseData.rankings.uploader.first100,
+              approverRanking: baseData.rankings.approver.first100
+            };
+            first100StatsPromise = Promise.resolve(initialStats.first100Stats);
+          } else {
+            first100StatsPromise = Promise.resolve(this.dataService.calculateLocalStats(initialPosts || []));
+          }
+        } else {
+          historyPromise = measure("Full History (Monthly)", this.dataService.fetchMonthlyCounts(tagName, startDate));
+        }
+        historyPromise = historyPromise.then(async (monthlyData) => {
+          const forwardTotal = monthlyData && monthlyData.length > 0 ? monthlyData[monthlyData.length - 1].cumulative : 0;
+          let referenceTotal = meta.post_count;
+          if (monthlyData.historyCutoff) {
+            try {
+              const cutoffUrl = `/counts/posts.json?tags=${encodeURIComponent(tagName)}+status:any+date:<${encodeURIComponent(monthlyData.historyCutoff)}`;
+              const r = await this.rateLimiter.fetch(cutoffUrl).then((res) => res.json());
+              referenceTotal = (r && r.counts ? r.counts.posts : r ? r.posts : 0) || 0;
+            } catch (e) {
+              console.warn("Failed to fetch cutoff total, falling back to meta.post_count", e);
+            }
+          }
+          console.log(`[TagAnalyticsApp] Reverse Scan Check: ForwardTotal=${forwardTotal}, ReferenceTotal=${referenceTotal}, NeedScan=${forwardTotal < referenceTotal}`);
+          if (forwardTotal < referenceTotal && !runDelta) {
+            this.injectAnalyticsButton(null, void 0, "Scanning history backwards...");
+            const backwardResult = await this.dataService.fetchHistoryBackwards(tagName, startDate, referenceTotal, forwardTotal);
+            if (backwardResult.length > 0) {
+              const backwardShift = backwardResult[backwardResult.length - 1].cumulative;
+              const adjustedForward = monthlyData.map((h) => ({
+                ...h,
+                cumulative: h.cumulative + backwardShift
+              }));
+              const fullHistory = [...backwardResult, ...adjustedForward];
+              const earliestDateFound = backwardResult[0].date;
+              const realInitialStats = await this.dataService.fetchInitialStats(tagName, null, true, earliestDateFound);
+              if (realInitialStats) {
+                firstPost = realInitialStats.firstPost;
+                hundredthPost = realInitialStats.hundredthPost;
+                timeToHundred = realInitialStats.timeToHundred;
+                if (realInitialStats.initialPosts && realInitialStats.initialPosts.length > 0) {
+                  console.log("[TagAnalytics] Recalculating First 100 Rankings for older posts...");
+                  const newStats = this.dataService.calculateLocalStats(realInitialStats.initialPosts);
+                  realFirst100Stats = await this.dataService.resolveFirst100Names(newStats).catch((e) => {
+                    console.warn("[TagAnalytics] Failed to resolve names for older posts", e);
+                    return newStats;
+                  });
+                }
+              }
+              return fullHistory;
+            }
+          }
+          return monthlyData;
+        });
+        if (!milestonesPromise) {
+          milestonesPromise = historyPromise.then((monthlyData) => {
+            return this.dataService.fetchMilestones(tagName, monthlyData || [], milestoneTargets);
+          });
+        }
+        if (!first100StatsPromise) {
+          first100StatsPromise = Promise.resolve(this.dataService.calculateLocalStats(initialPosts || []));
+        }
+        const heavyTasks = [
+          { id: "rankings_full", label: "Fetching & resolving rankings...", promise: rankingPromise },
+          { id: "history", label: "Analyzing monthly trends...", promise: historyPromise },
+          { id: "milestones", label: "Checking milestones...", promise: milestonesPromise },
+          {
+            id: "resolve_names",
+            label: "Resolving usernames...",
+            promise: first100StatsPromise.then((stats) => {
+              if (runDelta && baseData && baseData.rankings && baseData.rankings.uploader.first100) return stats;
+              return this.dataService.resolveFirst100Names(stats);
+            })
+          }
+        ];
+        console.log("[TagAnalytics] [Phase 2] Awaiting Heavy Stats...");
+        const heavyResults = await Promise.all(heavyTasks.map(trackProgress));
+        let [
+          resolvedRankings,
+          historyData,
+          milestones,
+          first100Stats
+        ] = heavyResults;
+        if (realFirst100Stats) {
+          console.log("[TagAnalytics] Applying updated First 100 Rankings from backward scan.");
+          first100Stats = realFirst100Stats;
+        }
+        console.log(`[TagAnalytics] [Group 1] Finished Quick Stats (approx) in ${(performance.now() - tGroup1Start).toFixed(2)}ms (Note: includes wait for longest item)`);
+        console.log("[TagAnalytics] All parallel tasks completed.");
+        const {
+          uploaderAll,
+          approverAll,
+          uploaderYear,
+          approverYear
+        } = resolvedRankings;
+        const minDate = first100Stats && first100Stats.startDate ? first100Stats.startDate : historyData && historyData.length > 0 ? new Date(historyData[0].date) : new Date("2005-01-01");
+        const minDateStr = minDate.toISOString().split("T")[0];
+        console.log(`[TagAnalytics] [Phase 3] Starting Deferred Counts (Rating) with startDate: ${minDateStr}`);
+        const ratingCounts = await measure("Rating Counts", this.dataService.fetchRatingCounts(tagName, minDateStr));
+        console.timeEnd("TagAnalytics:Total");
+        meta.statusCounts = statusCounts;
+        meta.ratingCounts = ratingCounts;
+        meta.latestPost = latestPost;
+        meta.newPostCount = newPostCount;
+        meta.trendingPost = trendingPost;
+        meta.trendingPostNSFW = trendingPostNSFW;
+        meta.copyrightCounts = copyrightCounts;
+        meta.characterCounts = characterCounts;
+        meta.commentaryCounts = commentaryCounts;
+        meta.historyData = historyData;
+        meta.precalculatedMilestones = milestones;
+        meta.firstPost = firstPost;
+        meta.hundredthPost = hundredthPost;
+        meta.rankings = {
+          uploader: {
+            allTime: uploaderAll,
+            year: uploaderYear,
+            first100: first100Stats.uploaderRanking
+          },
+          approver: {
+            allTime: approverAll,
+            year: approverYear,
+            first100: first100Stats.approverRanking
+          }
+        };
+        this.injectAnalyticsButton(meta, 100, "");
+        this._showUpdatedStatus(meta.updatedAt);
+        this.dataService.saveToCache(meta);
+        this.toggleModal(true);
+        this.renderDashboard(meta);
+      } finally {
+        this.isFetching = false;
+      }
+    }
+injectHeaderControls(container) {
+      if (document.getElementById("tag-analytics-controls-container")) return;
+      const wrapper = document.createElement("span");
+      wrapper.id = "tag-analytics-controls-container";
+      container.appendChild(wrapper);
+      const settingsBtn = document.createElement("span");
+      settingsBtn.id = "tag-analytics-settings-btn";
+      settingsBtn.innerHTML = "⚙️";
+      settingsBtn.style.cursor = "pointer";
+      settingsBtn.style.marginLeft = "6px";
+      settingsBtn.style.fontSize = "12px";
+      settingsBtn.style.verticalAlign = "middle";
+      settingsBtn.title = "Configure Data Retention";
+      settingsBtn.onclick = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        this.showSettingsPopover(settingsBtn);
+      };
+      wrapper.appendChild(settingsBtn);
+      const resetBtn = document.createElement("span");
+      resetBtn.id = "tag-analytics-reset-btn";
+      resetBtn.innerHTML = "🗑️";
+      resetBtn.style.cursor = "pointer";
+      resetBtn.style.marginLeft = "8px";
+      resetBtn.style.fontSize = "12px";
+      resetBtn.style.verticalAlign = "middle";
+      resetBtn.title = "Reset Data & Re-fetch";
+      resetBtn.onclick = async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        if (confirm(`Are you sure you want to reset the analytics data for "${this.tagName}"?
+This will clear the local cache and fetch fresh data.`)) {
+          if (this.db && this.db.tag_analytics) {
+            try {
+              await this.db.tag_analytics.delete(this.tagName);
+              console.log(`[TagAnalyticsApp] Deleted cache for ${this.tagName}`);
+              this.toggleModal(false);
+              this._fetchAndRender();
+            } catch (err) {
+              console.error("[TagAnalyticsApp] Failed to delete cache:", err);
+              alert("Failed to reset data. Check console for details.");
+            }
+          }
+        }
+      };
+      wrapper.appendChild(resetBtn);
+    }
+showSettingsPopover(target) {
+      const existing = document.getElementById("tag-analytics-settings-popover");
+      if (existing) existing.remove();
+      const currentDays = this.dataService.getRetentionDays();
+      const currentThreshold = this.dataService.getSyncThreshold();
+      const popover = document.createElement("div");
+      popover.id = "tag-analytics-settings-popover";
+      popover.style.position = "absolute";
+      popover.style.zIndex = "11001";
+      popover.style.background = "#fff";
+      popover.style.border = "1px solid #ccc";
+      popover.style.borderRadius = "6px";
+      popover.style.padding = "12px";
+      popover.style.boxShadow = "0 2px 10px rgba(0,0,0,0.1)";
+      popover.style.fontSize = "11px";
+      popover.style.color = "#333";
+      popover.style.width = "260px";
+      const rect = target.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+      popover.style.top = `${rect.top + scrollTop}px`;
+      popover.style.left = `${rect.right + scrollLeft + 10}px`;
+      popover.innerHTML = `
+  <div style="margin-bottom:8px; line-height:1.4;">
+    <strong>Data Retention Period</strong><br>
+    Records older than this (days) will be deleted.
+  </div>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+     <input type="number" id="retention-days-input" value="${currentDays}" min="1" step="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
+     <span>days</span>
+  </div>
+
+  <div style="margin-bottom:8px; line-height:1.4; border-top:1px solid #eee; padding-top:8px;">
+    <strong>Sync Threshold</strong><br>
+    Run partial sync if new posts exceed this count.
+  </div>
+  <div style="display:flex; align-items:center; justify-content:space-between;">
+     <input type="number" id="sync-threshold-input" value="${currentThreshold}" min="1" step="1" style="width:60px; padding:3px; border:1px solid #ddd; border-radius:3px; background:#fff; color:#333;">
+     <button id="retention-save-btn" style="background:none; border:1px solid #28a745; color:#28a745; border-radius:4px; cursor:pointer; padding:2px 8px; font-size:11px;">✅ Save</button>
+  </div>
+`;
+      document.body.appendChild(popover);
+      const closeHandler = (e) => {
+        if (!popover.contains(e.target) && e.target !== target) {
+          popover.remove();
+          document.removeEventListener("click", closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener("click", closeHandler), 0);
+      const saveBtn = popover.querySelector("#retention-save-btn");
+      saveBtn.onclick = () => {
+        const daysInput = popover.querySelector("#retention-days-input");
+        const thresholdInput = popover.querySelector("#sync-threshold-input");
+        const days = parseInt(daysInput.value, 10);
+        const threshold = parseInt(thresholdInput.value, 10);
+        if (!isNaN(days) && days > 0 && !isNaN(threshold) && threshold > 0) {
+          this.dataService.setRetentionDays(days);
+          this.dataService.setSyncThreshold(threshold);
+          popover.remove();
+          document.removeEventListener("click", closeHandler);
+          alert(`Settings Saved:
+- Retention: ${days} days
+- Sync Threshold: ${threshold} posts
+
+Cleaning up old data now...`);
+          this.dataService.cleanupOldCache();
+        } else {
+          alert("Please enter valid positive numbers.");
+        }
+      };
+    }
+injectAnalyticsButton(tagData, progress, statusText) {
+      let title = document.querySelector("#c-wiki-pages #a-show h1, #c-artists #a-show h1, #tag-show #posts h1, #tag-list h1");
+      if (!title) {
+        const postCount = document.querySelector('.post-count, span[class*="post-count"]');
+        if (postCount && postCount.parentElement) {
+          title = postCount.parentElement;
+        }
+      }
+      if (!title) {
+        console.warn("[TagAnalyticsApp] Could not find a suitable title element for button injection.");
+        return;
+      }
+      let btn = document.getElementById("tag-analytics-btn");
+      const isNew = !btn;
+      if (isNew) {
+        btn = document.createElement("button");
+        btn.id = "tag-analytics-btn";
+        btn.setAttribute("aria-label", "View tag analytics dashboard");
+        btn.style.marginLeft = "10px";
+        btn.style.border = "none";
+        btn.style.background = "transparent";
+        btn.style.fontSize = "1.5rem";
+        btn.style.verticalAlign = "middle";
+        btn.innerHTML = `
+        <div class="icon-container" style="
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center; 
+            width: 32px; 
+            height: 32px; 
+            background: #eef; 
+            border-radius: 6px; 
+            border: 1px solid #ccf;
+            transition: all 0.2s;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#007bff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10"></line>
+                <line x1="12" y1="20" x2="12" y2="4"></line>
+                <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+        </div>
+      `;
+        title.appendChild(btn);
+      }
+      let statusLabel = document.getElementById("tag-analytics-status");
+      if (!statusLabel) {
+        statusLabel = document.createElement("span");
+        statusLabel.id = "tag-analytics-status";
+        statusLabel.style.marginLeft = "10px";
+        statusLabel.style.fontSize = "14px";
+        statusLabel.style.color = "#888";
+        statusLabel.style.verticalAlign = "middle";
+        statusLabel.style.fontFamily = "sans-serif";
+        if (btn && btn.nextSibling) {
+          btn.parentNode?.insertBefore(statusLabel, btn.nextSibling);
+        } else if (btn) {
+          btn.parentNode?.appendChild(statusLabel);
+        }
+      }
+      if (statusText) {
+        statusLabel.textContent = statusText;
+        statusLabel.style.display = "inline";
+      } else {
+        statusLabel.textContent = "";
+        statusLabel.style.display = "none";
+      }
+      if (!btn) return;
+      const isReady = tagData && !!(tagData.historyData && tagData.precalculatedMilestones && tagData.statusCounts && tagData.ratingCounts);
+      const iconContainer = btn.querySelector(".icon-container");
+      if (isReady) {
+        btn.style.cursor = "pointer";
+        btn.title = "View Tag Analytics";
+        if (iconContainer) {
+          iconContainer.style.opacity = "1";
+          iconContainer.style.filter = "none";
+        }
+        btn.onclick = () => {
+          this.toggleModal(true);
+          this.renderDashboard(tagData);
+        };
+      } else if (this.isFetching) {
+        btn.style.cursor = "wait";
+        btn.title = `Analytics Data is loading... ${(progress ?? 0) > 0 ? progress + "%" : "Please wait."}`;
+        if (iconContainer) {
+          iconContainer.style.opacity = "0.5";
+          iconContainer.style.filter = "grayscale(1)";
+        }
+        btn.onclick = () => {
+          alert(`Report data is still being calculated (${progress ?? 0}%). It will be ready in a few seconds.`);
+        };
+      } else {
+        btn.style.cursor = "pointer";
+        btn.title = "Load Tag Analytics (Click to start)";
+        if (iconContainer) {
+          iconContainer.style.opacity = "1";
+          iconContainer.style.filter = "none";
+        }
+        btn.onclick = async () => {
+          await this._fetchAndRender();
+        };
+      }
+    }
+createModal() {
+      if (document.getElementById("tag-analytics-modal")) return;
+      const modal = document.createElement("div");
+      modal.id = "tag-analytics-modal";
+      modal.style.display = "none";
+      modal.style.position = "fixed";
+      modal.style.top = "0";
+      modal.style.left = "0";
+      modal.style.width = "100%";
+      modal.style.height = "100%";
+      modal.style.backgroundColor = "rgba(0,0,0,0.5)";
+      modal.style.zIndex = "10000";
+      modal.style.justifyContent = "center";
+      modal.style.alignItems = "center";
+      modal.innerHTML = `
+          <div style="background: white; padding: 20px; border-radius: 8px; width: 80%; max-width: 800px; max-height: 90vh; overflow-y: auto; position: relative;">
+              <button id="tag-analytics-close" style="position: absolute; top: 10px; right: 10px; background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+              <div id="tag-analytics-content">
+                  <h2>Loading...</h2>
+              </div>
+          </div>
+      `;
+      document.body.appendChild(modal);
+      const closeBtn = document.getElementById("tag-analytics-close");
+      if (closeBtn) closeBtn.onclick = () => this.toggleModal(false);
+      modal.onclick = (e) => {
+        if (e.target === modal) this.toggleModal(false);
+      };
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && modal.style.display !== "none") {
+          this.toggleModal(false);
+        }
+      });
+    }
+toggleModal(show) {
+      if (!document.getElementById("tag-analytics-modal")) {
+        this.createModal();
+      }
+      const modal = document.getElementById("tag-analytics-modal");
+      if (!modal) return;
+      modal.style.display = show ? "flex" : "none";
+      if (show) {
+        document.body.style.overflow = "hidden";
+        const closeBtn = document.getElementById("tag-analytics-close");
+        if (closeBtn) closeBtn.focus();
+      } else {
+        document.body.style.overflow = "";
+        this.chartRenderer.cleanup();
+        d3__namespace.select("body").selectAll(".tag-analytics-tooltip").remove();
+      }
+    }
+updateNsfwVisibility() {
+      const isNsfwEnabled = localStorage.getItem("tag_analytics_nsfw_enabled") === "true";
+      const items = document.querySelectorAll(".di-nsfw-monitor");
+      items.forEach((item) => {
+        const rating = item.getAttribute("data-rating");
+        if (isNsfwEnabled) {
+          const img = item.querySelector("img");
+          if (img) {
+            img.style.filter = "none";
+            img.style.opacity = "1";
+          }
+        } else {
+          if (rating === "q" || rating === "e") {
+            const img = item.querySelector("img");
+            if (img) {
+              img.style.filter = "blur(10px) grayscale(100%)";
+              img.style.opacity = "0.3";
+            }
+          } else {
+            const img = item.querySelector("img");
+            if (img) {
+              img.style.filter = "none";
+              img.style.opacity = "1";
+            }
+          }
+        }
+      });
+      const cb = document.getElementById("tag-analytics-nsfw-toggle");
+      if (cb) cb.checked = isNsfwEnabled;
+      const trendingSFW = document.getElementById("trending-post-sfw");
+      const trendingNSFW = document.getElementById("trending-post-nsfw");
+      if (isNsfwEnabled) {
+        if (trendingSFW) trendingSFW.style.display = "none";
+        if (trendingNSFW) trendingNSFW.style.display = "flex";
+      } else {
+        if (trendingSFW) trendingSFW.style.display = "flex";
+        if (trendingNSFW) trendingNSFW.style.display = "none";
+      }
+    }
+buildDashboardHeader(tagData, titleColor, categoryLabel) {
+      return `
+      <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
+          <div>
+              <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${escapeHtml(tagData.name.replace(/_/g, " "))}</h2>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                  <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">${categoryLabel}</span>
+                  <span style="font-size: 0.9em; color: #777;">Created: ${tagData.created_at ? new Date(tagData.created_at).toLocaleDateString("en-CA") : "N/A"}</span>
+                  <span style="font-size: 0.9em; color: #777; border-left: 1px solid #ddd; padding-left: 10px; display: flex; align-items: center;" id="tag-updated-at">
+                      Updated: ${tagData.updatedAt ? new Date(tagData.updatedAt).toLocaleDateString("en-CA") : "N/A"}
+                      <span id="tag-settings-anchor" style="display: inline-flex; align-items: center; margin-left: 5px;"></span>
+                  </span>
+              </div>
+          </div>
+          <div>
+              <label style="display: flex; align-items: center; font-size: 0.9em; color: #555; cursor: pointer; user-select: none;">
+                  <input type="checkbox" id="tag-analytics-nsfw-toggle" style="margin-right: 6px;">
+                  Enable NSFW
+              </label>
+          </div>
+      </div>
+    `;
+    }
+buildMainGrid(tagData) {
+      const totalUploads = tagData.historyData && tagData.historyData.length > 0 ? tagData.historyData.reduce((a, b) => a + b.count, 0).toLocaleString() : "0";
+      const latestPostHtml = tagData.latestPost ? `
+      <div class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.latestPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
+         <div style="border: 1px solid #ddd; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+            <a href="/posts/${tagData.latestPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                <img src="${getBestThumbnailUrl(tagData.latestPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+            </a>
+         </div>
+         <div style="font-size: 0.8em; font-weight: bold; color: #555; margin-top: 5px;">Latest</div>
+         <div style="font-size: 0.7em; color: #999;">${tagData.latestPost.created_at.split("T")[0]}</div>
+      </div>
+    ` : "";
+      const trendingSfwHtml = tagData.trendingPost ? `
+      <div id="trending-post-sfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPost.rating}" style="display: flex; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
+         <div style="border: 1px solid #ffd700; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 215, 0, 0.3);">
+            <a href="/posts/${tagData.trendingPost.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                  <img src="${getBestThumbnailUrl(tagData.trendingPost)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+            </a>
+         </div>
+         <div style="font-size: 0.75em; font-weight: bold; color: #e0a800; margin-top: 5px;">Trending(3d)</div>
+         <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPost.score}</div>
+      </div>
+    ` : "";
+      const trendingNsfwHtml = tagData.trendingPostNSFW ? `
+      <div id="trending-post-nsfw" class="di-nsfw-monitor di-hover-translate-up" data-rating="${tagData.trendingPostNSFW.rating}" style="display: none; flex-direction: column; align-items: center; width: 80px; flex-shrink: 0;">
+         <div style="border: 1px solid #ff4444; padding: 2px; border-radius: 4px; background: #fff; width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; overflow: hidden; box-shadow: 0 0 5px rgba(255, 0, 0, 0.3);">
+            <a href="/posts/${tagData.trendingPostNSFW.id}" target="_blank" style="display: block; width: 100%; height: 100%;">
+                  <img src="${getBestThumbnailUrl(tagData.trendingPostNSFW)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+            </a>
+         </div>
+         <div style="font-size: 0.75em; font-weight: bold; color: #cc0000; margin-top: 5px;">Trending(NSFW)</div>
+         <div style="font-size: 0.7em; color: #999;">Score: ${tagData.trendingPostNSFW.score}</div>
+      </div>
+    ` : "";
+      const extraPieTabsHtml = `
+      ${tagData.copyrightCounts ? `<button class="di-pie-tab" data-type="copyright">Copyright</button>` : ""}
+      ${tagData.characterCounts ? `<button class="di-pie-tab" data-type="character">Character</button>` : ""}
+      ${tagData.commentaryCounts ? `<button class="di-pie-tab" data-type="commentary">Commentary</button>` : ""}
+    `;
+      return `
+      <!-- Main Grid: Summary & Distribution -->
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 30px;">
+           <!-- Summary Card -->
+           <div class="di-card di-flex-col-between" style="min-height: 180px; position: relative;">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                  <div>
+                      <div style="font-size: 0.9em; color: #666; font-weight: bold; margin-bottom: 5px;">Total Uploads</div>
+                      <div style="font-size: 2.2em; font-weight: bold; color: #007bff; line-height: 1.1;">${totalUploads}</div>
+                      <div style="font-size: 0.8em; color: #28a745; margin-top: 5px;">
+                          +${tagData.newPostCount || 0} <span style="color: #999; font-weight: normal;">(24h)</span>
+                      </div>
+                  </div>
+                  <!-- Right Side: Latest & Trending -->
+                  <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+                      ${latestPostHtml}
+                      ${trendingSfwHtml}
+                      ${trendingNsfwHtml}
+                  </div>
+              </div>
+           </div>
+
+           <!-- Distribution Card -->
+           <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; min-height: 180px; position: relative; display: flex; flex-direction: column;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                 <div style="font-size: 0.9em; color: #666; font-weight: bold;">Distribution</div>
+                 <div class="pie-tabs" style="display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end;">
+                    <button class="di-pie-tab active" data-type="status">Status</button>
+                    <button class="di-pie-tab" data-type="rating">Rating</button>
+                    ${extraPieTabsHtml}
+                 </div>
+              </div>
+              <div id="status-pie-chart-wrapper" style="display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; opacity: 0; transition: opacity 0.5s;">
+                 <div id="status-pie-chart" style="width: 120px; height: 120px; flex-shrink: 0;"></div>
+                 <div id="status-pie-legend" style="margin-left: 15px; font-size: 0.75em; flex: 1; min-width: 140px; max-height: 140px; overflow-y: auto; padding-right: 10px;"></div>
+              </div>
+              <div id="status-pie-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #888; font-size: 0.8em;">Loading data...</div>
+           </div>
+      </div>
+    `;
+    }
+buildRankingsSection(tagData) {
+      if (!tagData.rankings) return "";
+      console.log("[TagAnalytics] renderDashboard - Initial Render - hundredthPost:", tagData.hundredthPost);
+      const hundredthPostId = tagData.hundredthPost ? tagData.hundredthPost.id : null;
+      return `
+      <div style="margin-bottom: 30px;">
+           <div style="border-bottom: 2px solid #eee; margin-bottom: 15px; display: flex; gap: 20px; align-items: center;">
+              <h3 style="margin: 0; padding-bottom: 10px; font-size: 1.2em; color: #444; border-bottom: 3px solid #007bff; margin-bottom: -2px;">User Rankings</h3>
+              <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                  <button class="rank-tab active" data-role="uploader" style="border: none; background: none; font-weight: bold; color: #007bff; cursor: pointer; padding: 5px 10px;">Uploaders</button>
+                  <button class="rank-tab" data-role="approver" style="border: none; background: none; font-weight: normal; color: #888; cursor: pointer; padding: 5px 10px;">Approvers</button>
+              </div>
+           </div>
+           <div id="ranking-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+              ${this.chartRenderer.renderRankingColumn("All-time", tagData.rankings.uploader.allTime, "uploader", tagData.name, this.dataService.userNames)}
+              ${this.chartRenderer.renderRankingColumn("Last 1 Year", tagData.rankings.uploader.year, "uploader", tagData.name, this.dataService.userNames)}
+              ${this.chartRenderer.renderRankingColumn("First 100 Post", tagData.rankings.uploader.first100, "uploader", tagData.name, this.dataService.userNames, hundredthPostId)}
+           </div>
+      </div>
+    `;
+    }
+buildBottomSections() {
+      return `
+      <!-- Milestones Container -->
+      <div id="tag-analytics-milestones" style="margin-bottom: 30px; display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 15px;">
+              <h2 style="color: #444; border-left: 4px solid #ffc107; padding-left: 10px; margin: 0;">Milestones</h2>
+              <button id="tag-milestones-toggle" style="background:none; border:none; color:#007bff; cursor:pointer; font-size:0.9em; display:none;">Show More</button>
+          </div>
+          <div id="milestones-loading" style="color:#888; text-align:center; padding:20px;">Checking milestones...</div>
+          <div id="tag-milestones-grid-container" class="milestones-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 15px; max-height: 120px; overflow: hidden; transition: max-height 0.3s ease;"></div>
+      </div>
+
+      <!-- Charts Container -->
+      <div id="tag-analytics-charts" style="margin-bottom: 30px;">
+          <h2 style="color: #444; border-left: 4px solid #007bff; padding-left: 10px; margin-bottom: 15px;">Post History</h2>
+          <div id="chart-loading" style="color: #888; text-align: center; padding: 20px;">Loading History Data...</div>
+          <div id="history-chart-monthly" style="width: 100%; height: 300px; margin-bottom: 20px;"></div>
+          <div id="history-chart-cumulative" style="width: 100%; height: 300px;"></div>
+      </div>
+    `;
+    }
+renderDashboard(tagData) {
+      if (!document.getElementById("tag-analytics-modal")) {
+        this.createModal();
+      }
+      const content = document.getElementById("tag-analytics-content");
+      if (!content) return;
+      const categoryMap = {
+        1: "Artist",
+        3: "Copyright",
+        4: "Character"
+      };
+      const categoryLabel = categoryMap[tagData.category] || "Unknown";
+      const colorMap = {
+        1: "#c00004",
+3: "#a800aa",
+4: "#00ab2c"
+};
+      const titleColor = colorMap[tagData.category] || "#333";
+      content.innerHTML = `
+      ${this.buildDashboardHeader(tagData, titleColor, categoryLabel)}
+      ${this.buildMainGrid(tagData)}
+      ${this.buildRankingsSection(tagData)}
+      ${this.buildBottomSections()}
+    `;
+      const anchor = document.getElementById("tag-settings-anchor");
+      if (anchor) this.injectHeaderControls(anchor);
+      const nsfwCheck = document.getElementById("tag-analytics-nsfw-toggle");
+      if (nsfwCheck) {
+        nsfwCheck.checked = localStorage.getItem("tag_analytics_nsfw_enabled") === "true";
+        nsfwCheck.onchange = (e) => {
+          localStorage.setItem("tag_analytics_nsfw_enabled", e.target.checked.toString());
+          this.updateNsfwVisibility();
+        };
+        this.updateNsfwVisibility();
+      }
+      const data = tagData.historyData || [];
+      const loading = document.getElementById("chart-loading");
+      if (loading) loading.style.display = "none";
+      if (data && data.length > 0) {
+        this.chartRenderer.renderHistoryCharts(data, this.tagName, tagData.precalculatedMilestones);
+        const milestonesContainer = document.getElementById("tag-analytics-milestones");
+        if (milestonesContainer) {
+          milestonesContainer.style.display = "block";
+          const targets = this.dataService.getMilestoneTargets(tagData.post_count);
+          if (tagData.precalculatedMilestones) {
+            this.chartRenderer.renderMilestones(tagData.precalculatedMilestones, () => this.updateNsfwVisibility());
+          } else {
+            this.dataService.fetchMilestones(tagData.name, [], targets).then((milestonePosts) => {
+              this.chartRenderer.renderMilestones(milestonePosts, () => this.updateNsfwVisibility());
+            });
+          }
+        }
+        if (tagData.statusCounts && tagData.ratingCounts) {
+          const type = "status";
+          this.chartRenderer.renderPieChart(type, tagData);
+          const tabs = document.querySelectorAll(".di-pie-tab");
+          tabs.forEach((tab) => {
+            tab.onclick = () => {
+              const newType = tab.getAttribute("data-type");
+              tabs.forEach((t) => {
+                t.classList.remove("active");
+                t.style.background = "";
+                t.style.color = "";
+              });
+              tab.classList.add("active");
+              this.chartRenderer.renderPieChart(newType ?? "status", tagData);
+            };
+          });
+          const rankTabs = document.querySelectorAll(".rank-tab");
+          rankTabs.forEach((tab) => {
+            tab.onclick = () => {
+              const role = tab.getAttribute("data-role");
+              rankTabs.forEach((t) => {
+                t.classList.remove("active");
+                t.style.fontWeight = "normal";
+                t.style.color = "#888";
+              });
+              tab.classList.add("active");
+              tab.style.fontWeight = "bold";
+              tab.style.color = "#007bff";
+              this.chartRenderer.updateRankingTabs(role ?? "uploader", tagData, this.dataService.userNames);
+            };
+          });
+        }
+      } else {
+        if (loading) {
+          loading.textContent = "No history data available.";
+          loading.style.display = "block";
+        }
+      }
+    }
+  }
+  injectGlobalStyles();
+  const WIKI_RESERVED = new Set(["search", "show_or_new", "new"]);
+  function detectCurrentTag() {
+    const path = window.location.pathname;
+    if (path.startsWith("/wiki_pages/")) {
+      const segments = path.split("/").filter((s) => s !== "");
+      if (segments.length !== 2) return null;
+      const rawName = segments[1];
+      if (WIKI_RESERVED.has(rawName)) return null;
+      return decodeURIComponent(rawName);
+    }
+    if (path.startsWith("/artists/")) {
+      const segments = path.split("/").filter((s) => s !== "");
+      if (segments.length !== 2 || !/^\d+$/.test(segments[1])) return null;
+      if (document.body.dataset.artistName) {
+        return document.body.dataset.artistName;
+      }
+      const postLink = document.querySelector('a[href^="/posts?tags="]');
+      if (postLink) {
+        const urlParams = new URLSearchParams(postLink.search);
+        return urlParams.get("tags");
+      }
+    }
+    return null;
+  }
+  async function main() {
+    const db = new Database();
+    const settings = new SettingsManager();
+    const targetTagName = detectCurrentTag();
+    if (targetTagName) {
+      const tagAnalytics = new TagAnalyticsApp(db, settings, targetTagName);
+      tagAnalytics.run();
+    } else {
+      const context = new ProfileContext();
+      if (!context.isValidProfile()) {
+        return;
+      }
+      const grass = new GrassApp(db, settings, context);
+      const userAnalytics = new UserAnalyticsApp(db, settings, context);
+      grass.run();
+      userAnalytics.run();
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", main);
+  } else {
+    main();
+  }
+
+})(Dexie, d3);
