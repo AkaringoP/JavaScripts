@@ -55,6 +55,66 @@ export interface TimelineMilestone {
 }
 
 /**
+ * Input counts for Untagged translation inclusion-exclusion formula.
+ * See PLAN.md §9 for derivation and TC-A~E in test/translation-distribution.test.ts.
+ */
+export interface UntaggedTranslationCounts {
+  /** |user:X *_text| — all posts with any _text tag */
+  t: number;
+  /** |user:X english_text| = |T ∩ E| (english_text ⊆ T) */
+  a: number;
+  /** |user:X *_text translation_request| = |T ∩ R| */
+  b: number;
+  /** |user:X *_text translated| = |T ∩ TR| */
+  c: number;
+  /** |user:X english_text translation_request| = |T ∩ E ∩ R| */
+  ab: number;
+  /** |user:X english_text translated| = |T ∩ E ∩ TR| */
+  ac: number;
+}
+
+/**
+ * Computes Untagged translation count via inclusion-exclusion:
+ *   Untagged = max(0, t − a − b − c + ab + ac)
+ *
+ * Assumption (Assumption-1): |R ∩ TR| ≈ 0 (translation_request and translated
+ * are mutually exclusive states). Necessary because |T ∩ R ∩ TR| requires a
+ * 3-tag query which exceeds the Member(Blue) 2-tag limit.
+ *
+ * See PLAN.md §9 for full derivation.
+ */
+export function computeUntaggedTranslation(counts: UntaggedTranslationCounts): number {
+  const {t, a, b, c, ab, ac} = counts;
+  return Math.max(0, t - a - b - c + ab + ac);
+}
+
+/**
+ * Builds the 6 subqueries for Untagged inclusion-exclusion calculation plus the
+ * BC intersection query used for Assumption-1 runtime monitoring. All queries
+ * use ≤2 real tags so they work on Member(Blue) accounts.
+ */
+export function buildUntaggedTranslationQueries(normalizedName: string): {
+  t: string;
+  a: string;
+  b: string;
+  c: string;
+  ab: string;
+  ac: string;
+  bc: string;
+} {
+  const u = `user:${normalizedName}`;
+  return {
+    t: `${u} *_text`,
+    a: `${u} english_text`,
+    b: `${u} *_text translation_request`,
+    c: `${u} *_text translated`,
+    ab: `${u} english_text translation_request`,
+    ac: `${u} english_text translated`,
+    bc: `${u} translation_request translated`,
+  };
+}
+
+/**
  * AnalyticsDataManager: Handles heavy data fetching for full history.
  */
 export class AnalyticsDataManager extends DataManager {
@@ -1591,24 +1651,67 @@ export class AnalyticsDataManager extends DataManager {
     }
 
     const normalizedName = userInfo.name.replace(/ /g, '_');
-    const categories = [
+    const categories: Array<{
+      name: string;
+      tagName: string;
+      query?: string;
+      useInclusionExclusion?: boolean;
+      color: string;
+    }> = [
       {name: 'Translated', tagName: 'translated', query: `user:${normalizedName} translated`, color: '#28a745'},
       {name: 'Requested', tagName: 'translation_request', query: `user:${normalizedName} translation_request`, color: '#ffc107'},
-      {name: 'Untagged', tagName: 'untagged_translation', query: `user:${normalizedName} *_text -english_text -translation_request -translated`, color: '#6c757d'},
+      {name: 'Untagged', tagName: 'untagged_translation', useInclusionExclusion: true, color: '#6c757d'},
     ];
 
     const results: DistributionItem[] = categories.map(cat => ({
       name: cat.name, tagName: cat.tagName, count: 0, frequency: 0, thumb: null, isOther: false, color: cat.color,
     }));
 
+    const fetchCount = async (query: string): Promise<number> => {
+      try {
+        const url = `/counts/posts.json?tags=${encodeURIComponent(query)}`;
+        const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+        return (resp?.counts?.posts as number) ?? 0;
+      } catch {
+        return 0;
+      }
+    };
+
     await this.mapConcurrent(
       categories.map((cat, i) => ({...cat, idx: i})), 3,
       async (item) => {
         if (reportSubStatus) reportSubStatus(`Fetching Translation: ${item.name}`);
         try {
-          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
-          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
-          if (resp?.counts?.posts) results[item.idx].count = resp.counts.posts;
+          if (item.useInclusionExclusion) {
+            // Untagged via inclusion-exclusion: max(0, t − a − b − c + ab + ac).
+            // See PLAN.md §9 for derivation. All 6 queries use ≤2 real tags
+            // so they work on Member(Blue) accounts.
+            const q = buildUntaggedTranslationQueries(normalizedName);
+            const [t, a, b, c, ab, ac] = await Promise.all([
+              fetchCount(q.t),
+              fetchCount(q.a),
+              fetchCount(q.b),
+              fetchCount(q.c),
+              fetchCount(q.ab),
+              fetchCount(q.ac),
+            ]);
+            results[item.idx].count = computeUntaggedTranslation({t, a, b, c, ab, ac});
+
+            // Assumption-1 runtime validation (monitoring only, does not affect result).
+            // If |R ∩ TR| / t > 0.5%, the mutual exclusivity assumption is violated.
+            fetchCount(q.bc).then(bc => {
+              const ratio = bc / Math.max(1, t);
+              if (ratio > 0.005) {
+                console.warn(
+                  `[DI] Assumption-1 violation for user:${normalizedName}: ` +
+                  `|R∩TR|/|T| = ${(ratio * 100).toFixed(2)}% (threshold 0.5%, bc=${bc}, t=${t})`
+                );
+              }
+            }).catch(() => { /* monitoring only */ });
+          } else if (item.query) {
+            const count = await fetchCount(item.query);
+            if (count > 0) results[item.idx].count = count;
+          }
         } catch (e: unknown) { console.debug('[DI] Failed to fetch translation count', e); }
       },
     );
@@ -1637,23 +1740,44 @@ export class AnalyticsDataManager extends DataManager {
 
     const normalizedName = userInfo.name.replace(/ /g, '_');
 
-    const genderCategories = [
+    // `originalTag` preserves the semantic OR query for click navigation
+    // (matches the conceptual count query). On Gold+ accounts this navigates to
+    // the full union of girl/boy/other variants. On Member(Blue) accounts the
+    // 6-tag query exceeds the 2-tag limit and Danbooru returns an error page —
+    // consistent with Translation Untagged click behavior.
+    const genderCategories: Array<{
+      name: string;
+      tagName: string;
+      originalTag?: string;
+      subQueries?: string[];
+      query?: string;
+      color: string;
+    }> = [
       {
         name: 'Girl',
         tagName: 'girl',
-        query: `user:${normalizedName} ~1girl ~2girls ~3girls ~4girls ~5girls ~6+girls`,
+        originalTag: '~1girl ~2girls ~3girls ~4girls ~5girls ~6+girls',
+        subQueries: ['1girl', '2girls', '3girls', '4girls', '5girls', '6+girls'].map(
+          tag => `user:${normalizedName} ${tag}`
+        ),
         color: '#e91e63',
       },
       {
         name: 'Boy',
         tagName: 'boy',
-        query: `user:${normalizedName} ~1boy ~2boys ~3boys ~4boys ~5boys ~6+boys`,
+        originalTag: '~1boy ~2boys ~3boys ~4boys ~5boys ~6+boys',
+        subQueries: ['1boy', '2boys', '3boys', '4boys', '5boys', '6+boys'].map(
+          tag => `user:${normalizedName} ${tag}`
+        ),
         color: '#2196f3',
       },
       {
         name: 'Other',
         tagName: 'other',
-        query: `user:${normalizedName} ~1other ~2others ~3others ~4others ~5others ~6+others`,
+        originalTag: '~1other ~2others ~3others ~4others ~5others ~6+others',
+        subQueries: ['1other', '2others', '3others', '4others', '5others', '6+others'].map(
+          tag => `user:${normalizedName} ${tag}`
+        ),
         color: '#9c27b0',
       },
       {
@@ -1667,6 +1791,7 @@ export class AnalyticsDataManager extends DataManager {
     const results: DistributionItem[] = genderCategories.map(cat => ({
       name: cat.name,
       tagName: cat.tagName,
+      originalTag: cat.originalTag,
       count: 0,
       frequency: 0,
       thumb: null,
@@ -1680,10 +1805,25 @@ export class AnalyticsDataManager extends DataManager {
       async (item) => {
         if (reportSubStatus) reportSubStatus(`Fetching Gender: ${item.name}`);
         try {
-          const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
-          const resp = await this.rateLimiter.fetch(url).then(r => r.json());
-          if (resp && resp.counts && typeof resp.counts.posts === 'number') {
-            results[item.idx].count = resp.counts.posts;
+          if (item.subQueries) {
+            const counts = await Promise.all(
+              item.subQueries.map(async (q: string) => {
+                try {
+                  const url = `/counts/posts.json?tags=${encodeURIComponent(q)}`;
+                  const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+                  return (resp?.counts?.posts as number) ?? 0;
+                } catch {
+                  return 0;
+                }
+              })
+            );
+            results[item.idx].count = counts.reduce((sum, n) => sum + n, 0);
+          } else if (item.query) {
+            const url = `/counts/posts.json?tags=${encodeURIComponent(item.query)}`;
+            const resp = await this.rateLimiter.fetch(url).then(r => r.json());
+            if (resp && resp.counts && typeof resp.counts.posts === 'number') {
+              results[item.idx].count = resp.counts.posts;
+            }
           }
         } catch (e: unknown) { console.debug('[DI] Failed to fetch gender count', e); }
       },

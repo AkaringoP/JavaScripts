@@ -428,7 +428,19 @@ export function renderPieWidget(
             query = `status:${d.details.name}`;
             targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
           } else {
-            query = d.details.tagName || d.label;
+            // Mirror handlePieClick's logic so the legend link matches the pie-slice click target.
+            // Critical for categories where the count query is multi-tag (gender, untagged_commentary,
+            // untagged_translation): originalTag preserves the OR/exclusion query so navigation
+            // points to the same post set the count represents.
+            if (d.details.originalTag) {
+              query = d.details.originalTag;
+            } else if (d.details.tagName === 'untagged_commentary') {
+              query = 'has:commentary -commentary -commentary_request';
+            } else if (d.details.tagName === 'untagged_translation') {
+              query = '*_text -english_text -translation_request -translated';
+            } else {
+              query = d.details.tagName || d.label;
+            }
             targetUrl = `/posts?tags=${encodeURIComponent(`user:${contextUser.normalizedName} ${query}`)}`;
           }
         }
