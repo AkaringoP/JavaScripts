@@ -6,9 +6,6 @@ import {GrassApp} from './apps/grass-app';
 import {UserAnalyticsApp} from './apps/user-analytics-app';
 import {TagAnalyticsApp} from './apps/tag-analytics-app';
 
-// Inject exactly once on script execution
-injectGlobalStyles();
-
 // Reserved path segments that are not tag show pages
 const WIKI_RESERVED = new Set(['search', 'show_or_new', 'new']);
 
@@ -59,6 +56,14 @@ export function detectCurrentTag(): string | null {
  * Initializes context, database, settings, and applications.
  */
 async function main(): Promise<void> {
+  // Guard: skip non-Danbooru pages (nginx/CDN error pages like 429, 502, etc.)
+  // Real Danbooru pages always have body classes (e.g., "c-users a-show").
+  // Error pages served by nginx have a bare <body> with no classes.
+  if (document.body.classList.length === 0) return;
+
+  // Inject styles only on valid Danbooru pages
+  injectGlobalStyles();
+
   // Shared Singletons
   const db = new Database();
   const settings = new SettingsManager();
