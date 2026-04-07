@@ -120,8 +120,6 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
     icon.onclick = () => {
       const wasActive = icon.classList.contains('active');
       if (!wasActive) {
-        // Reset grass to Recommended when switching themes
-        settingsManager.setGrassIndex(0);
         settingsManager.applyTheme(key);
         document.querySelectorAll('.theme-icon').forEach((el) => el.classList.remove('active'));
         icon.classList.add('active');
@@ -166,7 +164,7 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
       return;
     }
 
-    const currentIdx = settingsManager.getGrassIndex();
+    const currentIdx = settingsManager.getGrassIndex(themeKey);
 
     const title = document.createElement('div');
     title.style.cssText = 'font-size:10px;color:#888;font-weight:600;margin-bottom:2px;';
@@ -198,7 +196,7 @@ export function createSettingsPopover(options: SettingsPopoverOptions): Settings
 
       row.onclick = (e) => {
         e.stopPropagation();
-        settingsManager.setGrassIndex(idx);
+        settingsManager.setGrassIndex(themeKey, idx);
         settingsManager.applyTheme(themeKey);
         renderGrassFlyout(themeKey);
       };

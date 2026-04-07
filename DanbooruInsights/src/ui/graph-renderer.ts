@@ -1215,6 +1215,7 @@ export class GraphRenderer {
       scale: {
         color: {
           range: this.settingsManager.resolveLevels(
+            this.settingsManager.getTheme(),
             CONFIG.THEMES[this.settingsManager.getTheme()] || CONFIG.THEMES.light
           ),
           domain: currentThresholds,

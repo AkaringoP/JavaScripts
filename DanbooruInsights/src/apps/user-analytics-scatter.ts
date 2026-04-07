@@ -73,6 +73,7 @@ export function renderScatterPlot(
     btn.style.cursor = 'pointer';
     btn.style.transition = 'all 0.2s';
     btn.style.fontSize = '12px';
+    btn.dataset.mode = id;
     btn.style.display = 'flex';
     btn.style.alignItems = 'center';
     btn.style.gap = '5px';
@@ -96,13 +97,8 @@ export function renderScatterPlot(
       currentScatterMode = id;
       Array.from(toggleContainer.children).forEach(b => {
         const bEl = b as HTMLElement;
-        const isMe = bEl.textContent.includes(label);
-        bEl.style.background = '#fff';
-        bEl.style.color = '#333';
-        if (isMe) {
-          bEl.style.background = '#0969da';
-          bEl.style.color = '#fff';
-        }
+        bEl.style.background = bEl.dataset.mode === id ? '#0969da' : '#fff';
+        bEl.style.color = bEl.dataset.mode === id ? '#fff' : '#333';
       });
       renderScatter();
     };
@@ -111,6 +107,7 @@ export function renderScatterPlot(
 
   toggleContainer.appendChild(makeToggleBtn('score', 'Score', true));
   toggleContainer.appendChild(makeToggleBtn('tags', 'Tag Count', false, 'General Tags Only'));
+  toggleContainer.appendChild(makeToggleBtn('effort', 'Effort', false, 'X: Tag Count, Y: Score'));
 
   scatterDiv.appendChild(toggleContainer);
 
@@ -302,13 +299,30 @@ export function renderScatterPlot(
     const drawW = w - padL - padR;
     const drawH = h - padT - padB;
 
-    let minDateVal = Infinity;
-    let maxDateVal = -Infinity;
+    const isEffort = currentScatterMode === 'effort';
+
+    // minX/maxX represent the X-axis range (date in time modes, tag_count in effort mode)
+    let minX = Infinity;
+    let maxX = -Infinity;
     let maxVal = 0;
 
-    if (selectedYear) {
-      minDateVal = new Date(selectedYear, 0, 1).getTime();
-      maxDateVal = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
+    if (isEffort) {
+      // Effort mode: X = tag_count, Y = score
+      minX = 0;
+      maxX = 0;
+      resetBtn.style.display = 'none';
+      yearLabel.style.display = 'none';
+
+      for (const d of scatterData) {
+        if (!activeFilters[d.r]) continue;
+        const tc = d.t || 0;
+        if (tc > maxX) maxX = tc;
+        if (d.s > maxVal) maxVal = d.s;
+      }
+      if (maxX === 0) maxX = 100;
+    } else if (selectedYear) {
+      minX = new Date(selectedYear, 0, 1).getTime();
+      maxX = new Date(selectedYear, 11, 31, 23, 59, 59).getTime();
 
       resetBtn.style.display = 'block';
       yearLabel.textContent = String(selectedYear);
@@ -318,28 +332,31 @@ export function renderScatterPlot(
       yearLabel.style.display = 'none';
 
       for (const d of scatterData) {
-        if (d.d < minDateVal) minDateVal = d.d;
-        if (d.d > maxDateVal) maxDateVal = d.d;
+        if (d.d < minX) minX = d.d;
+        if (d.d > maxX) maxX = d.d;
       }
-      if (minDateVal === Infinity) {
-        minDateVal = Date.now();
-        maxDateVal = minDateVal + 86400000;
+      if (minX === Infinity) {
+        minX = Date.now();
+        maxX = minX + 86400000;
       } else {
-        const startY = new Date(minDateVal).getFullYear();
-        minDateVal = new Date(startY, 0, 1).getTime();
+        const startY = new Date(minX).getFullYear();
+        minX = new Date(startY, 0, 1).getTime();
       }
     }
 
-    const timeRange = maxDateVal - minDateVal || 1;
+    const xRange = maxX - minX || 1;
 
-    for (const d of scatterData) {
-      if (d.d >= minDateVal && d.d <= maxDateVal) {
-        const val = currentScatterMode === 'tags' ? (d.t || 0) : d.s;
-        if (val > maxVal) maxVal = val;
+    if (!isEffort) {
+      for (const d of scatterData) {
+        if (d.d >= minX && d.d <= maxX) {
+          const val = currentScatterMode === 'tags' ? (d.t || 0) : d.s;
+          if (val > maxVal) maxVal = val;
+        }
       }
     }
     if (maxVal === 0) maxVal = 100;
 
+    // Y-axis step
     let stepY = 100;
     if (currentScatterMode === 'tags') {
       if (maxVal < 50) stepY = 10;
@@ -354,11 +371,22 @@ export function renderScatterPlot(
     maxVal = Math.ceil(maxVal / stepY) * stepY;
     if (maxVal < stepY) maxVal = stepY;
 
-    Object.assign(currentScale, {minDate: minDateVal, maxDate: maxDateVal, maxVal, timeRange, padL, padT, drawW, drawH, mode: currentScatterMode});
+    // X-axis step (for effort mode numeric labels)
+    let stepX = 50;
+    if (isEffort) {
+      if (maxX < 50) stepX = 10;
+      else if (maxX < 200) stepX = 25;
+      else stepX = 50;
+      maxX = Math.ceil(maxX / stepX) * stepX;
+      if (maxX < stepX) maxX = stepX;
+    }
+
+    Object.assign(currentScale, {minDate: minX, maxDate: maxX, maxVal, timeRange: xRange, padL, padT, drawW, drawH, mode: currentScatterMode});
 
     const visiblePoints = scatterData.filter(d => {
-      if (d.d < minDateVal || d.d > maxDateVal) return false;
-      return activeFilters[d.r];
+      if (!activeFilters[d.r]) return false;
+      if (isEffort) return true; // No date filtering in effort mode
+      return d.d >= minX && d.d <= maxX;
     });
 
     countLabel.textContent = `${visiblePoints.length} items`;
@@ -389,7 +417,20 @@ export function renderScatterPlot(
     ctx.fillStyle = '#666';
     ctx.textAlign = 'center';
 
-    if (selectedYear) {
+    if (isEffort) {
+      // Numeric X-axis labels for tag count
+      for (let val = 0; val <= maxX; val += stepX) {
+        const x = padL + (val / maxX) * drawW;
+        ctx.fillText(String(val), x, padT + drawH + 15);
+        if (val > 0) {
+          ctx.beginPath();
+          ctx.strokeStyle = '#eee';
+          ctx.moveTo(x, padT);
+          ctx.lineTo(x, padT + drawH);
+          ctx.stroke();
+        }
+      }
+    } else if (selectedYear) {
       const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       months.forEach((m, i) => {
         const stepW = drawW / 12;
@@ -405,16 +446,16 @@ export function renderScatterPlot(
         }
       });
     } else {
-      const startYear = new Date(minDateVal).getFullYear();
-      const endYear = new Date(maxDateVal).getFullYear();
+      const startYear = new Date(minX).getFullYear();
+      const endYear = new Date(maxX).getFullYear();
 
       for (let y = startYear; y <= endYear; y++) {
         const d = new Date(y, 0, 1).getTime();
-        const x = padL + ((d - minDateVal) / timeRange) * drawW;
+        const x = padL + ((d - minX) / xRange) * drawW;
 
         if (x >= padL - 5 && x <= w - padR + 5) {
           const nextD = new Date(y + 1, 0, 1).getTime();
-          const xNext = padL + ((nextD - minDateVal) / timeRange) * drawW;
+          const xNext = padL + ((nextD - minX) / xRange) * drawW;
           const xCenter = (x + xNext) / 2;
 
           if (xCenter > padL - 10 && xCenter < w - padR + 10) {
@@ -431,11 +472,13 @@ export function renderScatterPlot(
 
     // Draw Points
     visiblePoints.forEach(pt => {
-      if (pt.d < minDateVal || pt.d > maxDateVal) return;
+      const xVal = isEffort ? (pt.t || 0) : pt.d;
+      const yVal = isEffort ? pt.s : (currentScatterMode === 'tags' ? (pt.t || 0) : pt.s);
 
-      const val = currentScatterMode === 'tags' ? (pt.t || 0) : pt.s;
-      const x = padL + ((pt.d - minDateVal) / timeRange) * drawW;
-      const y = padT + drawH - (val / maxVal) * drawH;
+      if (xVal < minX || xVal > maxX) return;
+
+      const x = padL + ((xVal - minX) / xRange) * drawW;
+      const y = padT + drawH - (yVal / maxVal) * drawH;
 
       let color = '#ccc';
       if (pt.r === 'g') color = '#4caf50';
@@ -447,12 +490,13 @@ export function renderScatterPlot(
       ctx.fillRect(x - 1, y - 1, 2, 2);
     });
 
-    // Render Overlays
+    // Render Overlays (skip in effort mode — no time axis)
     const addOverlayLine = (dateObjOrStr: Date | string, color: string, title: string, isDashed: boolean, thickness: string = '2px') => {
+      if (isEffort) return;
       const d = new Date(dateObjOrStr).getTime();
-      if (d < minDateVal || d > maxDateVal) return;
+      if (d < minX || d > maxX) return;
 
-      const x = padL + ((d - minDateVal) / timeRange) * drawW;
+      const x = padL + ((d - minX) / xRange) * drawW;
 
       const line = document.createElement('div');
       line.style.position = 'absolute';
@@ -491,9 +535,10 @@ export function renderScatterPlot(
 
   let lastDragEndTime = 0;
 
-  // Click Listener for Year Zoom
+  // Click Listener for Year Zoom (disabled in effort mode)
   canvas.addEventListener('click', (e) => {
     if (Date.now() - lastDragEndTime < 100) return;
+    if (currentScatterMode === 'effort') return;
 
     const rect = canvasContainer.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -512,9 +557,14 @@ export function renderScatterPlot(
     }
   });
 
-  // Hover Effect for Year Labels
+  // Hover Effect for Year Labels (disabled in effort mode)
   canvas.addEventListener('mousemove', (e) => {
     if (dragStart) return;
+
+    if (currentScatterMode === 'effort') {
+      canvas.style.cursor = 'crosshair';
+      return;
+    }
 
     const rect = canvasContainer.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -562,23 +612,29 @@ export function renderScatterPlot(
   const updateRangeLabel = (x1: number, x2: number, y1: number, y2: number) => {
     if (rangeLabelTimer) clearTimeout(rangeLabelTimer);
     rangeLabelTimer = setTimeout(() => {
-      const dateMin = ((Math.min(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
-      const dateMax = ((Math.max(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+      const xMin = ((Math.min(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+      const xMax = ((Math.max(x1, x2) - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
       const valMin = ((currentScale.padT + currentScale.drawH - Math.max(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
       const valMax = ((currentScale.padT + currentScale.drawH - Math.min(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
 
-      const d1 = new Date(dateMin).toISOString().slice(0, 10);
-      const d2 = new Date(dateMax).toISOString().slice(0, 10);
-      const valLabel = currentScale.mode === 'tags' ? 'Tags' : 'Score';
+      const isEff = currentScale.mode === 'effort';
 
       // Count posts in selection
       const count = scatterData.filter(d => {
         if (!activeFilters[d.r]) return false;
-        const val = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
-        return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
+        const xVal = isEff ? (d.t || 0) : d.d;
+        const yVal = isEff ? d.s : (currentScale.mode === 'tags' ? (d.t || 0) : d.s);
+        return xVal >= xMin && xVal <= xMax && yVal >= valMin && yVal <= valMax;
       }).length;
 
-      rangeLabel.innerHTML = `${d1} ~ ${d2}<br>${valLabel}: ${Math.round(valMin)} ~ ${Math.round(valMax)} · ${count.toLocaleString()} posts`;
+      if (isEff) {
+        rangeLabel.innerHTML = `Tags: ${Math.round(xMin)} ~ ${Math.round(xMax)}<br>Score: ${Math.round(valMin)} ~ ${Math.round(valMax)} · ${count.toLocaleString()} posts`;
+      } else {
+        const d1 = new Date(xMin).toISOString().slice(0, 10);
+        const d2 = new Date(xMax).toISOString().slice(0, 10);
+        const valLabel = currentScale.mode === 'tags' ? 'Tags' : 'Score';
+        rangeLabel.innerHTML = `${d1} ~ ${d2}<br>${valLabel}: ${Math.round(valMin)} ~ ${Math.round(valMax)} · ${count.toLocaleString()} posts`;
+      }
       rangeLabel.style.display = 'block';
     }, 50);
   };
@@ -633,23 +689,27 @@ export function renderScatterPlot(
     const y1 = Math.min(ds.y, endY);
     const y2 = Math.max(ds.y, endY);
 
-    const dateMin = ((x1 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
-    const dateMax = ((x2 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+    const xMin = ((x1 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
+    const xMax = ((x2 - currentScale.padL) / currentScale.drawW) * currentScale.timeRange + currentScale.minDate;
 
     const valMin = ((currentScale.padT + currentScale.drawH - y2) / currentScale.drawH) * currentScale.maxVal;
     const valMax = ((currentScale.padT + currentScale.drawH - y1) / currentScale.drawH) * currentScale.maxVal;
 
+    const isEff = currentScale.mode === 'effort';
+
     const result = scatterData.filter(d => {
       if (!activeFilters[d.r]) return false;
-      const val = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
-      return d.d >= dateMin && d.d <= dateMax && val >= valMin && val <= valMax;
+      const xVal = isEff ? (d.t || 0) : d.d;
+      const yVal = isEff ? d.s : (currentScale.mode === 'tags' ? (d.t || 0) : d.s);
+      return xVal >= xMin && xVal <= xMax && yVal >= valMin && yVal <= valMax;
     });
 
     if (result.length === 0) return;
 
     const sortedList = result.sort((a, b) => {
-      const vA = currentScale.mode === 'tags' ? (a.t || 0) : a.s;
-      const vB = currentScale.mode === 'tags' ? (b.t || 0) : b.s;
+      // In effort mode, sort by score descending
+      const vA = isEff ? a.s : (currentScale.mode === 'tags' ? (a.t || 0) : a.s);
+      const vB = isEff ? b.s : (currentScale.mode === 'tags' ? (b.t || 0) : b.s);
       return vB - vA;
     });
 
@@ -657,10 +717,11 @@ export function renderScatterPlot(
     let aVMin = Infinity, aVMax = -Infinity;
 
     sortedList.forEach(d => {
-      if (d.d < aDMin) aDMin = d.d;
-      if (d.d > aDMax) aDMax = d.d;
+      const xV = isEff ? (d.t || 0) : d.d;
+      if (xV < aDMin) aDMin = xV;
+      if (xV > aDMax) aDMax = xV;
 
-      const v = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
+      const v = isEff ? d.s : (currentScale.mode === 'tags' ? (d.t || 0) : d.s);
       if (v < aVMin) aVMin = v;
       if (v > aVMax) aVMax = v;
     });
@@ -669,8 +730,8 @@ export function renderScatterPlot(
   });
 
   const showPopover = (mx: number, my: number, items: ScatterDataPoint[], dMin: number, dMax: number, sMin: number, sMax: number) => {
-    const d1 = new Date(dMin).toLocaleDateString();
-    const d2 = new Date(dMax).toLocaleDateString();
+    const isEff = currentScale.mode === 'effort';
+    const xLabel = isEff ? `Tags: ${Math.floor(dMin)} ~ ${Math.ceil(dMax)}` : `${new Date(dMin).toLocaleDateString()} ~ ${new Date(dMax).toLocaleDateString()}`;
     const sm1 = Math.floor(sMin);
     const sm2 = Math.ceil(sMax);
     const totalCount = items.length;
@@ -682,8 +743,8 @@ export function renderScatterPlot(
       const slice = items.slice(start, start + limit);
 
       slice.forEach((it: ScatterDataPoint) => {
-        const itDate = new Date(it.d).toLocaleDateString();
-        const val = isTags ? (it.t || 0) : it.s;
+        const itDate = isEff ? `${it.t || 0} tags` : new Date(it.d).toLocaleDateString();
+        const val = isEff ? it.s : (isTags ? (it.t || 0) : it.s);
         let color = '#ccc';
         if (it.r === 'g') color = '#4caf50';
         else if (it.r === 's') color = '#ffb74d';
@@ -705,8 +766,8 @@ export function renderScatterPlot(
     const headerHtml = `
      <div style="padding: 10px 15px; background: #fafafa; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: start;">
        <div style="display:flex; flex-direction:column;">
-          <span style="font-weight: 600; font-size: 13px; color: #333;">${d1} ~ ${d2}</span>
-          <span style="font-size: 11px; color: #666; margin-top:2px;">${isTags ? 'Tag Count' : 'Score'}: ${sm1} ~ ${sm2}</span>
+          <span style="font-weight: 600; font-size: 13px; color: #333;">${xLabel}</span>
+          <span style="font-size: 11px; color: #666; margin-top:2px;">${isEff ? 'Score' : (isTags ? 'Tag Count' : 'Score')}: ${sm1} ~ ${sm2}</span>
        </div>
        <div style="display:flex; align-items:center; gap: 10px; margin-top:2px;">
          <span id="pop-count-label" style="font-size: 12px; color: #888;">${Math.min(visibleLimit, totalCount)} / ${totalCount} items</span>

@@ -36,6 +36,8 @@ export interface SettingsData {
   rememberedModes: Record<string, string>;
   /** Max post-count diff allowed before triggering an automatic sync. */
   syncThreshold?: number;
+  /** Per-theme grass palette index (themeKey → 0-3). */
+  grassIndexByTheme?: Record<string, number>;
 }
 
 /** Contribution metric identifier. */
