@@ -120,27 +120,40 @@ export class SettingsManager {
   }
 
   /**
-   * Gets the current grass color palette index (0-3).
+   * Gets the grass color palette index (0-3) for a given theme.
+   * Falls back to legacy single grassIndex for migration.
    */
-  getGrassIndex(): number {
-    const idx = (this.settings as any).grassIndex;
-    return typeof idx === 'number' && idx >= 0 && idx <= 3 ? idx : 0;
+  getGrassIndex(themeKey: string): number {
+    const byTheme = this.settings.grassIndexByTheme;
+    if (byTheme && typeof byTheme[themeKey] === 'number') {
+      return Math.max(0, Math.min(3, byTheme[themeKey]));
+    }
+    // Legacy fallback: single grassIndex (pre-v8.2.0)
+    const legacy = (this.settings as any).grassIndex;
+    return typeof legacy === 'number' && legacy >= 0 && legacy <= 3 ? legacy : 0;
   }
 
   /**
-   * Sets the grass color palette index and saves.
+   * Sets the grass color palette index for a specific theme and saves.
    */
-  setGrassIndex(index: number): void {
-    this.save({grassIndex: Math.max(0, Math.min(3, index))} as any);
+  setGrassIndex(themeKey: string, index: number): void {
+    const byTheme = {...(this.settings.grassIndexByTheme || {})};
+    byTheme[themeKey] = Math.max(0, Math.min(3, index));
+    // Remove legacy field if present
+    const patch: any = {grassIndexByTheme: byTheme};
+    if ((this.settings as any).grassIndex !== undefined) {
+      delete (this.settings as any).grassIndex;
+    }
+    this.save(patch);
   }
 
   /**
-   * Resolves the active levels array for a theme, considering grassOptions and grassIndex.
+   * Resolves the active levels array for a theme, considering grassOptions and per-theme grassIndex.
    */
-  resolveLevels(theme: any): string[] {
+  resolveLevels(themeKey: string, theme: any): string[] {
     const defaultLevels = ['#ebedf0', '#9be9a8', '#40c463', '#30a14e', '#216e39'];
     if (theme.grassOptions && theme.grassOptions.length > 0) {
-      const idx = this.getGrassIndex();
+      const idx = this.getGrassIndex(themeKey);
       const option = theme.grassOptions[idx] || theme.grassOptions[0];
       return option.levels;
     }
@@ -164,7 +177,7 @@ export class SettingsManager {
         theme.scrollbar || '#d0d7de'
       );
       // Apply Level Colors using grassOptions
-      const levels = this.resolveLevels(theme);
+      const levels = this.resolveLevels(themeKey, theme);
       levels.forEach((color, i) => {
         root.style.setProperty(`--grass-level-${i}`, color);
       });
