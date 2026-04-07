@@ -1,5 +1,6 @@
 import {DataManager} from '../core/data-manager';
 import {GraphRenderer} from '../ui/graph-renderer';
+import type {RateLimitedFetch} from '../core/rate-limiter';
 import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 import type {ProfileContext} from '../core/profile-context';
@@ -13,17 +14,20 @@ export class GrassApp {
   db: Database;
   settings: SettingsManager;
   context: ProfileContext;
+  rateLimiter: RateLimitedFetch | null;
 
   /**
    * Initializes the GrassApp default instance.
    * @param {Database} db - The shared Dexie database instance.
    * @param {SettingsManager} settings - The settings manager instance.
    * @param {ProfileContext} context - The current profile context containing target user info.
+   * @param {RateLimitedFetch=} rateLimiter - Optional shared rate limiter instance.
    */
-  constructor(db: Database, settings: SettingsManager, context: ProfileContext) {
+  constructor(db: Database, settings: SettingsManager, context: ProfileContext, rateLimiter?: RateLimitedFetch) {
     this.db = db;
     this.settings = settings;
     this.context = context;
+    this.rateLimiter = rateLimiter ?? null;
   }
 
   /**
@@ -37,7 +41,7 @@ export class GrassApp {
     const targetUser = context.targetUser;
     if (!targetUser) return;
 
-    const dataManager = new DataManager(this.db);
+    const dataManager = new DataManager(this.db, this.rateLimiter);
     // We pass the Shared Settings instance to GraphRenderer
     const renderer = new GraphRenderer(this.settings, this.db);
 

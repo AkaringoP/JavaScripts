@@ -1,6 +1,9 @@
+import {CONFIG} from './config';
 import {injectGlobalStyles} from './styles';
 import {Database} from './core/database';
 import {SettingsManager} from './core/settings';
+import {RateLimitedFetch} from './core/rate-limiter';
+import {TabCoordinator} from './core/tab-coordinator';
 import {ProfileContext} from './core/profile-context';
 import {GrassApp} from './apps/grass-app';
 import {UserAnalyticsApp} from './apps/user-analytics-app';
@@ -68,24 +71,41 @@ async function main(): Promise<void> {
   const db = new Database();
   const settings = new SettingsManager();
 
+  // Shared rate limiter — one per tab, coordinated across tabs
+  const rl = CONFIG.RATE_LIMITER;
+  const rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+
+  // Cross-tab coordination
+  const coordinator = new TabCoordinator();
+  coordinator.onTabCountChange = (count) => {
+    const rps = Math.max(1, Math.floor(rl.rps / count));
+    const conc = Math.max(1, Math.floor(rl.concurrency / count));
+    rateLimiter.updateLimits(rps, conc);
+  };
+  coordinator.onBackoffReceived = (until) => {
+    rateLimiter.setBackoff(until);
+  };
+  rateLimiter.onBackoff = (until) => {
+    coordinator.broadcastBackoff(until);
+  };
+  coordinator.start();
+
   // Routing
   const targetTagName = detectCurrentTag();
 
   if (targetTagName) {
     // Tag Analytics Mode (Wiki or Artist)
-
-    const tagAnalytics = new TagAnalyticsApp(db, settings, targetTagName);
+    const tagAnalytics = new TagAnalyticsApp(db, settings, targetTagName, rateLimiter);
     tagAnalytics.run();
   } else {
     // Profile Mode
     const context = new ProfileContext();
     if (!context.isValidProfile()) {
-
       return;
     }
 
-    const grass = new GrassApp(db, settings, context);
-    const userAnalytics = new UserAnalyticsApp(db, settings, context);
+    const grass = new GrassApp(db, settings, context, rateLimiter);
+    const userAnalytics = new UserAnalyticsApp(db, settings, context, rateLimiter);
 
     // Execution
     grass.run();
