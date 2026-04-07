@@ -13,6 +13,7 @@ interface QueueTask {
 /**
  * Helper: Rate Limited Fetch
  * Implements strict rate limiting using a Token Bucket algorithm and dedicated queues.
+ * Supports dynamic limit updates (for cross-tab coordination) and global backoff.
  */
 export class RateLimitedFetch {
   maxConcurrency: number;
@@ -26,6 +27,11 @@ export class RateLimitedFetch {
   requestCounter: number;
   reportQueue: QueueTask[];
   isProcessingReport: boolean;
+
+  /** Timestamp until which all requests should be paused (global backoff). */
+  backoffUntil: number;
+  /** Called when a 429 response triggers global backoff. */
+  onBackoff: ((until: number) => void) | null;
 
   /**
    * @param {number} maxConcurrency Maximum concurrent requests (for general queue).
@@ -54,10 +60,34 @@ export class RateLimitedFetch {
     this.reportQueue = [];
     this.isProcessingReport = false;
 
+    // Global backoff
+    this.backoffUntil = 0;
+    this.onBackoff = null;
+
   }
 
   getRequestCount(): number {
     return this.requestCounter;
+  }
+
+  /**
+   * Dynamically update rate limits (e.g., when tab count changes).
+   * Takes effect on the next queue processing cycle.
+   */
+  updateLimits(requestsPerSecond: number, maxConcurrency: number): void {
+    this.rateLimit = requestsPerSecond;
+    this.refillRate = 1000 / requestsPerSecond;
+    this.maxConcurrency = maxConcurrency;
+    // Clamp existing tokens to new burst limit
+    this.tokens = Math.min(this.tokens, this.rateLimit);
+  }
+
+  /**
+   * Set global backoff — pause all request processing until the given timestamp.
+   * Only updates if the new timestamp is later than the current backoff.
+   */
+  setBackoff(until: number): void {
+    this.backoffUntil = Math.max(this.backoffUntil, until);
   }
 
   async fetch(url: string, options?: RequestInit): Promise<Response> {
@@ -79,6 +109,13 @@ export class RateLimitedFetch {
   async processReportQueue(): Promise<void> {
     if (this.isProcessingReport || this.reportQueue.length === 0) return;
 
+    // Global backoff check
+    const now = Date.now();
+    if (now < this.backoffUntil) {
+      setTimeout(() => this.processReportQueue(), this.backoffUntil - now);
+      return;
+    }
+
     this.isProcessingReport = true;
     const task = this.reportQueue.shift();
     if (!task) {
@@ -89,6 +126,7 @@ export class RateLimitedFetch {
 
     try {
       const response = await fetch(task.url, task.options);
+      if (response.status === 429) this.triggerBackoff();
       task.resolve(response);
     } catch (e: unknown) {
       console.error(`[RateLimitedFetch] Report Failed: ${task.url}`, e);
@@ -103,6 +141,13 @@ export class RateLimitedFetch {
 
   async processQueue(): Promise<void> {
     if (this.activeWorkers >= this.maxConcurrency || this.queue.length === 0) {
+      return;
+    }
+
+    // Global backoff check
+    const now = Date.now();
+    if (now < this.backoffUntil) {
+      setTimeout(() => this.processQueue(), this.backoffUntil - now);
       return;
     }
 
@@ -127,17 +172,12 @@ export class RateLimitedFetch {
     }
 
     // Staggered Start Delay (minimal now, rely on token bucket for rate)
-    // Keep small jitter to avoid bursty browser network thread locking?
-    // User wants "1 sec 7 request". Token bucket handles the *average* rate.
-    // Burst is allowed up to 'rateLimit' (7).
-    // We can remove startDelay or keep it very small.
-    // The original code had 100-300ms.
-    // Minimal jitter to avoid burst — token bucket handles actual rate limiting
     const startDelay = Math.floor(Math.random() * (this.startDelayRange[1] - this.startDelayRange[0] + 1)) + this.startDelayRange[0];
     if (startDelay > 0) await new Promise(r => setTimeout(r, startDelay));
 
     try {
       const response = await fetch(task.url, task.options);
+      if (response.status === 429) this.triggerBackoff();
       task.resolve(response);
     } catch (e: unknown) {
       task.reject(e);
@@ -154,9 +194,15 @@ export class RateLimitedFetch {
     if (elapsed > this.refillRate) {
       const newTokens = Math.floor(elapsed / this.refillRate);
       this.tokens = Math.min(this.rateLimit, this.tokens + newTokens);
-      this.lastRefill = now; // Or use now - (elapsed % this.refillRate) for precision?
       // precision:
       this.lastRefill = now - (elapsed % this.refillRate);
     }
+  }
+
+  /** Activate global backoff and notify listeners (e.g., TabCoordinator). */
+  private triggerBackoff(): void {
+    const until = Date.now() + CONFIG.BACKOFF_DURATION_MS;
+    this.setBackoff(until);
+    this.onBackoff?.(until);
   }
 }

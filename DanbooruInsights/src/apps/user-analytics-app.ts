@@ -34,14 +34,14 @@ export class UserAnalyticsApp {
    * @param {Object} settings The settings manager.
    * @param {ProfileContext} context The profile context.
    */
-  constructor(db: Database, settings: SettingsManager, context: ProfileContext) {
+  constructor(db: Database, settings: SettingsManager, context: ProfileContext, rateLimiter?: RateLimitedFetch) {
     this.db = db;
     this.settings = settings;
     this.context = context as ValidatedProfileContext;
     const rl = CONFIG.RATE_LIMITER;
-    this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+    this.rateLimiter = rateLimiter ?? new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
 
-    this.dataManager = new AnalyticsDataManager(db);
+    this.dataManager = new AnalyticsDataManager(db, this.rateLimiter);
     this.dataService = new UserAnalyticsDataService(db);
 
     this.modalId = 'danbooru-grass-modal';

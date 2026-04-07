@@ -11,7 +11,9 @@ export const CONFIG: {
   REPORT_COOLDOWN_MS: number;
   ANALYTICS_CLEANUP_THRESHOLD_MS: number;
   CACHE_EXPIRY_MS: number;
+  BACKOFF_DURATION_MS: number;
   RATE_LIMITER: {concurrency: number; jitter: [number, number]; rps: number};
+  TAB_COORDINATOR: {channelName: string; heartbeatInterval: number; staleTimeout: number};
   SELECTORS: {STATISTICS_SECTION: string};
   THEMES: Record<string, Theme>;
 } = {
@@ -25,7 +27,14 @@ export const CONFIG: {
   ANALYTICS_CLEANUP_THRESHOLD_MS: 14 * DAY_MS,
   /** Cache expiry for tag_analytics and piestats (24 hours). */
   CACHE_EXPIRY_MS: DAY_MS,
+  /** Duration (ms) to pause all requests after receiving a 429 response. */
+  BACKOFF_DURATION_MS: 5000,
   RATE_LIMITER: {concurrency: 6, jitter: [0, 50], rps: 6},
+  TAB_COORDINATOR: {
+    channelName: 'di-rate-coord',
+    heartbeatInterval: 5000,
+    staleTimeout: 15000,
+  },
   SELECTORS: {
     STATISTICS_SECTION: 'div.user-statistics',
   },

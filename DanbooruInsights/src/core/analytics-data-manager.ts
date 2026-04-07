@@ -1,5 +1,6 @@
 import {DataManager} from './data-manager';
 import type {ApiItem} from './data-manager';
+import type {RateLimitedFetch} from './rate-limiter';
 import {CONFIG} from '../config';
 import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
 import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem, CreatedTagItem} from '../types';
@@ -124,9 +125,10 @@ export class AnalyticsDataManager extends DataManager {
 
   /**
    * @param {Database} db The Dexie database instance.
+   * @param {RateLimitedFetch=} rateLimiter Optional shared rate limiter.
    */
-  constructor(db: any) {
-    super(db);
+  constructor(db: any, rateLimiter?: RateLimitedFetch | null) {
+    super(db, rateLimiter ?? null);
   }
 
   /**

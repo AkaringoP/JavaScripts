@@ -22,12 +22,12 @@ export class TagAnalyticsApp {
    * @param {!SettingsManager} settings The settings manager instance.
    * @param {string} tagName The name of the tag to analyze.
    */
-  constructor(db: Database, settings: SettingsManager, tagName: string) {
+  constructor(db: Database, settings: SettingsManager, tagName: string, rateLimiter?: RateLimitedFetch) {
     this.db = db;
     this.settings = settings;
     this.tagName = tagName;
     const rl = CONFIG.RATE_LIMITER;
-    this.rateLimiter = new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
+    this.rateLimiter = rateLimiter ?? new RateLimitedFetch(rl.concurrency, rl.jitter, rl.rps);
     this.dataService = new TagAnalyticsDataService(db, this.rateLimiter, tagName);
     this.chartRenderer = new TagAnalyticsChartRenderer();
     this.isFetching = false;

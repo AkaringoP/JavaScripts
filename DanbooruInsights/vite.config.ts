@@ -9,7 +9,7 @@ export default defineConfig({
       userscript: {
         name: 'Danbooru Insights',
         namespace: 'http://tampermonkey.net/',
-        version: '8.0.5',
+        version: '8.1.0',
         description:
           'Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.',
         author: 'AkaringoP with Claude Code',
