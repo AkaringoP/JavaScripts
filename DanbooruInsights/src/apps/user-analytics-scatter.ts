@@ -50,8 +50,11 @@ export function renderScatterPlot(
 
   scatterWrapper.appendChild(scatterDiv);
 
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
   // Metric Toggle (Top Left inside Widget)
   const toggleContainer = document.createElement('div');
+  toggleContainer.className = 'di-scatter-toggle';
   toggleContainer.style.position = 'absolute';
   toggleContainer.style.top = '15px';
   toggleContainer.style.left = '15px';
@@ -149,6 +152,7 @@ export function renderScatterPlot(
 
   // Filters UI (Top Right)
   const filterContainer = document.createElement('div');
+  filterContainer.className = 'di-scatter-filter';
   filterContainer.style.position = 'absolute';
   filterContainer.style.top = '15px';
   filterContainer.style.right = '15px';
@@ -259,7 +263,7 @@ export function renderScatterPlot(
   selectionDiv.appendChild(rangeLabel);
 
   // Crosshair cursor for canvas
-  canvas.style.cursor = 'crosshair';
+  canvas.style.cursor = isTouchDevice ? 'default' : 'crosshair';
 
   // Popover UI
   const popover = document.createElement('div');
@@ -588,6 +592,7 @@ export function renderScatterPlot(
   let ignoreNextClick = false;
   void ignoreNextClick;
 
+  if (!isTouchDevice) {
   canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     ignoreNextClick = false;
@@ -728,6 +733,7 @@ export function renderScatterPlot(
 
     showPopover(e.clientX, e.clientY, sortedList, aDMin, aDMax, aVMin, aVMax);
   });
+  } // if (!isTouchDevice)
 
   const showPopover = (mx: number, my: number, items: ScatterDataPoint[], dMin: number, dMax: number, sMin: number, sMax: number) => {
     const isEff = currentScale.mode === 'effort';

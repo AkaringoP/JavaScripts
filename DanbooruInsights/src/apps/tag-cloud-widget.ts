@@ -23,8 +23,6 @@ export interface TagCloudOptions {
   categories: TagCloudCategory[];
 }
 
-const MIN_FONT = 11;
-const MAX_FONT = 38;
 const CLOUD_HEIGHT = 320;
 const TOP_WEIGHT_PERCENTILE = 0.20;
 const TRANSITION_MS = 350;
@@ -34,6 +32,8 @@ const TRANSITION_MS = 350;
  */
 export function computeFontSizes(
   items: TagCloudItem[],
+  minFont = 11,
+  maxFont = 38,
 ): {text: string; tagName: string; frequency: number; count: number; size: number; bold: boolean}[] {
   if (items.length === 0) return [];
 
@@ -51,8 +51,8 @@ export function computeFontSizes(
     frequency: item.frequency,
     count: item.count,
     size: logRange > 0
-      ? MIN_FONT + ((Math.log(item.frequency) - logMin) / logRange) * (MAX_FONT - MIN_FONT)
-      : (MIN_FONT + MAX_FONT) / 2,
+      ? minFont + ((Math.log(item.frequency) - logMin) / logRange) * (maxFont - minFont)
+      : (minFont + maxFont) / 2,
     bold: i < boldThreshold,
   }));
 }
@@ -65,11 +65,16 @@ export function renderTagCloudWidget(
   options: TagCloudOptions,
 ): void {
   const {initialData, fetchData, userName, categories} = options;
+  const isMobile = window.innerWidth <= 768;
+  const MIN_FONT = isMobile ? 10 : 11;
+  const MAX_FONT = isMobile ? 26 : 38;
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 
   // Closure state
   const cloudData: Record<number, TagCloudItem[]> = {};
   const layoutCache: Record<number, any[]> = {};
   let currentTab = categories[0]?.id ?? 0;
+  let activeTag: string | null = null;
 
   // Seed initial data
   cloudData[currentTab] = initialData;
@@ -111,7 +116,13 @@ export function renderTagCloudWidget(
   container.appendChild(cloudContainer);
 
 
-  // Tooltip
+  // Mobile tap tooltip (created once; separate from desktop hover tooltip)
+  const cloudTooltip = document.createElement('div');
+  cloudTooltip.className = 'di-tag-cloud-mobile-tooltip';
+  cloudTooltip.style.cssText = 'position:absolute;background:rgba(30,30,30,0.95);color:#fff;padding:8px 12px;border-radius:6px;font-size:12px;pointer-events:none;opacity:0;z-index:99999;transition:opacity 0.15s;white-space:nowrap;';
+  document.body.appendChild(cloudTooltip);
+
+  // Desktop hover tooltip
   const tooltip = d3.select('body')
     .selectAll<HTMLDivElement, unknown>('.di-tag-cloud-tooltip')
     .data([0])
@@ -127,6 +138,26 @@ export function renderTagCloudWidget(
     .style('z-index', '2147483647')
     .style('opacity', '0')
     .style('white-space', 'nowrap');
+
+  // Reset mobile highlight + tooltip
+  const resetCloudHighlight = () => {
+    activeTag = null;
+    cloudTooltip.style.opacity = '0';
+    d3.select(cloudContainer).selectAll('text').style('opacity', 1);
+  };
+
+  // Close mobile tooltip on tap outside the cloud SVG
+  if (isTouchDevice) {
+    document.addEventListener('click', (e) => {
+      const svgEl = cloudContainer.querySelector('svg');
+      if (svgEl && !svgEl.contains(e.target as Node) && !cloudTooltip.contains(e.target as Node)) {
+        resetCloudHighlight();
+      }
+    });
+    window.addEventListener('scroll', () => {
+      resetCloudHighlight();
+    }, {passive: true});
+  }
 
   const getCurrentColor = (): string => {
     return categories.find(c => c.id === currentTab)?.color ?? '#0075f8';
@@ -144,7 +175,8 @@ export function renderTagCloudWidget(
     const svg = d3.select(wrapper)
       .append('svg')
       .attr('width', width)
-      .attr('height', CLOUD_HEIGHT);
+      .attr('height', CLOUD_HEIGHT)
+      .style('overflow', 'hidden');
 
     const g = svg.append('g')
       .attr('transform', `translate(${width / 2},${CLOUD_HEIGHT / 2})`);
@@ -160,7 +192,12 @@ export function renderTagCloudWidget(
       .attr('text-anchor', 'middle')
       .attr('transform', (d: any) => `translate(${d.x},${d.y})rotate(${d.rotate || 0})`)
       .text((d: any) => d.text)
+      .style('pointer-events', 'all')
+      .style('paint-order', 'stroke')
+      .style('stroke', 'transparent')
+      .style('stroke-width', isTouchDevice ? '8px' : '0px')
       .on('mouseover', function (event: MouseEvent, d: any) {
+        if (isTouchDevice) return;
         g.selectAll('text').style('opacity', 0.25);
         d3.select(this)
           .style('opacity', 1)
@@ -172,16 +209,41 @@ export function renderTagCloudWidget(
           .style('opacity', '1');
       })
       .on('mousemove', (event: MouseEvent) => {
+        if (isTouchDevice) return;
         tooltip
           .style('left', `${event.pageX + 15}px`)
           .style('top', `${event.pageY + 15}px`);
       })
       .on('mouseout', function (_event: MouseEvent, d: any) {
+        if (isTouchDevice) return;
         g.selectAll('text').style('opacity', 1);
         d3.select(this).style('font-size', `${d.size}px`);
         tooltip.style('opacity', '0');
       })
-      .on('click', (_event: MouseEvent, d: any) => {
+      .on('click', function(_event: MouseEvent, d: any) {
+        if (isTouchDevice) {
+          if (activeTag === d.tagName) {
+            // 2nd tap on same tag → navigate
+            const query = `user:${userName} ${d.tagName}`;
+            window.open(`/posts?tags=${encodeURIComponent(query)}`, '_blank');
+            activeTag = null;
+            cloudTooltip.style.opacity = '0';
+            g.selectAll('text').style('opacity', 1);
+            d3.select(this).style('font-size', `${d.size}px`);
+          } else {
+            // 1st tap → show tooltip + highlight
+            activeTag = d.tagName;
+            g.selectAll('text').style('opacity', 0.2);
+            d3.select(this).style('opacity', 1).style('font-size', `${d.size * 1.08}px`);
+            cloudTooltip.innerHTML = `<strong>${d.text}</strong> — ${(d.frequency * 100).toFixed(2)}% · ${d.count.toLocaleString()} posts`;
+            cloudTooltip.style.opacity = '1';
+            const rect = (this as Element).getBoundingClientRect();
+            cloudTooltip.style.left = `${rect.left + window.scrollX + rect.width / 2 - cloudTooltip.offsetWidth / 2}px`;
+            cloudTooltip.style.top = `${rect.top + window.scrollY - cloudTooltip.offsetHeight - 8}px`;
+          }
+          return;
+        }
+        // Desktop: navigate directly
         const query = `user:${userName} ${d.tagName}`;
         window.open(`/posts?tags=${encodeURIComponent(query)}`, '_blank');
       });
@@ -236,7 +298,7 @@ export function renderTagCloudWidget(
     }
 
     // Compute layout
-    const words = computeFontSizes(data);
+    const words = computeFontSizes(data, MIN_FONT, MAX_FONT);
     const cloud = (d3 as any).layout.cloud;
     if (!cloud) {
       cloudContainer.innerHTML = '<div style="color:#c00;">d3-cloud library not loaded</div>';
@@ -316,6 +378,9 @@ export function renderTagCloudWidget(
     if (catId === currentTab) return;
 
     currentTab = catId;
+
+    // Reset mobile tooltip state on tab switch
+    resetCloudHighlight();
 
     tabsDiv.querySelectorAll('.di-pie-tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');

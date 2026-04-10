@@ -29,6 +29,7 @@ export const GLOBAL_CSS = `
       left: 0;
       width: 100vw;
       height: 100vh;
+      height: 100dvh;
       background: rgba(0, 0, 0, 0.4);
       z-index: 10000;
       display: none;
@@ -41,6 +42,11 @@ export const GLOBAL_CSS = `
     #danbooru-grass-modal-overlay.visible {
       display: flex;
       opacity: 1;
+    }
+    /* TagAnalytics modal uses dvh for mobile URL bar handling */
+    #tag-analytics-modal {
+      height: 100vh !important;
+      height: 100dvh !important;
     }
     #danbooru-grass-modal-window {
       width: 80%;
@@ -206,16 +212,12 @@ export const GLOBAL_CSS = `
 
     /* -- Hover Utilities -- */
     .di-hover-translate-up { transition: transform 0.2s; }
-    .di-hover-translate-up:hover { transform: translateY(-3px) !important; }
 
     .di-hover-scale { transition: transform 0.2s; }
-    .di-hover-scale:hover { transform: scale(1.02) !important; }
 
     .di-hover-underline { text-decoration: none; }
-    .di-hover-underline:hover { text-decoration: underline !important; }
 
     .di-hover-text-primary { transition: color 0.2s; }
-    .di-hover-text-primary:hover { color: #007bff !important; }
 
     /* -- Layout Utilities -- */
     .di-card { background: #f9f9f9; padding: 15px; border-radius: 8px; }
@@ -285,12 +287,200 @@ export const GLOBAL_CSS = `
 
     /* -- User Analytics Charts -- */
     .month-column .column-overlay { transition: fill 0.2s; }
-    .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
-    .month-column:hover .monthly-bar { fill: #216e39; }
     .star-shiny {
         font-size: 15px;
         stroke-width: 0.1px !important;
         filter: drop-shadow(0 0 5px #ffd700);
+    }
+
+    /* ===== Mobile Responsive ===== */
+
+    @media (max-width: 768px) {
+      #danbooru-grass-modal-window {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: none !important;
+        border-radius: 0 !important;
+      }
+      #danbooru-grass-modal-content {
+        padding: 20px !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+      }
+      #tag-analytics-modal > div {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: none !important;
+        max-height: 100vh !important;
+        border-radius: 0 !important;
+      }
+      #tag-analytics-content {
+        padding-top: 50px !important;
+      }
+
+      /* Phase 2: Pie chart + legend vertical */
+      .pie-content {
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+      }
+      .danbooru-grass-legend-scroll {
+        margin-left: 0 !important;
+        margin-top: 10px !important;
+        width: 100% !important;
+      }
+
+      /* Phase 2: Summary cards single column */
+      .di-summary-grid {
+        grid-template-columns: 1fr !important;
+      }
+
+      /* Phase 2: Upload card inner vertical stack */
+      .di-upload-card-inner {
+        flex-direction: column !important;
+      }
+
+      /* Phase 2: Timeline row word wrap */
+      .di-timeline-row {
+        white-space: normal !important;
+        word-break: break-word !important;
+      }
+
+      /* Phase 2: Top posts vertical layout */
+      .di-top-post-layout {
+        flex-direction: column !important;
+        align-items: center !important;
+      }
+      .di-top-post-thumb {
+        width: 120px !important;
+        height: 120px !important;
+      }
+
+      /* Phase 2: Tag analytics header wrap */
+      .di-tag-header {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+      }
+
+      /* Phase 2: Trending thumbnails smaller (exclude milestone cards) */
+      .di-nsfw-monitor:not(.di-milestone-card) {
+        width: 60px !important;
+      }
+
+      /* Phase 2: Scatter plot controls unstacked */
+      .di-scatter-toggle {
+        position: static !important;
+        margin-bottom: 5px !important;
+      }
+      .di-scatter-filter {
+        position: static !important;
+        width: fit-content !important;
+        margin: 5px 0 5px auto !important;
+      }
+
+      /* Phase 3: Rankings horizontal swipe */
+      #ranking-container {
+        display: flex !important;
+        overflow-x: auto !important;
+        scroll-snap-type: x mandatory !important;
+        -webkit-overflow-scrolling: touch !important;
+      }
+      #ranking-container > .di-card-sm {
+        scroll-snap-align: start !important;
+        min-width: calc(100vw - 80px) !important;
+        flex-shrink: 0 !important;
+      }
+
+      /* Phase 4: Created tags table scroll */
+      .di-created-tags-wrap {
+        overflow-x: auto !important;
+      }
+
+      /* Phase 4: Grass handles hide on mobile */
+      .di-grass-handle {
+        display: none !important;
+      }
+
+      /* Phase 4: Settings flyout reposition */
+      #danbooru-grass-flyout {
+        left: auto !important;
+        right: 10px !important;
+        max-width: calc(100vw - 20px) !important;
+      }
+
+      /* Fix 11: Modal content no horizontal scroll */
+      #danbooru-grass-modal-content {
+        overflow-x: hidden !important;
+      }
+      #tag-analytics-content {
+        overflow-x: hidden !important;
+      }
+
+      /* Fix 4: UserAnalytics header controls wrap */
+      #analytics-header-controls {
+        flex-direction: column !important;
+        align-items: flex-end !important;
+        gap: 8px !important;
+      }
+
+      /* Fix 1: TagAnalytics header icons spacing */
+      .di-tag-header span {
+        flex-wrap: wrap !important;
+      }
+      #tag-settings-anchor {
+        margin-left: 10px !important;
+      }
+
+      /* Fix: TagAnalytics close button position (avoid status bar) */
+      #tag-analytics-close {
+        top: 15px !important;
+        right: 15px !important;
+        font-size: 1.8rem !important;
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      /* Fix 2: TagAnalytics milestones grid - 2 columns on mobile */
+      .milestones-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+      }
+
+      /* Fix 10: Created Tags pagination wrap */
+      .di-created-tags-wrap > div:last-child {
+        flex-wrap: wrap !important;
+        justify-content: center !important;
+      }
+    }
+
+    @media (hover: hover) {
+      .di-hover-translate-up:hover { transform: translateY(-3px) !important; }
+      .di-hover-scale:hover { transform: scale(1.02) !important; }
+      .di-hover-underline:hover { text-decoration: underline !important; }
+      .di-hover-text-primary:hover { color: #007bff !important; }
+      .month-column:hover .column-overlay { fill: rgba(0, 123, 255, 0.05); }
+      .month-column:hover .monthly-bar { fill: #216e39; }
+    }
+
+    @media (pointer: coarse) {
+      .di-pie-tab {
+        padding: 6px 12px;
+        font-size: 13px;
+        min-height: 36px;
+      }
+      #danbooru-grass-modal-close,
+      #tag-analytics-close {
+        font-size: 28px;
+        min-width: 44px;
+        min-height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .top-post-tab {
+        padding: 4px 10px;
+        font-size: 12px;
+      }
     }
   `;
 

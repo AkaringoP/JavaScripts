@@ -52,6 +52,7 @@ export function renderCreatedTagsWidget(
   container.appendChild(header);
 
   const contentDiv = document.createElement('div');
+  contentDiv.className = 'di-created-tags-wrap';
   container.appendChild(contentDiv);
 
   const getStatusHtml = (item: CreatedTagItem): string => {
