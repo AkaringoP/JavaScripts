@@ -144,6 +144,8 @@ export function renderPieWidget(
    * Renders the Pie Chart content based on the current tab.
    */
   const renderPieContent = () => {
+    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    let lastTouchedPieDatum: d3.PieArcDatum<PieSlice> | null = null;
     const contextUser = context.targetUser;
     const data = pieData[currentPieTab];
     const pieContent = container.querySelector('.pie-content') as HTMLElement;
@@ -320,7 +322,8 @@ export function renderPieWidget(
       .style('padding', '8px 12px')
       .style('border-radius', '6px')
       .style('font-size', '12px')
-      .style('pointer-events', 'none')
+      .style('pointer-events', isTouchDevice ? 'auto' : 'none')
+      .style('cursor', isTouchDevice ? 'pointer' : 'default')
       .style('z-index', '2147483647')
       .style('opacity', '0');
 
@@ -389,7 +392,121 @@ export function renderPieWidget(
         d3.select(this).transition().duration(200).attr('d', (td: unknown) => arc(td as d3.PieArcDatum<PieSlice>) ?? '').style('opacity', '0.9').style('filter', 'none');
         tooltip.style('opacity', 0);
       })
-      .on('click', (_event, d) => handlePieClick(d));
+      .on('click', (_event, d) => {
+        if (isTouchDevice) return;
+        handlePieClick(d);
+      });
+
+    if (isTouchDevice) {
+      // Helper to handle touch on a slice
+      const handleSliceTouch = (event: TouchEvent) => {
+        const touch = event.touches[0];
+        const target = document.elementFromPoint(touch.clientX, touch.clientY) as Element;
+        if (!target) return;
+        const datum = d3.select(target).datum() as d3.PieArcDatum<PieSlice>;
+        if (!datum || !datum.data) return;
+
+        // Reset all slices to normal size first
+        svg.selectAll('path.danbooru-grass-pie-path')
+          .transition().duration(200)
+          .attr('d', (td: unknown) => arc(td as d3.PieArcDatum<PieSlice>) ?? '')
+          .style('opacity', '0.9')
+          .style('filter', 'none');
+
+        lastTouchedPieDatum = datum;
+
+        // Enlarge slice (same as mouseover)
+        d3.select(target).transition().duration(200)
+          .attr('d', (td: unknown) => arcHover(td as d3.PieArcDatum<PieSlice>) ?? '')
+          .style('opacity', '1')
+          .style('filter', 'drop-shadow(0px 0px 8px rgba(255,255,255,0.4))');
+
+        // Show tooltip (same HTML building logic as mouseover)
+        let html = '';
+        const details = datum.data.details;
+        const thumbUrl = details.thumb;
+        const thumbHtml = thumbUrl ? `
+        <div style="width: 80px; height: 80px; border-radius: 4px; overflow: hidden; background: #333; flex-shrink: 0; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+          <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;">
+        </div>` : '';
+
+        if (currentPieTab === 'rating') {
+          html = `
+          <div style="display: flex; gap: 12px; align-items: start;">
+            ${thumbHtml}
+            <div>
+              <div style="font-weight: bold; color: ${datum.data.color}; margin-bottom: 4px; font-size: 14px;">${datum.data.label}</div>
+              <div style="font-size: 11px; color: #ccc;">Count: <strong style="color:#fff;">${details.count.toLocaleString()}</strong></div>
+              <div style="font-size: 11px; color: #ccc;">Ratio: <strong style="color:#fff;">${Math.round((datum.data.value / totalValue) * 100)}%</strong></div>
+            </div>
+          </div>`;
+        } else {
+          const percentage = ((datum.data.value / totalValue) * 100).toFixed(1) + '%';
+          html = `
+          <div style="display: flex; gap: 12px; align-items: start;">
+            ${thumbHtml}
+            <div style="max-width: 180px;">
+              <div style="font-weight: bold; color: ${datum.data.color}; margin-bottom: 4px; font-size: 14px; word-wrap: break-word;">${datum.data.label}</div>
+              <div style="font-size: 11px; color: #ccc;">Freq: <strong style="color:#fff;">${percentage}</strong></div>
+              ${!details.isOther ? `<div style="font-size: 11px; color: #ccc;">Posts: <strong style="color:#fff;">${details.count ? details.count.toLocaleString() : '?'}</strong></div>` : ''}
+            </div>
+          </div>`;
+        }
+
+        tooltip.html(html).style('opacity', 1);
+
+        // Clamp tooltip within viewport
+        const tooltipNode = tooltip.node() as HTMLElement | null;
+        const tw = tooltipNode?.offsetWidth ?? 0;
+        const th = tooltipNode?.offsetHeight ?? 0;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const margin = 8;
+        let left = touch.pageX + 15;
+        let top = touch.pageY + 15;
+        if (left + tw > window.scrollX + vw - margin) {
+          left = touch.pageX - tw - 15;
+        }
+        if (left < window.scrollX + margin) {
+          left = window.scrollX + margin;
+        }
+        if (top + th > window.scrollY + vh - margin) {
+          top = touch.pageY - th - 15;
+        }
+        if (top < window.scrollY + margin) {
+          top = window.scrollY + margin;
+        }
+        tooltip.style('left', left + 'px').style('top', top + 'px');
+      };
+
+      svg.selectAll('path.danbooru-grass-pie-path')
+        .on('touchstart', function(event) { handleSliceTouch(event as TouchEvent); })
+        .on('touchmove', function(event) { handleSliceTouch(event as TouchEvent); });
+
+      // Tooltip tap → navigate
+      tooltip.on('click', () => {
+        if (lastTouchedPieDatum) {
+          handlePieClick(lastTouchedPieDatum);
+          tooltip.style('opacity', 0);
+          lastTouchedPieDatum = null;
+        }
+      });
+
+      // Outside tap → close tooltip + reset slices
+      document.addEventListener('touchstart', (e) => {
+        const tooltipEl = tooltip.node() as HTMLElement;
+        const svgEl = svg.node() as Element;
+        if (tooltipEl && !tooltipEl.contains(e.target as Node) && !svgEl?.contains(e.target as Node)) {
+          tooltip.style('opacity', 0);
+          svg.selectAll('path.danbooru-grass-pie-path')
+            .transition().duration(200)
+            .attr('d', (td: unknown) => arc(td as d3.PieArcDatum<PieSlice>) ?? '')
+            .style('opacity', '0.9')
+            .style('filter', 'none');
+          lastTouchedPieDatum = null;
+        }
+      }, {passive: true});
+    }
 
     const legendDiv = pieContent.querySelector('.danbooru-grass-legend-scroll');
     if (legendDiv) {
@@ -719,8 +836,8 @@ export function renderTopPostsWidget(
     const charLine = createTagLine('Char', '👤', data.tag_string_character);
 
     contentDiv.innerHTML = `
-      <div style="display:flex; gap:15px; align-items:flex-start;">
-          <a href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden; position:relative;">
+      <div class="di-top-post-layout" style="display:flex; gap:15px; align-items:flex-start;">
+          <a class="di-top-post-thumb" href="${link}" target="_blank" style="display:block; width:150px; height:150px; flex-shrink:0; background:#eee; border-radius:4px; overflow:hidden; position:relative;">
               <img src="${thumbUrl}" style="width:100%; height:100%; object-fit:cover;" alt="#${data.id}">
           </a>
           <div style="flex:1;">
@@ -1022,6 +1139,8 @@ export async function renderHistoryChart(
     minDate = levelChanges[0].date;
   }
 
+  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
   const monthly = await (new AnalyticsDataManager(db)).getMonthlyStats(context.targetUser as any, minDate);
   if (monthly.length === 0) return;
 
@@ -1192,14 +1311,23 @@ export async function renderHistoryChart(
           animClass = 'star-shiny';
         }
 
-        svg += `
-             <a href="/posts/${m.post.id}" target="_blank" style="cursor: pointer; pointer-events: all;" onclick="event.stopPropagation()">
-                <text class="${animClass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${fill}" stroke="${stroke}" stroke-width="0.5" style="${style}">
+        if (isTouchDevice) {
+          svg += `
+               <text class="${animClass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${fill}" stroke="${stroke}" stroke-width="0.5" style="${style}; pointer-events: none;">
                    ★
                    <title>Milestone #${m.index} (${new Date(m.post.created_at).toLocaleDateString()})</title>
-                </text>
-             </a>
-           `;
+               </text>
+             `;
+        } else {
+          svg += `
+               <a href="/posts/${m.post.id}" target="_blank" style="cursor: pointer; pointer-events: all;" onclick="event.stopPropagation()">
+                  <text class="${animClass}" x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="12" fill="${fill}" stroke="${stroke}" stroke-width="0.5" style="${style}">
+                     ★
+                     <title>Milestone #${m.index} (${new Date(m.post.created_at).toLocaleDateString()})</title>
+                  </text>
+               </a>
+             `;
+        }
       });
     }
   });

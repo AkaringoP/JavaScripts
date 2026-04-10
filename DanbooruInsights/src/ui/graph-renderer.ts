@@ -226,6 +226,7 @@ export class GraphRenderer {
         document.addEventListener('mousemove', onMouseMove);
         document.addEventListener('mouseup', onMouseUp);
       };
+      handle.className = 'di-grass-handle';
       return handle;
     };
 
@@ -1282,6 +1283,38 @@ export class GraphRenderer {
               .style('top', top + 'px');
           };
 
+          // Helper: Touch-compatible tooltip positioning
+          const updateTooltipTouch = (touch: Touch, content: string): void => {
+            tooltip.style('opacity', 1).html(content);
+
+            const node = tooltip.node();
+            if (!node) return;
+
+            const rect = (node as HTMLElement).getBoundingClientRect();
+            const viewportWidth = window.innerWidth;
+            const scrollY = window.scrollY || window.pageYOffset;
+
+            // Default Position: Right (+10), Top (-28) — mirror updateTooltip
+            let left = touch.pageX + 10;
+            let top = touch.pageY - 28;
+
+            // Check for Right Overflow
+            if (left + rect.width > viewportWidth - 20) {
+              left = touch.pageX - (rect.width / 2);
+              top = touch.pageY - rect.height - 15;
+              if (left < 5) left = 5;
+            }
+
+            // Keep tooltip above viewport top
+            if (top < scrollY + 5) top = scrollY + 5;
+
+            tooltip
+              .style('left', left + 'px')
+              .style('top', top + 'px');
+          };
+
+          const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
           // --- Auto-Scroll to Current Date (Refined) ---
           const scrollContainer = document.getElementById('cal-heatmap-scroll');
           if (scrollContainer && !skipScroll) {
@@ -1307,6 +1340,12 @@ export class GraphRenderer {
           }
 
           // 1. Tooltips for Graph Cells
+          if (isTouchDevice) {
+            tooltip.style('pointer-events', 'auto').style('cursor', 'pointer');
+          }
+
+          let lastTouchedDatum: CalHeatmapDatum | null = null;
+
           d3.selectAll('#cal-heatmap-scroll rect')
             .attr('rx', 2).attr('ry', 2) // Apply border radius
             .on('mouseover', function (event, d) {
@@ -1321,6 +1360,7 @@ export class GraphRenderer {
             })
             .on('mouseout', () => tooltip.style('opacity', 0))
             .on('click', (event, d) => {
+              if (isTouchDevice) return; // Mobile: click disabled, navigation via tooltip
               const datum = d;
               if (!datum || !(datum as CalHeatmapDatum).t) {
                 return;
@@ -1336,6 +1376,56 @@ export class GraphRenderer {
                 if (link) window.open(link, '_blank');
               }
             });
+
+          if (isTouchDevice) {
+            d3.selectAll('#cal-heatmap-scroll rect')
+              .on('touchstart', function(event: TouchEvent) {
+                const touch = event.touches[0];
+                const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                if (!target) return;
+                const datum = d3.select(target).datum() as CalHeatmapDatum;
+                if (!datum || !datum.t) return;
+
+                lastTouchedDatum = datum;
+                const count = datum.v ?? 0;
+                const dateStr = new Date(datum.t).toISOString().split('T')[0];
+                updateTooltipTouch(touch, `<strong>${dateStr}</strong>, ${count} ${metric}`);
+              })
+              .on('touchmove', function(event: TouchEvent) {
+                const touch = event.touches[0];
+                const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                if (!target) return;
+                const datum = d3.select(target).datum() as CalHeatmapDatum;
+                if (!datum || !datum.t) return;
+
+                lastTouchedDatum = datum;
+                const count = datum.v ?? 0;
+                const dateStr = new Date(datum.t).toISOString().split('T')[0];
+                updateTooltipTouch(touch, `<strong>${dateStr}</strong>, ${count} ${metric}`);
+              });
+
+            // Tooltip tap → navigate
+            tooltip.on('click', () => {
+              if (!lastTouchedDatum) return;
+              const count = lastTouchedDatum.v ?? 0;
+              const dateStr = new Date(lastTouchedDatum.t).toISOString().split('T')[0];
+              const link = getUrl(dateStr, count);
+              if (link && link !== '#') window.open(link, '_blank');
+              tooltip.style('opacity', 0);
+              lastTouchedDatum = null;
+            });
+
+            // Tap outside tooltip and cells → close it
+            document.addEventListener('touchstart', (e: TouchEvent) => {
+              const tooltipEl = tooltip.node() as HTMLElement | null;
+              const target = e.target as Node;
+              const heatmapEl = document.getElementById('cal-heatmap-scroll');
+              if (tooltipEl && !tooltipEl.contains(target) && !heatmapEl?.contains(target)) {
+                tooltip.style('opacity', 0);
+                lastTouchedDatum = null;
+              }
+            }, {passive: true});
+          }
 
           // 2. Tooltips for Legend Cells
           // Calculate ranges based on thresholds [t1, t2, t3, t4]

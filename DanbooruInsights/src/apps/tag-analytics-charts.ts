@@ -382,28 +382,24 @@ export class TagAnalyticsChartRenderer {
       card.className = 'di-milestone-card di-nsfw-monitor';
       card.setAttribute('data-rating', p.rating);
       card.style.background = '#fff';
-      card.style.border = '1px solid #ddd';
-      card.style.borderRadius = '8px';
-      card.style.padding = '10px';
-      card.style.display = 'flex';
-      card.style.flexDirection = 'column';
+      card.style.border = '1px solid #e1e4e8';
+      card.style.borderRadius = '6px';
+      card.style.padding = '10px 80px 10px 10px';
+      card.style.position = 'relative';
+      card.style.minHeight = '80px';
       card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)';
       card.classList.add('di-hover-translate-up');
 
       card.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                <div>
-                    <div style="font-size: 0.8em; color: #888; margin-bottom: 3px; text-transform: uppercase;">#${p.id}</div>
-                    <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.2em; color: #007bff; text-decoration: none; display: block; margin-bottom: 3px;">${label}</a>
-                    <div style="font-size: 0.85em; color: #555;">${dateStr}</div>
-                </div>
-                <a href="/posts/${p.id}" target="_blank" style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; flex-shrink: 0; background: #eee; margin-left: 10px;">
-                    <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
-                </a>
-            </div>
-            <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
+            <div style="font-size: 0.8em; color: #888; letter-spacing: 0.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">#${p.id}</div>
+            <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.1em; color: #0969da; text-decoration: none; display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${label}</a>
+            <div style="font-size: 0.8em; color: #555; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${dateStr}</div>
+            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                 <a href="/users/${p.uploader_id}" target="_blank" class="${getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
             </div>
+            <a href="/posts/${p.id}" target="_blank" style="position: absolute; top: 10px; right: 10px; width: 60px; height: 60px; border-radius: 4px; overflow: hidden; background: #f0f0f0; display: block;">
+                <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+            </a>
         `;
 
       const link = card.querySelector('.di-milestone-link');
@@ -801,9 +797,11 @@ export class TagAnalyticsChartRenderer {
       );
 
     // X Axis
+    const tickCount = width < 400 ? 3 : width < 600 ? 5 : undefined;
     svg.append("g")
       .attr("transform", `translate(0,${height - margin.top - margin.bottom})`)
       .call(d3.axisBottom(x)
+        .ticks(tickCount)
         .tickFormat(d => {
           // D3 time scale uses Date objects for ticks.
           // We want YYYY-MM-DD local string if possible, or just YYYY if not enough space?
