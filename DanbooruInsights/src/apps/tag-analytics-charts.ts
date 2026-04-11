@@ -329,7 +329,11 @@ export class TagAnalyticsChartRenderer {
    * @param {!Array<{milestone: number, post: ?Object}>} milestonePosts The list of milestone data.
    * @param {function(): void} onNsfwUpdate Callback to apply NSFW visibility after rendering.
    */
-  renderMilestones(milestonePosts: any[], onNsfwUpdate: () => void): void {
+  renderMilestones(
+    milestonePosts: any[],
+    onNsfwUpdate: () => void,
+    nextMilestone?: {totalPosts: number; nextTarget: number}
+  ): void {
     const grid = document.querySelector('#tag-analytics-milestones .milestones-grid');
     const toggleBtn = document.getElementById('tag-milestones-toggle');
     const loading = document.querySelector('#milestones-loading');
@@ -407,6 +411,67 @@ export class TagAnalyticsChartRenderer {
 
       grid.appendChild(card);
     });
+
+    // Append the "next milestone" placeholder card (always last in the grid).
+    //
+    // Progress calculation uses **option A**: lastReached = the milestone
+    // value of the last entry in the fetched `milestonePosts` array. This
+    // is the simplest and matches what the user sees in the grid.
+    //
+    // **Option C** (alternative, not used): compute lastReached as "the
+    // milestone immediately before next in the theoretical sequence" via a
+    // pure helper. The two options produce identical results in every
+    // realistic case — they only diverge in pathological cases where a
+    // milestone post failed to fetch. Switch to option C only if we ever
+    // decouple the progress card from the fetched post list.
+    if (nextMilestone && nextMilestone.nextTarget > nextMilestone.totalPosts) {
+      const total = nextMilestone.totalPosts;
+      const next = nextMilestone.nextTarget;
+      const remaining = next - total;
+      const lastReached = milestonePosts.length > 0
+        ? milestonePosts[milestonePosts.length - 1].milestone
+        : 0;
+      const span = next - lastReached;
+      const progressPct = span > 0
+        ? Math.max(0, Math.min(100, ((total - lastReached) / span) * 100))
+        : 0;
+
+      let nextLabel = `#${next.toLocaleString()}`;
+      if (next === 1) nextLabel = 'First';
+      else if (next >= 1000000) {
+        const val = next / 1000000;
+        nextLabel = `${Number.isInteger(val) ? val : val.toFixed(1).replace(/\.0$/, '')} M`;
+      } else if (next >= 1000) {
+        const val = next / 1000;
+        nextLabel = `${val} k`;
+      }
+
+      const nextCard = document.createElement('div');
+      nextCard.className = 'di-next-milestone-card';
+      nextCard.style.background = '#f6f8fa';
+      nextCard.style.border = '1px dashed #d0d7de';
+      nextCard.style.borderRadius = '6px';
+      nextCard.style.padding = '10px';
+      nextCard.style.minHeight = '80px';
+      nextCard.style.display = 'flex';
+      nextCard.style.flexDirection = 'column';
+      nextCard.style.justifyContent = 'space-between';
+      nextCard.style.color = '#57606a';
+      nextCard.innerHTML = `
+        <div>
+          <div style="font-size: 0.7em; color: #888; letter-spacing: 0.3px; text-transform: uppercase;">Next</div>
+          <div style="font-weight: bold; font-size: 1.1em; color: #57606a; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${nextLabel}</div>
+          <div style="font-size: 0.8em; color: #666; margin-top: 4px;">${remaining.toLocaleString()} remaining</div>
+        </div>
+        <div style="margin-top: 6px;">
+          <div style="height: 6px; background: #e1e4e8; border-radius: 3px; overflow: hidden;">
+            <div style="width: ${progressPct.toFixed(1)}%; height: 100%; background: #0969da;"></div>
+          </div>
+          <div style="font-size: 0.7em; color: #888; margin-top: 3px; text-align: right;">${progressPct.toFixed(0)}%</div>
+        </div>
+      `;
+      grid.appendChild(nextCard);
+    }
 
     // Apply NSFW Settings
     onNsfwUpdate();
