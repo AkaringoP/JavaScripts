@@ -8,6 +8,7 @@ import {renderPieWidget, renderTopPostsWidget, renderMilestonesWidget, renderHis
 import {renderScatterPlot} from './user-analytics-scatter';
 import {renderTagCloudWidget} from './tag-cloud-widget';
 import {renderCreatedTagsWidget} from './created-tags-widget';
+import {dashboardFooterHtml} from '../ui/dashboard-footer';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
 
@@ -95,6 +96,20 @@ export class UserAnalyticsApp {
     // Close on click outside
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
+        this.toggleModal(false);
+      }
+    });
+
+    // Close on Escape key
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && overlay.classList.contains('visible')) {
+        this.toggleModal(false);
+      }
+    });
+
+    // Close on browser back button (mobile-friendly)
+    window.addEventListener('popstate', () => {
+      if (overlay.classList.contains('visible') && history.state?.diModalOpen !== this.modalId) {
         this.toggleModal(false);
       }
     });
@@ -440,6 +455,11 @@ export class UserAnalyticsApp {
     if (!overlay) return;
 
     if (show) {
+      // Push history state for back button support
+      if (history.state?.diModalOpen !== this.modalId) {
+        history.pushState({diModalOpen: this.modalId}, '', location.href);
+      }
+
       overlay.style.display = 'flex';
       // slight delay to allow display:flex to apply before opacity transition
       requestAnimationFrame(() => {
@@ -452,6 +472,14 @@ export class UserAnalyticsApp {
       // We will perform this check in renderDashboard
       this.renderDashboard();
     } else {
+      // If history state still belongs to us, route through history.back()
+      // so the URL stays in sync. The popstate listener will re-enter this
+      // branch with state cleared and run the actual hide logic.
+      if (history.state?.diModalOpen === this.modalId) {
+        history.back();
+        return;
+      }
+
       overlay.classList.remove('visible');
       setTimeout(() => {
         overlay.style.display = 'none';
@@ -683,7 +711,7 @@ export class UserAnalyticsApp {
 
       // Pre-fetch all data!
       const dashboardData = await this.dataService.fetchDashboardData(this.context);
-      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral } = dashboardData;
+      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral, userStats, needsBackfill, dataManager } = dashboardData;
       const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
       const today = new Date();
       const oneDay = 1000 * 60 * 60 * 24;
@@ -927,6 +955,7 @@ export class UserAnalyticsApp {
 
       // Summary Card Wrapper
       const summaryWrapper = document.createElement('div');
+      summaryWrapper.className = 'di-summary-grid';
       summaryWrapper.style.display = 'grid';
       summaryWrapper.style.gridTemplateColumns = 'repeat(auto-fit, minmax(300px, 1fr))';
       summaryWrapper.style.gap = '15px';
@@ -1016,7 +1045,7 @@ export class UserAnalyticsApp {
                      <!-- All Time Pane -->
                      <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-a;">
                         <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">TOTAL UPLOADS</div>
-                        <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="di-upload-card-inner" style="display:flex; align-items:center; gap:12px;">
                             <div style="font-size:1.5em; font-weight:bold; color:#333;">${stats.count.toLocaleString()}</div>
                             <div style="font-size:0.85em; color:#555;">${uploadDetailsAll}</div>
                         </div>
@@ -1025,7 +1054,7 @@ export class UserAnalyticsApp {
                      <!-- Last 1 Year Pane -->
                      <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-b;">
                         <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">LAST 1 YEAR</div>
-                        <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="di-upload-card-inner" style="display:flex; align-items:center; gap:12px;">
                             <div style="font-size:1.5em; font-weight:bold; color:#333;">${(count1Year || 0).toLocaleString()}</div>
                             <div style="font-size:0.85em; color:#555;">${uploadDetails1Year}</div>
                         </div>
@@ -1034,7 +1063,7 @@ export class UserAnalyticsApp {
                      <!-- Consistency Pane -->
                      <div class="di-upload-card-pane" style="grid-area: 1 / 1; animation-name: di-slide-in-out-c;">
                         <div style="font-size:0.85em; color:#666; text-transform:uppercase; letter-spacing:0.5px;">UPLOAD HABITS</div>
-                        <div style="display:flex; align-items:center; gap:12px;">
+                        <div class="di-upload-card-inner" style="display:flex; align-items:center; gap:12px;">
                             <div style="font-size:0.85em; color:#555; margin-left: -12px;">${consistencyDetails}</div>
                         </div>
                      </div>
@@ -1133,7 +1162,7 @@ export class UserAnalyticsApp {
       tlEvents.sort((a, b) => a.date.getTime() - b.date.getTime());
 
       const timelineRows = tlEvents.map(ev =>
-        `<div style="white-space:nowrap;">${ev.html}</div>`
+        `<div class="di-timeline-row" style="white-space:nowrap;">${ev.html}</div>`
       ).join('');
 
       // Details for Card 2 — scrollable timeline (3 rows visible by default).
@@ -1277,10 +1306,21 @@ export class UserAnalyticsApp {
 
       // 6. Scatter Plot Widget
       if (scatterData.length > 0) {
-        renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges);
+        renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges, {
+          userStats,
+          needsBackfill,
+          runBackfill: needsBackfill
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            ? (onProgress) => dataManager.backfillPostMetadata(this.context.targetUser!, onProgress)
+            : undefined,
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          refreshScatterData: () => dataManager.getScatterData(this.context.targetUser!),
+          fetchPostDetails: (postId: number) => dataManager.fetchPostDetails(postId),
+        });
       }
 
-
+      // 7. Footer credit (always last)
+      dashboardDiv.insertAdjacentHTML('beforeend', dashboardFooterHtml());
 
       // Update header status (ensure it's green if ready)
       this.updateHeaderStatus();

@@ -53,7 +53,9 @@ export class UserAnalyticsDataService {
       scatterData,
       levelChanges,
       timelineMilestones,
-      tagCloudGeneral
+      tagCloudGeneral,
+      userStats,
+      needsBackfill
     ] = await Promise.all([
       dataManager.getSyncStats(user),
       dataManager.getTotalPostCount(user),
@@ -79,7 +81,9 @@ export class UserAnalyticsDataService {
       dataManager.getScatterData(user),
       dataManager.getLevelChangeHistory(user),
       dataManager.getTimelineMilestones(user),
-      dataManager.getTagCloudData(user, 0) // General category pre-fetch
+      dataManager.getTagCloudData(user, 0), // General category pre-fetch
+      dataManager.getUserStats(user),
+      dataManager.needsPostMetadataBackfill(user)
     ]);
 
     return {
@@ -94,7 +98,10 @@ export class UserAnalyticsDataService {
       scatterData,
       levelChanges,
       timelineMilestones,
-      tagCloudGeneral
+      tagCloudGeneral,
+      userStats,
+      needsBackfill,
+      dataManager
     };
   }
 }

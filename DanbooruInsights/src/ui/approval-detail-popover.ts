@@ -1,15 +1,19 @@
+import {attachPostHoverCard, hidePostHoverCard} from './post-hover-card';
+
 /**
  * Shows a paginated popover listing approval post IDs for a given date.
  * @param {any} db The Dexie database instance.
  * @param {string} dateStr YYYY-MM-DD
  * @param {string|number} userId The user's ID.
  * @param {MouseEvent} event The triggering mouse event.
+ * @param {Function} fetchPostDetails Optional fetcher used by the hover preview card.
  */
 export async function showApprovalsDetail(
   db: any,
   dateStr: string,
   userId: string | number,
-  event: MouseEvent
+  event: MouseEvent,
+  fetchPostDetails?: (postId: number) => Promise<any | null>,
 ): Promise<void> {
   const popoverId = 'danbooru-approvals-popover';
   let pop = document.getElementById(popoverId);
@@ -65,7 +69,10 @@ export async function showApprovalsDetail(
           </div>
         `;
 
-    (pop!.querySelector('.close-btn') as HTMLElement).onclick = () => { pop!.style.display = 'none'; };
+    (pop!.querySelector('.close-btn') as HTMLElement).onclick = () => {
+      pop!.style.display = 'none';
+      hidePostHoverCard();
+    };
     (pop!.querySelector('#popover-prev') as HTMLElement).onclick = (e) => {
       e.stopPropagation();
       renderPage(currentPage - 1);
@@ -74,6 +81,18 @@ export async function showApprovalsDetail(
       e.stopPropagation();
       renderPage(currentPage + 1);
     };
+
+    // Attach hover preview cards (debounced + cached, desktop only).
+    // Position next to the popover so the card doesn't overlap the list.
+    if (fetchPostDetails) {
+      pop!.querySelectorAll('.post-link').forEach((linkEl) => {
+        const a = linkEl as HTMLAnchorElement;
+        const match = a.getAttribute('href')?.match(/\/posts\/(\d+)/);
+        if (!match) return;
+        const id = parseInt(match[1]);
+        if (id) attachPostHoverCard(a, id, fetchPostDetails, pop!);
+      });
+    }
   };
 
   renderPage(1);
@@ -109,6 +128,7 @@ export async function showApprovalsDetail(
   const closeHandler = (e: MouseEvent) => {
     if (!pop!.contains(e.target as Node)) {
       pop!.style.setProperty('display', 'none', 'important');
+      hidePostHoverCard();
       document.removeEventListener('mousedown', closeHandler);
     }
   };

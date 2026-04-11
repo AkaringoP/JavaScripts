@@ -6,6 +6,7 @@ import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 import {TagAnalyticsDataService} from './tag-analytics-data';
 import {TagAnalyticsChartRenderer} from './tag-analytics-charts';
+import {dashboardFooterHtml} from '../ui/dashboard-footer';
 
 export class TagAnalyticsApp {
   db: Database;
@@ -1022,9 +1023,9 @@ export class TagAnalyticsApp {
     modal.style.alignItems = "center";
 
     modal.innerHTML = `
-          <div style="background: white; padding: 20px; border-radius: 8px; width: 80%; max-width: 800px; max-height: 90vh; overflow-y: auto; position: relative;">
-              <button id="tag-analytics-close" style="position: absolute; top: 10px; right: 10px; background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
-              <div id="tag-analytics-content">
+          <div style="background: white; border-radius: 8px; width: 80%; max-width: 800px; max-height: 90vh; position: relative; display: flex; flex-direction: column;">
+              <button id="tag-analytics-close" style="position: absolute; top: 10px; right: 10px; background: none; border: none; font-size: 1.5rem; cursor: pointer; z-index: 10;">&times;</button>
+              <div id="tag-analytics-content" style="padding: 20px; overflow-y: auto; flex: 1; min-height: 0; -webkit-overflow-scrolling: touch;">
                   <h2>Loading...</h2>
               </div>
           </div>
@@ -1045,6 +1046,13 @@ export class TagAnalyticsApp {
         this.toggleModal(false);
       }
     });
+
+    // Close on browser back button (mobile-friendly)
+    window.addEventListener('popstate', () => {
+      if (modal.style.display !== 'none' && history.state?.diModalOpen !== 'tag-analytics-modal') {
+        this.toggleModal(false);
+      }
+    });
   }
 
   /**
@@ -1057,12 +1065,24 @@ export class TagAnalyticsApp {
     }
     const modal = document.getElementById("tag-analytics-modal");
     if (!modal) return;
-    modal.style.display = show ? "flex" : "none";
+
     if (show) {
+      // Push history state for back button support
+      if (history.state?.diModalOpen !== 'tag-analytics-modal') {
+        history.pushState({diModalOpen: 'tag-analytics-modal'}, '', location.href);
+      }
+      modal.style.display = "flex";
       document.body.style.overflow = "hidden";
       const closeBtn = document.getElementById("tag-analytics-close");
       if (closeBtn) closeBtn.focus();
     } else {
+      // If history state still belongs to us, route through history.back().
+      // The popstate listener will re-enter this branch with state cleared.
+      if (history.state?.diModalOpen === 'tag-analytics-modal') {
+        history.back();
+        return;
+      }
+      modal.style.display = "none";
       document.body.style.overflow = "";
       this.chartRenderer.cleanup();
       // Remove any lingering area chart tooltips appended to body
@@ -1131,7 +1151,7 @@ export class TagAnalyticsApp {
    */
   private buildDashboardHeader(tagData: any, titleColor: string, categoryLabel: string): string {
     return `
-      <div style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
+      <div class="di-tag-header" style="border-bottom: 1px solid #eee; padding-bottom: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: flex-end;">
           <div>
               <h2 style="margin: 0 0 5px 0; color: ${titleColor};">${escapeHtml(tagData.name.replace(/_/g, ' '))}</h2>
               <div style="display: flex; align-items: center; gap: 10px;">
@@ -1337,6 +1357,7 @@ export class TagAnalyticsApp {
       ${this.buildMainGrid(tagData)}
       ${this.buildRankingsSection(tagData)}
       ${this.buildBottomSections()}
+      ${dashboardFooterHtml()}
     `;
 
     // Inject Header Controls (Settings, Reset)
@@ -1370,13 +1391,15 @@ export class TagAnalyticsApp {
 
         // Use totalCount from meta (tagData)
         const targets = this.dataService.getMilestoneTargets(tagData.post_count);
+        const nextTarget = this.dataService.getNextMilestoneTarget(tagData.post_count);
+        const nextInfo = {totalPosts: tagData.post_count, nextTarget};
 
         if (tagData.precalculatedMilestones) {
-          this.chartRenderer.renderMilestones(tagData.precalculatedMilestones, () => this.updateNsfwVisibility());
+          this.chartRenderer.renderMilestones(tagData.precalculatedMilestones, () => this.updateNsfwVisibility(), nextInfo);
         } else {
           // Pass tagName, totalCount, targets
           this.dataService.fetchMilestones(tagData.name, [], targets).then((milestonePosts: any) => {
-            this.chartRenderer.renderMilestones(milestonePosts, () => this.updateNsfwVisibility());
+            this.chartRenderer.renderMilestones(milestonePosts, () => this.updateNsfwVisibility(), nextInfo);
           });
         }
       }

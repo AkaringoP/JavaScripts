@@ -1,5 +1,6 @@
 import {defineConfig} from 'vite';
 import monkey from 'vite-plugin-monkey';
+import {APP_VERSION} from './src/version';
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -9,7 +10,7 @@ export default defineConfig({
       userscript: {
         name: 'Danbooru Insights',
         namespace: 'http://tampermonkey.net/',
-        version: '8.1.0',
+        version: APP_VERSION,
         description:
           'Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile and wiki pages.',
         author: 'AkaringoP with Claude Code',

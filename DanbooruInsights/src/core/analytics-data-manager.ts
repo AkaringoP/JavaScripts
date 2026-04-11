@@ -3,7 +3,7 @@ import type {ApiItem} from './data-manager';
 import type {RateLimitedFetch} from './rate-limiter';
 import {CONFIG} from '../config';
 import {isTopLevelTag, getBestThumbnailUrl} from '../utils';
-import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem, CreatedTagItem} from '../types';
+import type {TargetUser, DistributionItem, SyncProgress, ScatterDataPoint, TagCloudItem, CreatedTagItem, UserStatsRecord} from '../types';
 
 /** Summary statistics for a user's upload history. */
 export interface SummaryStats {
@@ -311,14 +311,13 @@ export class AnalyticsDataManager extends DataManager {
    * @param {(string|number)=} customStep Step interval ('auto' or a number).
    * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
    */
-  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
-    const uploaderId = parseInt(userInfo.id ?? '0');
-    if (!uploaderId) return [];
-
-    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
-    if (total === 0) return [];
-
-    // Define Milestones based on Total Count logic
+  /**
+   * Builds the milestone target sequence (numeric values only) for a given
+   * total post count and step mode. Used by both `getMilestones` (to look up
+   * cached posts at those target positions) and `getNextMilestone` (to find
+   * the smallest target above the current total). Pure / no DB access.
+   */
+  buildMilestoneTargets(total: number, customStep: 'auto' | 'repdigit' | number): number[] {
     let targets: number[] = [];
 
     if (customStep === 'repdigit') {
@@ -349,7 +348,6 @@ export class AnalyticsDataManager extends DataManager {
       else if (total <= 10000) {
         targets.push(1);
         if (total >= 100) targets.push(100);
-        // Step 500 starting from 500
         for (let i = 500; i <= total; i += 500) {
           targets.push(i);
         }
@@ -359,7 +357,6 @@ export class AnalyticsDataManager extends DataManager {
         targets.push(1);
         if (total >= 100) targets.push(100);
         if (total >= 1000) targets.push(1000);
-
         for (let i = 5000; i <= total; i += 5000) {
           targets.push(i);
         }
@@ -369,7 +366,6 @@ export class AnalyticsDataManager extends DataManager {
         targets.push(1);
         if (total >= 100) targets.push(100);
         if (total >= 1000) targets.push(1000);
-
         for (let i = 2500; i <= total; i += 2500) {
           targets.push(i);
         }
@@ -384,8 +380,56 @@ export class AnalyticsDataManager extends DataManager {
       }
     }
 
-    // Ensure unique and sort ASC
-    targets = [...new Set(targets)].sort((a, b) => a - b);
+    return [...new Set(targets)].sort((a, b) => a - b);
+  }
+
+  /**
+   * Computes the next (un-reached) milestone target above `total`. Used by
+   * the placeholder card at the end of the milestones grid. Returns null if
+   * the mode genuinely has no next value (it shouldn't, but kept defensive).
+   */
+  getNextMilestone(total: number, customStep: 'auto' | 'repdigit' | number): number | null {
+    if (customStep === 'repdigit') {
+      // Repdigits below 11: 1 → 11 → 111 → 222 → ... → 999 → 1111 → ...
+      if (total < 1) return 1;
+      if (total < 11) return 11;
+      for (let digits = 3; digits <= 7; digits++) {
+        for (let d = 1; d <= 9; d++) {
+          const num = parseInt(String(d).repeat(digits));
+          if (num > total) return num;
+        }
+      }
+      return null;
+    }
+
+    if (customStep !== 'auto' && typeof customStep === 'number') {
+      const step = customStep;
+      if (total < 1) return 1;
+      // Next multiple of step strictly greater than total
+      return Math.floor(total / step) * step + step;
+    }
+
+    // Auto mode — pick the step the same way buildMilestoneTargets would
+    // for the *next* count and find the smallest milestone > total.
+    if (total < 1) return 1;
+    if (total < 100) return 100;
+    let step: number;
+    if (total < 1500) step = 100;
+    else if (total <= 10000) step = 500;
+    else if (total <= 50000) step = 1000;
+    else if (total <= 100000) step = 2500;
+    else step = 5000;
+    return Math.floor(total / step) * step + step;
+  }
+
+  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
+    const uploaderId = parseInt(userInfo.id ?? '0');
+    if (!uploaderId) return [];
+
+    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+    if (total === 0) return [];
+
+    const targets = this.buildMilestoneTargets(total, customStep);
 
     // Use compound index [uploader_id+no] to fetch only this user's posts at the target positions
     const matches: ApiItem[] = await this.db.posts
@@ -1405,11 +1449,210 @@ export class AnalyticsDataManager extends DataManager {
       const r = post['rating'];
       const s = post['score'] || 0;
       const t = post['tag_count_general'] || 0;
+      const dn = post['down_score'];
+      const del = post['is_deleted'];
+      const ban = post['is_banned'];
 
-      result.push({ id: post['id'], d, s, t, r });
+      result.push({ id: post['id'], d, s, t, r, dn, del, ban });
     });
 
     return result;
+  }
+
+  /**
+   * Checks whether any of the user's cached posts are missing metadata fields
+   * introduced after the initial schema (down_score / is_deleted / is_banned).
+   * Uses a single localStorage flag to short-circuit on subsequent loads once
+   * the backfill has fully completed for this user.
+   */
+  async needsPostMetadataBackfill(userInfo: TargetUser): Promise<boolean> {
+    const uploaderId = parseInt(userInfo.id ?? '0');
+    if (!uploaderId) return false;
+
+    const flagKey = `di_post_metadata_v2_${uploaderId}`;
+    if (localStorage.getItem(flagKey) === '1') return false;
+
+    // Walk all posts and stop on the first one lacking any required metadata.
+    // We cannot short-circuit on the first record by index order — a partial
+    // (interrupted) backfill may have populated the earliest posts while
+    // leaving later ones empty, so we must scan until we find a missing one.
+    const missing = await this.db.posts
+      .where('uploader_id')
+      .equals(uploaderId)
+      .filter((p: any) =>
+        p.up_score === undefined ||
+        p.down_score === undefined ||
+        p.is_deleted === undefined ||
+        p.is_banned === undefined
+      )
+      .first();
+
+    if (missing === undefined) {
+      localStorage.setItem(flagKey, '1');
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Backfills the `down_score`, `is_deleted`, and `is_banned` fields on
+   * existing post records for a user. Walks the user's posts in id-order
+   * (cursor pagination) using a minimal `only` parameter so the request is
+   * much lighter than a full re-sync. Updates the score field as well to
+   * keep it in sync with up_score + down_score.
+   *
+   * @param userInfo Target user
+   * @param onProgress Optional progress callback (current, total)
+   */
+  async backfillPostMetadata(
+    userInfo: TargetUser,
+    onProgress?: (current: number, total: number) => void
+  ): Promise<void> {
+    const uploaderId = parseInt(userInfo.id ?? '0');
+    if (!uploaderId) return;
+
+    const flagKey = `di_post_metadata_v2_${uploaderId}`;
+
+    // Pull all of this user's posts and find ones lacking any required field
+    const allPosts: any[] = await this.db.posts.where('uploader_id').equals(uploaderId).toArray();
+    const needsUpdate = allPosts.filter(p =>
+      p.up_score === undefined ||
+      p.down_score === undefined ||
+      p.is_deleted === undefined ||
+      p.is_banned === undefined
+    );
+    if (needsUpdate.length === 0) {
+      localStorage.setItem(flagKey, '1');
+      return;
+    }
+
+    const total = needsUpdate.length;
+    let updated = 0;
+    if (onProgress) onProgress(0, total);
+
+    // Index by id for O(1) lookup during merge. Use a loop for minId to
+    // avoid call-stack overflow on very large arrays (spread operator limit).
+    const byId = new Map<number, any>();
+    let minId = Infinity;
+    for (const p of needsUpdate) {
+      byId.set(p.id, p);
+      if (p.id < minId) minId = p.id;
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const limit = 200;
+    let lastId = minId - 1;
+    let hasMore = true;
+
+    while (hasMore && updated < total) {
+      const params = new URLSearchParams({
+        tags: `user:${normalizedName} status:any id:>${lastId} order:id`,
+        limit: String(limit),
+        only: 'id,up_score,down_score,is_deleted,is_banned'
+      } as any);
+      const url = `/posts.json?${params.toString()}`;
+
+      let batch: any[];
+      try {
+        const resp = await this.rateLimiter.fetch(url);
+        if (!resp.ok) {
+          console.warn(`[Backfill] HTTP ${resp.status} — pausing backfill`);
+          return;
+        }
+        batch = await resp.json();
+      } catch (e) {
+        console.warn('[Backfill] Fetch failed:', e);
+        return; // Will retry on next dashboard open
+      }
+
+      if (!Array.isArray(batch) || batch.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      const updates: any[] = [];
+      for (const p of batch) {
+        const existing = byId.get(p.id);
+        if (!existing) continue;
+
+        const ds = p.down_score ?? 0;
+        const us = p.up_score ?? 0;
+        updates.push({
+          ...existing,
+          score: us + ds,
+          up_score: us,
+          down_score: ds,
+          is_deleted: p.is_deleted ?? false,
+          is_banned: p.is_banned ?? false,
+        });
+        updated++;
+      }
+
+      if (updates.length > 0) {
+        await this.db.posts.bulkPut(updates);
+        if (onProgress) onProgress(updated, total);
+      }
+
+      lastId = batch[batch.length - 1].id;
+      if (batch.length < limit) {
+        hasMore = false;
+      }
+    }
+
+    if (updated >= total) {
+      localStorage.setItem(flagKey, '1');
+    }
+  }
+
+  /**
+   * Fetches user-level aggregate counts (gentags<10 / tagcount<10) used by
+   * the scatter plot Tag Count mode Y=10 click feature. Cached in the
+   * `user_stats` table with a 24h expiry.
+   *
+   * @param userInfo Target user
+   * @param force If true, ignore cache and refetch
+   */
+  async getUserStats(userInfo: TargetUser, force = false): Promise<{gentags_lt_10: number; tagcount_lt_10: number} | null> {
+    const userId = userInfo.id;
+    if (!userId) return null;
+
+    if (!force) {
+      const cached = await this.db.user_stats.get(userId);
+      if (cached && Date.now() - cached.updated_at < 24 * 60 * 60 * 1000) {
+        return {gentags_lt_10: cached.gentags_lt_10, tagcount_lt_10: cached.tagcount_lt_10};
+      }
+    }
+
+    const normalizedName = userInfo.name.replace(/ /g, '_');
+    const fetchCount = async (tagQuery: string): Promise<number> => {
+      try {
+        const params = new URLSearchParams({tags: tagQuery});
+        const url = `/counts/posts.json?${params.toString()}`;
+        const resp = await this.rateLimiter.fetch(url);
+        if (!resp.ok) return 0;
+        const data = await resp.json();
+        return (data && data.counts ? data.counts.posts : (data ? data.posts : 0)) || 0;
+      } catch (e) {
+        console.warn(`[UserStats] count query failed for "${tagQuery}":`, e);
+        return 0;
+      }
+    };
+
+    const [gentags, tagcount] = await Promise.all([
+      fetchCount(`user:${normalizedName} gentags:<10`),
+      fetchCount(`user:${normalizedName} tagcount:<10`),
+    ]);
+
+    const record: UserStatsRecord = {
+      userId,
+      gentags_lt_10: gentags,
+      tagcount_lt_10: tagcount,
+      updated_at: Date.now(),
+    };
+    await this.db.user_stats.put(record);
+
+    return {gentags_lt_10: gentags, tagcount_lt_10: tagcount};
   }
 
   /**
@@ -2262,7 +2505,7 @@ export class AnalyticsDataManager extends DataManager {
               limit,
               page: currentPage,
               'tags': `user:${userInfo.name.replace(/ /g, '_')} order:id id:>${startId}`,
-              'only': 'id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url'
+              'only': 'id,uploader_id,created_at,up_score,down_score,is_deleted,is_banned,rating,tag_count_general,variants,preview_file_url'
             };
             const q = new URLSearchParams(params as any);
             const url = `/posts.json?${q.toString()}`;
@@ -2311,17 +2554,25 @@ export class AnalyticsDataManager extends DataManager {
 
               if (batchItems && batchItems.length > 0) {
                 // Assign Sequential Numbers
-                const bulkData = batchItems.map((p) => ({
-                  id: p.id,
-                  uploader_id: p.uploader_id,
-                  created_at: p.created_at,
-                  score: p.score,
-                  rating: p.rating,
-                  tag_count_general: p.tag_count_general,
-                  variants: p.variants,
-                  preview_file_url: p.preview_file_url,
-                  no: ++currentNo
-                }));
+                const bulkData = batchItems.map((p) => {
+                  const ds = (p as any).down_score ?? 0;
+                  const us = (p as any).up_score ?? 0;
+                  return {
+                    id: p.id,
+                    uploader_id: p.uploader_id,
+                    created_at: p.created_at,
+                    score: us + ds,
+                    up_score: us,
+                    down_score: ds,
+                    is_deleted: (p as any).is_deleted ?? false,
+                    is_banned: (p as any).is_banned ?? false,
+                    rating: p.rating,
+                    tag_count_general: p.tag_count_general,
+                    variants: p.variants,
+                    preview_file_url: p.preview_file_url,
+                    no: ++currentNo
+                  };
+                });
 
                 await this.db.posts.bulkPut(bulkData);
 
@@ -2356,6 +2607,13 @@ export class AnalyticsDataManager extends DataManager {
       // Save "Last Synced Date" metadata
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
       localStorage.setItem(lastSyncKey, new Date().toISOString());
+
+      // Mark post metadata backfill complete for full (fresh) syncs.
+      // Incremental syncs only touch newer posts, so older posts may still
+      // lack the metadata — in that case the backfill mechanism handles them.
+      if (startId === 0) {
+        localStorage.setItem(`di_post_metadata_v2_${uploaderId}`, '1');
+      }
 
       // Auto-cleanup other users' stale data (older than 14 days)
       await this.cleanupStaleData(userInfo.id);
@@ -2421,7 +2679,7 @@ export class AnalyticsDataManager extends DataManager {
           tags: `user:${normalizedName}`,
           limit: String(limit),
           page,
-          only: 'id,uploader_id,created_at,score,rating,tag_count_general,variants,preview_file_url'
+          only: 'id,uploader_id,created_at,up_score,down_score,is_deleted,is_banned,rating,tag_count_general,variants,preview_file_url'
         } as any);
         const url = `/posts.json?${params.toString()}`;
 
@@ -2440,17 +2698,25 @@ export class AnalyticsDataManager extends DataManager {
         }
 
         // Store batch with sequential no values
-        const bulkData = batch.map((p: ApiItem) => ({
-          id: p.id,
-          uploader_id: p.uploader_id,
-          created_at: p.created_at,
-          score: p.score,
-          rating: p.rating,
-          tag_count_general: p.tag_count_general,
-          variants: p.variants,
-          preview_file_url: p.preview_file_url,
-          no: ++no
-        }));
+        const bulkData = batch.map((p: ApiItem) => {
+          const ds = (p as any).down_score ?? 0;
+          const us = (p as any).up_score ?? 0;
+          return {
+            id: p.id,
+            uploader_id: p.uploader_id,
+            created_at: p.created_at,
+            score: us + ds,
+            up_score: us,
+            down_score: ds,
+            is_deleted: (p as any).is_deleted ?? false,
+            is_banned: (p as any).is_banned ?? false,
+            rating: p.rating,
+            tag_count_general: p.tag_count_general,
+            variants: p.variants,
+            preview_file_url: p.preview_file_url,
+            no: ++no
+          };
+        });
 
         await this.db.posts.bulkPut(bulkData);
         reportProgress(no, total);
@@ -2465,6 +2731,11 @@ export class AnalyticsDataManager extends DataManager {
       // 4. Save last sync timestamp
       const lastSyncKey = `danbooru_grass_last_sync_${userInfo.id}`;
       localStorage.setItem(lastSyncKey, new Date().toISOString());
+
+      // 4b. Mark post metadata backfill complete — quickSync writes all
+      // fields directly from the API, so every post record now has the
+      // new metadata (down_score, is_deleted, is_banned).
+      localStorage.setItem(`di_post_metadata_v2_${uploaderId}`, '1');
 
       // 5. Cleanup stale data for other users
       await this.cleanupStaleData(userInfo.id);

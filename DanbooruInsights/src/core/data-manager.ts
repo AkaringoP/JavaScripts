@@ -55,6 +55,27 @@ export class DataManager {
   }
 
   /**
+   * Fetches detail data for a single post (for hover preview cards). Uses a
+   * minimal `only` parameter and returns the raw API response object.
+   *
+   * @param postId The post ID
+   * @return The raw API post object, or null on failure
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async fetchPostDetails(postId: number): Promise<any | null> {
+    try {
+      const url = `/posts/${postId}.json?only=id,created_at,score,fav_count,rating,variants,preview_file_url,tag_string_artist,tag_string_copyright,tag_string_character`;
+      const resp = await this.rateLimiter.fetch(url);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (data && data.id) return data;
+    } catch (e) {
+      console.warn(`[fetchPostDetails] failed for post ${postId}:`, e);
+    }
+    return null;
+  }
+
+  /**
    * Retrieves cached statistics for a given user and key.
    * @param {string} key The unique key for the stats (e.g., 'rating_dist').
    * @param {string|number} userId The user's ID.

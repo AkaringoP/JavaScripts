@@ -329,7 +329,11 @@ export class TagAnalyticsChartRenderer {
    * @param {!Array<{milestone: number, post: ?Object}>} milestonePosts The list of milestone data.
    * @param {function(): void} onNsfwUpdate Callback to apply NSFW visibility after rendering.
    */
-  renderMilestones(milestonePosts: any[], onNsfwUpdate: () => void): void {
+  renderMilestones(
+    milestonePosts: any[],
+    onNsfwUpdate: () => void,
+    nextMilestone?: {totalPosts: number; nextTarget: number}
+  ): void {
     const grid = document.querySelector('#tag-analytics-milestones .milestones-grid');
     const toggleBtn = document.getElementById('tag-milestones-toggle');
     const loading = document.querySelector('#milestones-loading');
@@ -382,28 +386,24 @@ export class TagAnalyticsChartRenderer {
       card.className = 'di-milestone-card di-nsfw-monitor';
       card.setAttribute('data-rating', p.rating);
       card.style.background = '#fff';
-      card.style.border = '1px solid #ddd';
-      card.style.borderRadius = '8px';
-      card.style.padding = '10px';
-      card.style.display = 'flex';
-      card.style.flexDirection = 'column';
+      card.style.border = '1px solid #e1e4e8';
+      card.style.borderRadius = '6px';
+      card.style.padding = '10px 80px 10px 10px';
+      card.style.position = 'relative';
+      card.style.minHeight = '80px';
       card.style.boxShadow = '0 2px 4px rgba(0,0,0,0.05)';
       card.classList.add('di-hover-translate-up');
 
       card.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px;">
-                <div>
-                    <div style="font-size: 0.8em; color: #888; margin-bottom: 3px; text-transform: uppercase;">#${p.id}</div>
-                    <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.2em; color: #007bff; text-decoration: none; display: block; margin-bottom: 3px;">${label}</a>
-                    <div style="font-size: 0.85em; color: #555;">${dateStr}</div>
-                </div>
-                <a href="/posts/${p.id}" target="_blank" style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; flex-shrink: 0; background: #eee; margin-left: 10px;">
-                    <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
-                </a>
-            </div>
-            <div style="font-size: 0.8em; color: #888; word-break: break-all; line-height: 1.2;">
+            <div style="font-size: 0.8em; color: #888; letter-spacing: 0.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">#${p.id}</div>
+            <a href="/posts/${p.id}" target="_blank" class="di-milestone-link" style="font-weight: bold; font-size: 1.1em; color: #0969da; text-decoration: none; display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${label}</a>
+            <div style="font-size: 0.8em; color: #555; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${dateStr}</div>
+            <div style="font-size: 0.75em; color: #888; margin-top: 4px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                 <a href="/users/${p.uploader_id}" target="_blank" class="${getLevelClass(p.uploader_level)}" style="text-decoration: none;">${escapeHtml(uploaderName)}</a>
             </div>
+            <a href="/posts/${p.id}" target="_blank" style="position: absolute; top: 10px; right: 10px; width: 60px; height: 60px; border-radius: 4px; overflow: hidden; background: #f0f0f0; display: block;">
+                <img src="${thumbUrl}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.onerror=null;this.src='/favicon.ico';this.style.objectFit='contain';this.style.padding='4px';">
+            </a>
         `;
 
       const link = card.querySelector('.di-milestone-link');
@@ -411,6 +411,67 @@ export class TagAnalyticsChartRenderer {
 
       grid.appendChild(card);
     });
+
+    // Append the "next milestone" placeholder card (always last in the grid).
+    //
+    // Progress calculation uses **option A**: lastReached = the milestone
+    // value of the last entry in the fetched `milestonePosts` array. This
+    // is the simplest and matches what the user sees in the grid.
+    //
+    // **Option C** (alternative, not used): compute lastReached as "the
+    // milestone immediately before next in the theoretical sequence" via a
+    // pure helper. The two options produce identical results in every
+    // realistic case — they only diverge in pathological cases where a
+    // milestone post failed to fetch. Switch to option C only if we ever
+    // decouple the progress card from the fetched post list.
+    if (nextMilestone && nextMilestone.nextTarget > nextMilestone.totalPosts) {
+      const total = nextMilestone.totalPosts;
+      const next = nextMilestone.nextTarget;
+      const remaining = next - total;
+      const lastReached = milestonePosts.length > 0
+        ? milestonePosts[milestonePosts.length - 1].milestone
+        : 0;
+      const span = next - lastReached;
+      const progressPct = span > 0
+        ? Math.max(0, Math.min(100, ((total - lastReached) / span) * 100))
+        : 0;
+
+      let nextLabel = `#${next.toLocaleString()}`;
+      if (next === 1) nextLabel = 'First';
+      else if (next >= 1000000) {
+        const val = next / 1000000;
+        nextLabel = `${Number.isInteger(val) ? val : val.toFixed(1).replace(/\.0$/, '')} M`;
+      } else if (next >= 1000) {
+        const val = next / 1000;
+        nextLabel = `${val} k`;
+      }
+
+      const nextCard = document.createElement('div');
+      nextCard.className = 'di-next-milestone-card';
+      nextCard.style.background = '#f6f8fa';
+      nextCard.style.border = '1px dashed #d0d7de';
+      nextCard.style.borderRadius = '6px';
+      nextCard.style.padding = '10px';
+      nextCard.style.minHeight = '80px';
+      nextCard.style.display = 'flex';
+      nextCard.style.flexDirection = 'column';
+      nextCard.style.justifyContent = 'space-between';
+      nextCard.style.color = '#57606a';
+      nextCard.innerHTML = `
+        <div>
+          <div style="font-size: 0.7em; color: #888; letter-spacing: 0.3px; text-transform: uppercase;">Next</div>
+          <div style="font-weight: bold; font-size: 1.1em; color: #57606a; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${nextLabel}</div>
+          <div style="font-size: 0.8em; color: #666; margin-top: 4px;">${remaining.toLocaleString()} remaining</div>
+        </div>
+        <div style="margin-top: 6px;">
+          <div style="height: 6px; background: #e1e4e8; border-radius: 3px; overflow: hidden;">
+            <div style="width: ${progressPct.toFixed(1)}%; height: 100%; background: #0969da;"></div>
+          </div>
+          <div style="font-size: 0.7em; color: #888; margin-top: 3px; text-align: right;">${progressPct.toFixed(0)}%</div>
+        </div>
+      `;
+      grid.appendChild(nextCard);
+    }
 
     // Apply NSFW Settings
     onNsfwUpdate();
@@ -801,9 +862,11 @@ export class TagAnalyticsChartRenderer {
       );
 
     // X Axis
+    const tickCount = width < 400 ? 3 : width < 600 ? 5 : undefined;
     svg.append("g")
       .attr("transform", `translate(0,${height - margin.top - margin.bottom})`)
       .call(d3.axisBottom(x)
+        .ticks(tickCount)
         .tickFormat(d => {
           // D3 time scale uses Date objects for ticks.
           // We want YYYY-MM-DD local string if possible, or just YYYY if not enough space?
