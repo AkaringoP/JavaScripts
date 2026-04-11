@@ -311,14 +311,13 @@ export class AnalyticsDataManager extends DataManager {
    * @param {(string|number)=} customStep Step interval ('auto' or a number).
    * @return {Promise<!Array<{type: string, post: !Object, index: number}>>} List of milestone posts.
    */
-  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
-    const uploaderId = parseInt(userInfo.id ?? '0');
-    if (!uploaderId) return [];
-
-    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
-    if (total === 0) return [];
-
-    // Define Milestones based on Total Count logic
+  /**
+   * Builds the milestone target sequence (numeric values only) for a given
+   * total post count and step mode. Used by both `getMilestones` (to look up
+   * cached posts at those target positions) and `getNextMilestone` (to find
+   * the smallest target above the current total). Pure / no DB access.
+   */
+  buildMilestoneTargets(total: number, customStep: 'auto' | 'repdigit' | number): number[] {
     let targets: number[] = [];
 
     if (customStep === 'repdigit') {
@@ -349,7 +348,6 @@ export class AnalyticsDataManager extends DataManager {
       else if (total <= 10000) {
         targets.push(1);
         if (total >= 100) targets.push(100);
-        // Step 500 starting from 500
         for (let i = 500; i <= total; i += 500) {
           targets.push(i);
         }
@@ -359,7 +357,6 @@ export class AnalyticsDataManager extends DataManager {
         targets.push(1);
         if (total >= 100) targets.push(100);
         if (total >= 1000) targets.push(1000);
-
         for (let i = 5000; i <= total; i += 5000) {
           targets.push(i);
         }
@@ -369,7 +366,6 @@ export class AnalyticsDataManager extends DataManager {
         targets.push(1);
         if (total >= 100) targets.push(100);
         if (total >= 1000) targets.push(1000);
-
         for (let i = 2500; i <= total; i += 2500) {
           targets.push(i);
         }
@@ -384,8 +380,56 @@ export class AnalyticsDataManager extends DataManager {
       }
     }
 
-    // Ensure unique and sort ASC
-    targets = [...new Set(targets)].sort((a, b) => a - b);
+    return [...new Set(targets)].sort((a, b) => a - b);
+  }
+
+  /**
+   * Computes the next (un-reached) milestone target above `total`. Used by
+   * the placeholder card at the end of the milestones grid. Returns null if
+   * the mode genuinely has no next value (it shouldn't, but kept defensive).
+   */
+  getNextMilestone(total: number, customStep: 'auto' | 'repdigit' | number): number | null {
+    if (customStep === 'repdigit') {
+      // Repdigits below 11: 1 → 11 → 111 → 222 → ... → 999 → 1111 → ...
+      if (total < 1) return 1;
+      if (total < 11) return 11;
+      for (let digits = 3; digits <= 7; digits++) {
+        for (let d = 1; d <= 9; d++) {
+          const num = parseInt(String(d).repeat(digits));
+          if (num > total) return num;
+        }
+      }
+      return null;
+    }
+
+    if (customStep !== 'auto' && typeof customStep === 'number') {
+      const step = customStep;
+      if (total < 1) return 1;
+      // Next multiple of step strictly greater than total
+      return Math.floor(total / step) * step + step;
+    }
+
+    // Auto mode — pick the step the same way buildMilestoneTargets would
+    // for the *next* count and find the smallest milestone > total.
+    if (total < 1) return 1;
+    if (total < 100) return 100;
+    let step: number;
+    if (total < 1500) step = 100;
+    else if (total <= 10000) step = 500;
+    else if (total <= 50000) step = 1000;
+    else if (total <= 100000) step = 2500;
+    else step = 5000;
+    return Math.floor(total / step) * step + step;
+  }
+
+  async getMilestones(userInfo: TargetUser, isNsfwEnabled: boolean = false, customStep: 'auto' | 'repdigit' | number = 'auto'): Promise<MilestoneEntry[]> {
+    const uploaderId = parseInt(userInfo.id ?? '0');
+    if (!uploaderId) return [];
+
+    const total = await this.db.posts.where('uploader_id').equals(uploaderId).count();
+    if (total === 0) return [];
+
+    const targets = this.buildMilestoneTargets(total, customStep);
 
     // Use compound index [uploader_id+no] to fetch only this user's posts at the target positions
     const matches: ApiItem[] = await this.db.posts

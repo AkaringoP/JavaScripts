@@ -1160,19 +1160,7 @@ export class TagAnalyticsDataService {
     if (total >= 100000) milestones.add(100000);
     if (total >= 1000000) milestones.add(1000000);
 
-    let step = 100;
-    if (total < 2500) step = 100;
-    else if (total < 5000) step = 250;
-    else if (total < 10000) step = 500;
-    else if (total < 25000) step = 1000;
-    else if (total < 50000) step = 2500;
-    else if (total < 100000) step = 5000;
-    else if (total < 250000) step = 10000;
-    else if (total < 500000) step = 25000;
-    else if (total < 1000000) step = 50000;
-    else if (total < 2500000) step = 100000;
-    else if (total < 5000000) step = 250000;
-    else step = 500000;
+    const step = this.getMilestoneStep(total);
 
     for (let i = step; i <= total; i += step) {
       milestones.add(i);
@@ -1181,6 +1169,52 @@ export class TagAnalyticsDataService {
     const res = Array.from(milestones).sort((a, b) => a - b);
 
     return res;
+  }
+
+  /**
+   * Returns the milestone step interval used for a given total. Mirrors the
+   * thresholds in `getMilestoneTargets`. Pure helper, kept separate so the
+   * "next milestone" placeholder card can compute the upcoming target without
+   * regenerating the whole sequence.
+   */
+  getMilestoneStep(total: number): number {
+    if (total < 2500) return 100;
+    if (total < 5000) return 250;
+    if (total < 10000) return 500;
+    if (total < 25000) return 1000;
+    if (total < 50000) return 2500;
+    if (total < 100000) return 5000;
+    if (total < 250000) return 10000;
+    if (total < 500000) return 25000;
+    if (total < 1000000) return 50000;
+    if (total < 2500000) return 100000;
+    if (total < 5000000) return 250000;
+    return 500000;
+  }
+
+  /**
+   * Computes the next (un-reached) milestone target above `total`. Returns
+   * a value strictly greater than `total`, picked from the union of base
+   * milestones (1, 100, 1000, ...) and the step sequence.
+   */
+  getNextMilestoneTarget(total: number): number {
+    if (total < 1) return 1;
+    if (total < 100) return 100;
+    if (total < 1000) {
+      // Step is 100 in this range; next multiple of 100 above total
+      return Math.floor(total / 100) * 100 + 100;
+    }
+    const step = this.getMilestoneStep(total);
+    const nextStep = Math.floor(total / step) * step + step;
+
+    // Also consider the next "round base" milestone (10k / 100k / 1M) so we
+    // don't skip past a notable number just because it isn't a step boundary.
+    const bases = [10000, 100000, 1000000, 10000000];
+    let next = nextStep;
+    for (const b of bases) {
+      if (b > total && b < next) next = b;
+    }
+    return next;
   }
 
   async fetchRankingsAndResolve(tagName: string, dateStr1Y: string, dateStrTomorrow: string, measure: (label: string, promise: Promise<any>) => Promise<any>): Promise<any> {

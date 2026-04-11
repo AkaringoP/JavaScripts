@@ -1014,7 +1014,15 @@ export async function renderMilestonesWidget(
   let isMilestoneExpanded = false;
 
   const renderMilestones = async () => {
-    const milestones = await (new AnalyticsDataManager(db)).getMilestones(context.targetUser as any, isNsfwEnabled, currentMilestoneStep);
+    const dm = new AnalyticsDataManager(db);
+    const milestones = await dm.getMilestones(context.targetUser as any, isNsfwEnabled, currentMilestoneStep);
+    // Local DB count — same source `getMilestones` uses internally to build
+    // its target sequence. Avoids an extra API call.
+    const uploaderId = parseInt(context.targetUser?.id ?? '0');
+    const totalPosts = uploaderId
+      ? await db.posts.where('uploader_id').equals(uploaderId).count()
+      : 0;
+    const nextTarget = dm.getNextMilestone(totalPosts, currentMilestoneStep);
 
     let msHtml = '<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #eee; padding-bottom:8px; margin-bottom:10px;">';
     msHtml += '<h3 style="color:#333; margin:0;">🏆 Milestones</h3>';
@@ -1070,6 +1078,54 @@ export async function renderMilestonesWidget(
       </a>
     `;
     });
+
+    // Append the "next milestone" placeholder card (always last in the grid).
+    //
+    // Progress calculation uses **option A**: prev = the last reached
+    // milestone's index from the actually fetched `milestones` array. This
+    // is the simplest and works for every realistic case (verified for
+    // total=720 across all modes).
+    //
+    // **Option C** (alternative, not used): compute prev as "the milestone
+    // immediately before next in the theoretical sequence" via a pure
+    // helper like `getPrevMilestone(total, mode)`. The two options produce
+    // identical results in practice — they only diverge in pathological
+    // cases where a milestone post failed to fetch from the DB. Switch to
+    // option C only if we ever decouple the progress card from the fetched
+    // post list (e.g. show the placeholder before milestones load).
+    if (nextTarget !== null && nextTarget > totalPosts) {
+      const remaining = nextTarget - totalPosts;
+      const prevTarget = milestones.length > 0 ? milestones[milestones.length - 1].index : 0;
+      const span = nextTarget - prevTarget;
+      const progressPct = span > 0
+        ? Math.max(0, Math.min(100, ((totalPosts - prevTarget) / span) * 100))
+        : 0;
+      const nextLabel = nextTarget === 1
+        ? 'First'
+        : nextTarget >= 1000 && nextTarget % 1000 === 0
+          ? `${nextTarget / 1000} k`
+          : nextTarget.toLocaleString();
+
+      msHtml += `
+      <div class="di-next-milestone-card" style="
+         display:flex; flex-direction:column; justify-content:space-between;
+         background:#f6f8fa; border:1px dashed #d0d7de; border-radius:6px; padding:10px;
+         color:#57606a;
+      ">
+         <div>
+             <div style="font-size:0.7em; color:#888; letter-spacing:0.5px; text-transform:uppercase;">Next</div>
+             <div style="font-size:1.1em; font-weight:bold; color:#57606a; margin-top:4px;">${nextLabel}</div>
+             <div style="font-size:0.8em; color:#666; margin-top:6px;">${remaining.toLocaleString()} remaining</div>
+         </div>
+         <div style="margin-top:8px;">
+             <div style="height:6px; background:#e1e4e8; border-radius:3px; overflow:hidden;">
+                 <div style="width:${progressPct.toFixed(1)}%; height:100%; background:#0969da;"></div>
+             </div>
+             <div style="font-size:0.7em; color:#888; margin-top:3px; text-align:right;">${progressPct.toFixed(0)}%</div>
+         </div>
+      </div>
+    `;
+    }
     msHtml += '</div>';
     container.innerHTML = msHtml;
 

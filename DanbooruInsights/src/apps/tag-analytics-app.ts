@@ -1389,13 +1389,15 @@ export class TagAnalyticsApp {
 
         // Use totalCount from meta (tagData)
         const targets = this.dataService.getMilestoneTargets(tagData.post_count);
+        const nextTarget = this.dataService.getNextMilestoneTarget(tagData.post_count);
+        const nextInfo = {totalPosts: tagData.post_count, nextTarget};
 
         if (tagData.precalculatedMilestones) {
-          this.chartRenderer.renderMilestones(tagData.precalculatedMilestones, () => this.updateNsfwVisibility());
+          this.chartRenderer.renderMilestones(tagData.precalculatedMilestones, () => this.updateNsfwVisibility(), nextInfo);
         } else {
           // Pass tagName, totalCount, targets
           this.dataService.fetchMilestones(tagData.name, [], targets).then((milestonePosts: any) => {
-            this.chartRenderer.renderMilestones(milestonePosts, () => this.updateNsfwVisibility());
+            this.chartRenderer.renderMilestones(milestonePosts, () => this.updateNsfwVisibility(), nextInfo);
           });
         }
       }
