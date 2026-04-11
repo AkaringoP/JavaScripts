@@ -8,6 +8,7 @@ import {renderPieWidget, renderTopPostsWidget, renderMilestonesWidget, renderHis
 import {renderScatterPlot} from './user-analytics-scatter';
 import {renderTagCloudWidget} from './tag-cloud-widget';
 import {renderCreatedTagsWidget} from './created-tags-widget';
+import {dashboardFooterHtml} from '../ui/dashboard-footer';
 import type {Database} from '../core/database';
 import type {ProfileContext} from '../core/profile-context';
 
@@ -1318,7 +1319,8 @@ export class UserAnalyticsApp {
         });
       }
 
-
+      // 7. Footer credit (always last)
+      dashboardDiv.insertAdjacentHTML('beforeend', dashboardFooterHtml());
 
       // Update header status (ensure it's green if ready)
       this.updateHeaderStatus();

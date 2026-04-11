@@ -6,6 +6,7 @@ import type {Database} from '../core/database';
 import type {SettingsManager} from '../core/settings';
 import {TagAnalyticsDataService} from './tag-analytics-data';
 import {TagAnalyticsChartRenderer} from './tag-analytics-charts';
+import {dashboardFooterHtml} from '../ui/dashboard-footer';
 
 export class TagAnalyticsApp {
   db: Database;
@@ -1356,6 +1357,7 @@ export class TagAnalyticsApp {
       ${this.buildMainGrid(tagData)}
       ${this.buildRankingsSection(tagData)}
       ${this.buildBottomSections()}
+      ${dashboardFooterHtml()}
     `;
 
     // Inject Header Controls (Settings, Reset)
