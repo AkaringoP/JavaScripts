@@ -116,6 +116,12 @@ export interface ScatterDataPoint {
   t: number;
   /** Rating (g/s/q/e). */
   r: string;
+  /** Down score (negative integer; undefined if not yet backfilled). */
+  dn?: number;
+  /** True if post is deleted. Undefined if not yet backfilled. */
+  del?: boolean;
+  /** True if post is banned. Undefined if not yet backfilled. */
+  ban?: boolean;
 }
 
 /** Danbooru rating code. */
@@ -159,7 +165,16 @@ export interface PostRecord {
   /** User-scoped sequence number (1-based, per uploader_id). */
   no: number;
   created_at: string;
+  /** Total score (up_score + down_score; down_score is negative). */
   score: number;
+  /** Up score (non-negative integer); undefined until metadata backfill. */
+  up_score?: number;
+  /** Down score (negative integer); undefined until metadata backfill. */
+  down_score?: number;
+  /** Whether the post has been deleted. Undefined until metadata backfill. */
+  is_deleted?: boolean;
+  /** Whether the post has been banned. Undefined until metadata backfill. */
+  is_banned?: boolean;
   rating: string;
   tag_count_general: number;
   approver_id?: number;
@@ -172,6 +187,18 @@ export interface PostRecord {
   file_url?: string;
   tag_string_copyright?: string;
   tag_string_character?: string;
+}
+
+/** User-level aggregate statistics stored in the `user_stats` table. */
+export interface UserStatsRecord {
+  /** User ID (string form to match other user-keyed tables). */
+  userId: string;
+  /** Count of posts where general tag count is below 10. */
+  gentags_lt_10: number;
+  /** Count of posts where total tag count is below 10. */
+  tagcount_lt_10: number;
+  /** Last refresh timestamp (ms since epoch). */
+  updated_at: number;
 }
 
 /** Cached pie chart statistics record in the `piestats` table. */

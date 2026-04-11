@@ -1,9 +1,24 @@
 import type {ScatterDataPoint} from '../types';
 import type {ChartContext} from './user-analytics-charts';
+import {attachPostHoverCard, hidePostHoverCard} from '../ui/post-hover-card';
 
 // ============================================================
 // SCATTER PLOT WIDGET
 // ============================================================
+
+/** Optional extras for the scatter plot widget (Tag Count Y=10 / downvote filter). */
+export interface ScatterPlotOptions {
+  /** User-level aggregate counts (gentags<10, tagcount<10) shown in Y=10 tooltip. */
+  userStats?: {gentags_lt_10: number; tagcount_lt_10: number} | null;
+  /** True if some posts are missing the down_score field. */
+  needsBackfill?: boolean;
+  /** Async backfill runner; called once if needsBackfill is true. */
+  runBackfill?: (onProgress: (current: number, total: number) => void) => Promise<void>;
+  /** Refresh callback to re-fetch scatter data (called after backfill completes). */
+  refreshScatterData?: () => Promise<ScatterDataPoint[]>;
+  /** Fetcher used by the hover preview card on popover list items. */
+  fetchPostDetails?: (postId: number) => Promise<any | null>;
+}
 
 /**
  * Renders the scatter plot widget (canvas-based, with popover).
@@ -11,12 +26,14 @@ import type {ChartContext} from './user-analytics-charts';
  * @param scatterData Pre-fetched scatter plot data points.
  * @param context The chart context providing user information.
  * @param levelChanges Pre-fetched level change events.
+ * @param options Optional extras (user stats, backfill).
  */
 export function renderScatterPlot(
   container: HTMLElement,
   scatterData: ScatterDataPoint[],
   context: ChartContext,
   levelChanges: any[],
+  options: ScatterPlotOptions = {},
 ): void {
   // Wrapper for Header + Widget
   const scatterWrapper = document.createElement('div');
@@ -103,6 +120,12 @@ export function renderScatterPlot(
         bEl.style.background = bEl.dataset.mode === id ? '#0969da' : '#fff';
         bEl.style.color = bEl.dataset.mode === id ? '#fff' : '#333';
       });
+      // Reset downvote filter when leaving Score mode
+      if (id !== 'score' && activeDownvoteFilter !== null) {
+        activeDownvoteFilter = null;
+        updateDownvoteButtonStyles();
+      }
+      updateDownvoteVisibility();
       renderScatter();
     };
     return btn;
@@ -112,6 +135,92 @@ export function renderScatterPlot(
   toggleContainer.appendChild(makeToggleBtn('tags', 'Tag Count', false, 'General Tags Only'));
 
   scatterDiv.appendChild(toggleContainer);
+
+  // Downvote filter (Score mode only) — mutually exclusive single selection
+  const downvoteThresholds = [0, 2, 5, 10] as const;
+  let activeDownvoteFilter: number | null = null;
+  let backfillInProgress = options.needsBackfill === true;
+  let backfillFailed = false;
+
+  // Y=10 hover/active state (Tag Count mode): when true, points with t < 10
+  // are rendered in black to make them visually stand out.
+  let y10Highlight = false;
+
+  const downvoteContainer = document.createElement('div');
+  downvoteContainer.className = 'di-scatter-downvote';
+  downvoteContainer.style.position = 'absolute';
+  downvoteContainer.style.top = '15px';
+  downvoteContainer.style.left = '50%';
+  downvoteContainer.style.transform = 'translateX(-50%)';
+  downvoteContainer.style.zIndex = '5';
+  downvoteContainer.style.display = 'flex';
+  downvoteContainer.style.alignItems = 'center';
+  downvoteContainer.style.gap = '5px';
+  downvoteContainer.style.background = 'rgba(255,255,255,0.9)';
+  downvoteContainer.style.padding = '2px 8px';
+  downvoteContainer.style.borderRadius = '12px';
+  downvoteContainer.style.border = '1px solid #eee';
+
+  const downvoteLabel = document.createElement('span');
+  downvoteLabel.textContent = '👎';
+  downvoteLabel.style.fontSize = '11px';
+  downvoteLabel.style.marginRight = '3px';
+  downvoteLabel.title = 'Downvote filter';
+  downvoteContainer.appendChild(downvoteLabel);
+
+  const downvoteButtons: HTMLButtonElement[] = [];
+  downvoteThresholds.forEach(t => {
+    const btn = document.createElement('button');
+    btn.textContent = `>${t}`;
+    btn.dataset.threshold = String(t);
+    btn.style.border = '1px solid #d0d7de';
+    btn.style.borderRadius = '12px';
+    btn.style.padding = '1px 8px';
+    btn.style.background = '#fff';
+    btn.style.color = '#333';
+    btn.style.cursor = 'pointer';
+    btn.style.fontSize = '11px';
+    btn.style.transition = 'all 0.2s';
+
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      // Toggle: same → off, different → switch
+      if (activeDownvoteFilter === t) {
+        activeDownvoteFilter = null;
+      } else {
+        activeDownvoteFilter = t;
+      }
+      updateDownvoteButtonStyles();
+      renderScatter();
+    };
+
+    downvoteContainer.appendChild(btn);
+    downvoteButtons.push(btn);
+  });
+
+  const updateDownvoteButtonStyles = () => {
+    downvoteButtons.forEach(btn => {
+      const t = parseInt(btn.dataset.threshold ?? '0');
+      const isActive = activeDownvoteFilter === t;
+      const isDisabled = backfillInProgress || backfillFailed;
+      btn.disabled = isDisabled;
+      btn.style.opacity = isDisabled ? '0.5' : '1';
+      btn.style.cursor = isDisabled ? 'not-allowed' : 'pointer';
+      btn.style.background = isActive ? '#d73a49' : '#fff';
+      btn.style.color = isActive ? '#fff' : '#333';
+      btn.style.borderColor = isActive ? '#d73a49' : '#d0d7de';
+      btn.title = isDisabled
+        ? (backfillFailed ? 'Downvote data unavailable (fetch failed)' : 'Backfilling downvote data...')
+        : `Show only posts with more than ${t} downvotes`;
+    });
+  };
+
+  const updateDownvoteVisibility = () => {
+    downvoteContainer.style.display = currentScatterMode === 'score' ? 'flex' : 'none';
+  };
+
+  scatterDiv.appendChild(downvoteContainer);
+  updateDownvoteButtonStyles();
 
   // Reset Scale Button
   const resetBtn = document.createElement('button');
@@ -247,6 +356,83 @@ export function renderScatterPlot(
   overlayDiv.style.pointerEvents = 'none';
   canvasContainer.appendChild(overlayDiv);
 
+  // Y=10 click hit-area (Tag Count mode only)
+  const y10Hit = document.createElement('div');
+  y10Hit.style.cssText = 'position:absolute;left:0;width:36px;height:18px;cursor:pointer;display:none;z-index:6;';
+  y10Hit.setAttribute('aria-label', 'Show posts with less than 10 tags');
+  canvasContainer.appendChild(y10Hit);
+
+  const updateY10Overlay = (yPos: number | null) => {
+    if (currentScatterMode !== 'tags' || yPos === null || !options.userStats) {
+      y10Hit.style.display = 'none';
+      return;
+    }
+    y10Hit.style.display = 'block';
+    y10Hit.style.top = `${yPos - 9}px`;
+  };
+
+  // Y=10 tooltip
+  const y10Tooltip = document.createElement('div');
+  y10Tooltip.style.cssText = 'position:absolute;background:rgba(30,30,30,0.95);color:#fff;padding:10px 14px;border-radius:6px;font-size:12px;z-index:10001;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.2);min-width:200px;';
+  document.body.appendChild(y10Tooltip);
+
+  const closeY10Tooltip = () => {
+    y10Tooltip.style.display = 'none';
+    y10Highlight = false;
+    renderScatter();
+  };
+  document.addEventListener('click', (e) => {
+    if (y10Tooltip.style.display === 'none') return;
+    if (e.target === y10Hit || y10Tooltip.contains(e.target as Node)) return;
+    closeY10Tooltip();
+  });
+
+  // Hover: highlight points with < 10 tags in black (only while tooltip is hidden).
+  y10Hit.addEventListener('mouseenter', () => {
+    if (y10Tooltip.style.display !== 'none') return;
+    y10Highlight = true;
+    renderScatter();
+  });
+  y10Hit.addEventListener('mouseleave', () => {
+    if (y10Tooltip.style.display !== 'none') return;
+    y10Highlight = false;
+    renderScatter();
+  });
+
+  y10Hit.onclick = (e) => {
+    e.stopPropagation();
+    if (!options.userStats) return;
+    // Activate highlight mode while tooltip is visible
+    y10Highlight = true;
+    renderScatter();
+    const {gentags_lt_10, tagcount_lt_10} = options.userStats;
+    const userName = context.targetUser?.normalizedName ?? '';
+    const gentagsUrl = `/posts?tags=${encodeURIComponent(`user:${userName} gentags:<10`)}`;
+    const tagcountUrl = `/posts?tags=${encodeURIComponent(`user:${userName} tagcount:<10`)}`;
+    y10Tooltip.innerHTML = `
+      <div style="font-weight:bold;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;">Posts with &lt; 10 tags</div>
+      <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:4px;">
+        <span style="color:#ccc;">General &lt; 10:</span>
+        <a href="${gentagsUrl}" target="_blank" style="color:#5dade2;font-weight:bold;text-decoration:none;">${gentags_lt_10.toLocaleString()} →</a>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:12px;">
+        <span style="color:#ccc;">Total &lt; 10:</span>
+        <a href="${tagcountUrl}" target="_blank" style="color:#5dade2;font-weight:bold;text-decoration:none;">${tagcount_lt_10.toLocaleString()} →</a>
+      </div>
+    `;
+    const rect = y10Hit.getBoundingClientRect();
+    y10Tooltip.style.display = 'block';
+    // Position to the right of the hit area, vertically centered
+    y10Tooltip.style.left = `${rect.right + window.scrollX + 8}px`;
+    y10Tooltip.style.top = `${rect.top + window.scrollY + rect.height / 2 - y10Tooltip.offsetHeight / 2}px`;
+    // Viewport clamp
+    const tt = y10Tooltip.getBoundingClientRect();
+    if (tt.right > window.innerWidth - 8) {
+      y10Tooltip.style.left = `${rect.left + window.scrollX - tt.width - 8}px`;
+    }
+    if (tt.top < 8) y10Tooltip.style.top = `${window.scrollY + 8}px`;
+  };
+
   // Drag Selection UI
   const selectionDiv = document.createElement('div');
   selectionDiv.style.position = 'absolute';
@@ -273,6 +459,8 @@ export function renderScatterPlot(
   document.addEventListener('mousedown', (e) => {
     if (popover.style.display !== 'none' && !popover.contains(e.target as Node)) {
       popover.style.display = 'none';
+      selectionDiv.style.display = 'none';
+      hidePostHoverCard();
     }
   });
 
@@ -281,6 +469,14 @@ export function renderScatterPlot(
 
   const renderScatter = () => {
     if (!scatterDiv.isConnected || !ctx) return;
+
+    // Any re-render invalidates the previous drag selection coordinates —
+    // hide the box and close any open popover so stale UI isn't left behind.
+    if (!dragStart) {
+      selectionDiv.style.display = 'none';
+      popover.style.display = 'none';
+      hidePostHoverCard();
+    }
 
     const rect = canvasContainer.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -357,9 +553,17 @@ export function renderScatterPlot(
 
     Object.assign(currentScale, {minDate: minX, maxDate: maxX, maxVal, timeRange: xRange, padL, padT, drawW, drawH, mode: currentScatterMode});
 
+    const dvFilter = currentScatterMode === 'score' ? activeDownvoteFilter : null;
     const visiblePoints = scatterData.filter(d => {
       if (!activeFilters[d.r]) return false;
-      return d.d >= minX && d.d <= maxX;
+      if (d.d < minX || d.d > maxX) return false;
+      if (dvFilter !== null) {
+        // down_score is stored as a non-positive integer; "downvotes:>X" means
+        // there are more than X downvotes, i.e. -down_score > X.
+        if (d.dn === undefined) return false;
+        if (-d.dn <= dvFilter) return false;
+      }
+      return true;
     });
 
     countLabel.textContent = `${visiblePoints.length} items`;
@@ -369,17 +573,47 @@ export function renderScatterPlot(
     ctx.strokeStyle = '#eee';
     ctx.lineWidth = 1;
 
+    let y10Pos: number | null = null;
+    const y10Overlaps = currentScatterMode === 'tags' && maxVal >= 10 && (10 % stepY === 0);
     for (let val = 0; val <= maxVal; val += stepY) {
       const y = padT + drawH - (val / maxVal) * drawH;
       ctx.moveTo(padL, y);
       ctx.lineTo(w - padR, y);
 
-      ctx.fillStyle = '#888';
-      ctx.font = '10px Arial';
-      ctx.textAlign = 'right';
-      ctx.fillText(String(val), padL - 5, y + 3);
+      // Skip the "10" label here in tag count mode — drawn separately in red bold below.
+      if (!(y10Overlaps && val === 10)) {
+        ctx.fillStyle = '#888';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'right';
+        ctx.fillText(String(val), padL - 5, y + 3);
+      }
+
+      if (val === 10) y10Pos = y;
     }
     ctx.stroke();
+
+    // Tag Count mode: always render y=10 emphasis (dashed line + red bold label)
+    if (currentScatterMode === 'tags' && maxVal >= 10) {
+      if (y10Pos === null) {
+        y10Pos = padT + drawH - (10 / maxVal) * drawH;
+      }
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = 'rgba(150, 150, 150, 0.5)';
+      ctx.moveTo(padL, y10Pos);
+      ctx.lineTo(w - padR, y10Pos);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.fillStyle = '#d73a49';
+      ctx.font = 'bold 10px Arial';
+      ctx.textAlign = 'right';
+      ctx.fillText('10', padL - 5, y10Pos + 3);
+    }
+
+    // Position the clickable Y=10 overlay
+    updateY10Overlay(y10Pos);
 
     ctx.beginPath();
     ctx.strokeStyle = '#ccc';
@@ -431,6 +665,9 @@ export function renderScatterPlot(
     }
 
     // Draw Points
+    const highlightActive = y10Highlight && currentScatterMode === 'tags';
+    // Two-pass render when highlighting: dim background first, then black on top
+    const highlightedPoints: Array<[number, number]> = [];
     visiblePoints.forEach(pt => {
       const xVal = pt.d;
       const yVal = currentScatterMode === 'tags' ? (pt.t || 0) : pt.s;
@@ -440,15 +677,31 @@ export function renderScatterPlot(
       const x = padL + ((xVal - minX) / xRange) * drawW;
       const y = padT + drawH - (yVal / maxVal) * drawH;
 
+      if (highlightActive && (pt.t || 0) < 10) {
+        highlightedPoints.push([x, y]);
+        return;
+      }
+
       let color = '#ccc';
       if (pt.r === 'g') color = '#4caf50';
       else if (pt.r === 's') color = '#ffb74d';
       else if (pt.r === 'q') color = '#ab47bc';
       else if (pt.r === 'e') color = '#f44336';
 
+      if (highlightActive) {
+        ctx.globalAlpha = 0.2;
+      }
       ctx.fillStyle = color;
       ctx.fillRect(x - 1, y - 1, 2, 2);
     });
+
+    if (highlightActive) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#000';
+      highlightedPoints.forEach(([x, y]) => {
+        ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      });
+    }
 
     // Render Overlays
     const addOverlayLine = (dateObjOrStr: Date | string, color: string, title: string, isDashed: boolean, thickness: string = '2px') => {
@@ -488,6 +741,45 @@ export function renderScatterPlot(
   };
 
   container.appendChild(scatterWrapper);
+
+  // Show initial mode visibility for downvote container
+  updateDownvoteVisibility();
+
+  // Trigger backfill if needed (silent, non-blocking)
+  if (options.needsBackfill && options.runBackfill) {
+    const progressLabel = document.createElement('span');
+    progressLabel.style.cssText = 'font-size:10px;color:#666;margin-left:6px;';
+    progressLabel.textContent = 'updating…';
+    downvoteContainer.appendChild(progressLabel);
+
+    options.runBackfill((cur, total) => {
+      if (total > 0) {
+        const pct = Math.round((cur / total) * 100);
+        progressLabel.textContent = `${pct}%`;
+      }
+    }).then(async () => {
+      backfillInProgress = false;
+      progressLabel.remove();
+      updateDownvoteButtonStyles();
+      // Refresh scatter data so the new dn fields are visible
+      if (options.refreshScatterData) {
+        try {
+          const fresh = await options.refreshScatterData();
+          scatterData.length = 0;
+          scatterData.push(...fresh);
+          renderScatter();
+        } catch (e) {
+          console.warn('[Scatter] refresh after backfill failed:', e);
+        }
+      }
+    }).catch((e) => {
+      console.warn('[Scatter] backfill failed:', e);
+      backfillInProgress = false;
+      backfillFailed = true;
+      progressLabel.textContent = 'failed';
+      updateDownvoteButtonStyles();
+    });
+  }
 
   requestAnimationFrame(renderScatter);
   window.addEventListener('resize', renderScatter);
@@ -571,9 +863,14 @@ export function renderScatterPlot(
       const valMin = ((currentScale.padT + currentScale.drawH - Math.max(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
       const valMax = ((currentScale.padT + currentScale.drawH - Math.min(y1, y2)) / currentScale.drawH) * currentScale.maxVal;
 
-      // Count posts in selection
+      // Count posts in selection (must respect the same filters as the rendered view)
+      const dvSel = currentScale.mode === 'score' ? activeDownvoteFilter : null;
       const count = scatterData.filter(d => {
         if (!activeFilters[d.r]) return false;
+        if (dvSel !== null) {
+          if (d.dn === undefined) return false;
+          if (-d.dn <= dvSel) return false;
+        }
         const yVal = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
         return d.d >= xMin && d.d <= xMax && yVal >= valMin && yVal <= valMax;
       }).length;
@@ -616,7 +913,6 @@ export function renderScatterPlot(
     if (!dragStart) return;
     const ds = dragStart;
     dragStart = null;
-    selectionDiv.style.display = 'none';
     rangeLabel.style.display = 'none';
     if (rangeLabelTimer) { clearTimeout(rangeLabelTimer); rangeLabelTimer = null; }
 
@@ -629,7 +925,11 @@ export function renderScatterPlot(
       lastDragEndTime = Date.now();
     }
 
-    if (Math.abs(endX - ds.x) < 5 && Math.abs(endY - ds.y) < 5) return;
+    // A click (not a drag) → hide the selection box
+    if (Math.abs(endX - ds.x) < 5 && Math.abs(endY - ds.y) < 5) {
+      selectionDiv.style.display = 'none';
+      return;
+    }
 
     const x1 = Math.min(ds.x, endX);
     const x2 = Math.max(ds.x, endX);
@@ -642,13 +942,21 @@ export function renderScatterPlot(
     const valMin = ((currentScale.padT + currentScale.drawH - y2) / currentScale.drawH) * currentScale.maxVal;
     const valMax = ((currentScale.padT + currentScale.drawH - y1) / currentScale.drawH) * currentScale.maxVal;
 
+    const dvRes = currentScale.mode === 'score' ? activeDownvoteFilter : null;
     const result = scatterData.filter(d => {
       if (!activeFilters[d.r]) return false;
+      if (dvRes !== null) {
+        if (d.dn === undefined) return false;
+        if (-d.dn <= dvRes) return false;
+      }
       const yVal = currentScale.mode === 'tags' ? (d.t || 0) : d.s;
       return d.d >= xMin && d.d <= xMax && yVal >= valMin && yVal <= valMax;
     });
 
-    if (result.length === 0) return;
+    if (result.length === 0) {
+      selectionDiv.style.display = 'none';
+      return;
+    }
 
     const sortedList = result.sort((a, b) => {
       const vA = currentScale.mode === 'tags' ? (a.t || 0) : a.s;
@@ -687,15 +995,22 @@ export function renderScatterPlot(
       slice.forEach((it: ScatterDataPoint) => {
         const itDate = new Date(it.d).toLocaleDateString();
         const val = isTags ? (it.t || 0) : it.s;
+        // Deleted or banned posts show a gray dot regardless of rating
+        const isRemoved = it.del === true || it.ban === true;
         let color = '#ccc';
-        if (it.r === 'g') color = '#4caf50';
+        if (isRemoved) {
+          color = '#9ca3af';
+        } else if (it.r === 'g') color = '#4caf50';
         else if (it.r === 's') color = '#ffb74d';
         else if (it.r === 'q') color = '#ab47bc';
         else if (it.r === 'e') color = '#f44336';
 
+        const statusTitle = it.ban === true ? 'Banned' : (it.del === true ? 'Deleted' : '');
+        const titleAttr = statusTitle ? ` title="${statusTitle}"` : '';
+
         chunkHtml += `
          <div class="pop-item" data-id="${it.id}" style="padding: 8px 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: bg 0.2s;">
-           <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
+           <div${titleAttr} style="width: 10px; height: 10px; border-radius: 50%; background: ${color}; margin-right: 10px;"></div>
            <span style="width: 60px; color: #007bff; font-weight: 500; font-size: 13px; margin-right: 10px;">#${it.id}</span>
            <span style="flex: 1; color: #666; font-size: 12px;">${itDate}</span>
            <span style="font-weight: bold; color: #333; font-size: 13px;">${val}</span>
@@ -733,6 +1048,13 @@ export function renderScatterPlot(
         htmlEl.onmouseover = () => htmlEl.style.backgroundColor = '#f5f9ff';
         htmlEl.onmouseout = () => htmlEl.style.backgroundColor = 'transparent';
         htmlEl.onclick = () => window.open(`/posts/${htmlEl.dataset.id}`, '_blank');
+        // Hover preview card (debounced + cached, desktop only).
+        // Position the card next to the popover, not the small list item,
+        // so it doesn't overlap the list.
+        if (options.fetchPostDetails) {
+          const postId = parseInt(htmlEl.dataset.id ?? '0');
+          if (postId) attachPostHoverCard(htmlEl, postId, options.fetchPostDetails, popover);
+        }
       });
     };
 
@@ -743,6 +1065,8 @@ export function renderScatterPlot(
       closeBtn.onclick = (e) => {
         e.stopPropagation();
         popover.style.display = 'none';
+        selectionDiv.style.display = 'none';
+        hidePostHoverCard();
       };
     }
 

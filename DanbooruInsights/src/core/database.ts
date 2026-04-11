@@ -8,6 +8,7 @@ import type {
   HourlyStatRecord,
   TagAnalyticsReport,
   GrassSettings,
+  UserStatsRecord,
 } from '../types';
 
 // --- 1.5 Database (Dexie.js) ---
@@ -27,6 +28,7 @@ export class Database extends Dexie {
   hourly_stats!: Table<HourlyStatRecord, string>;
   tag_analytics!: Table<TagAnalyticsReport, string>;
   grass_settings!: Table<GrassSettings, string>;
+  user_stats!: Table<UserStatsRecord, string>;
 
   /**
    * Initializes the database with defined schemas.
@@ -135,6 +137,15 @@ export class Database extends Dexie {
     // [uploader_id+score] — getTopScorePost: index-based sort by score per user
     this.version(9).stores({
       posts: 'id, uploader_id, no, created_at, score, rating, tag_count_general, [uploader_id+no], [uploader_id+score]'
+    });
+
+    // [v10] Add user_stats table for user-level aggregate counts
+    // (e.g. gentags<10 / tagcount<10 counters used by the scatter plot's
+    // Tag Count mode Y=10 click feature). down_score field is also added to
+    // posts records for the Score mode downvote filter, but it's stored
+    // schemaless (no index needed) so the posts schema string is unchanged.
+    this.version(10).stores({
+      user_stats: 'userId'
     });
   }
 }
