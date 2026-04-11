@@ -12,7 +12,7 @@ A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 
 | Script Name | Description | Install |
 | :--- | :--- | :--- |
-| **[Danbooru Insights](./DanbooruInsights)** | Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages. | [Install](https://github.com/AkaringoP/JavaScripts/raw/build/danbooruinsights.user.js) |
+| **[Danbooru Insights](https://github.com/AkaringoP/Danbooru-Insights)** *(moved)* | Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages. Now lives in its own dedicated repository. | [Install](https://github.com/AkaringoP/Danbooru-Insights/raw/build/danbooruinsights.user.js) |
 | **[Danbooru Next Random Post](./NextRandomPost)** | Navigates to a random post while preserving search query. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/NextRandomPost/NextRandomPost.user.js) |
 | **[Danbooru Locate in Gallery](./LocateInGallery)** | Finds the gallery page of the current post using O(1) calculation or parallel search. | [Install](https://github.com/AkaringoP/JavaScripts/raw/main/LocateInGallery/LocateInGallery.user.js) |
 | **[Danbooru Mobile Note Assist](./MobileNoteAssist)** | Assist creating notes on mobile with accurate scaling and touch-friendly controls. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js) |
@@ -29,12 +29,15 @@ A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 
 ## Build Instructions (for contributors)
 
-Scripts with a build step (**DanbooruInsights**, **GroupingTags**) require Node.js:
+Scripts with a build step (**GroupingTags**) require Node.js:
 
 ```bash
-cd DanbooruInsights   # or GroupingTags
+cd GroupingTags
 npm install
 npm run build         # runs vitest + tsc + vite build
 ```
 
 The compiled UserScript is output to `dist/*.user.js`.
+
+> **Danbooru Insights** has its own repository with its own build setup.
+> See [AkaringoP/Danbooru-Insights](https://github.com/AkaringoP/Danbooru-Insights) for instructions.
