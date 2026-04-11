@@ -4,6 +4,94 @@ All notable changes to Danbooru Insights are documented here.
 
 ---
 
+## v9.0.0 — Mobile Support, Scatter Plot Overhaul & Schema Migration
+
+### Mobile Compatibility
+- **Fullscreen Modal**: UserAnalyticsApp and TagAnalyticsApp dashboards now fill the viewport on mobile (`100dvh` so the URL bar no longer leaks the page beneath).
+- **Responsive Layout**: Pie chart + legend stack vertically; summary cards collapse to one column; top posts, trending thumbnails, scatter plot toggle/filter, and tag analytics header all reflow under 768 px. TagAnalytics rankings switch to a horizontal scroll-snap swipe.
+- **Touch Interactions** (2-step pattern: tap → tooltip → action):
+  - **CalHeatmap cells**: tap or drag shows tooltip with date + count, tooltip tap navigates to `/posts`.
+  - **D3 pie chart**: same 2-step pattern, slice enlarges on touch with viewport-clamped tooltip.
+  - **Tag cloud**: 1st tap highlights word + shows tooltip, 2nd tap navigates. Desktop hover suppressed on touch. Invisible stroke widens hit area.
+  - **Scatter plot**: drag selection disabled on touch; year tap zoom retained.
+  - **Monthly bar chart**: milestone stars no longer navigate (tap-through to bar's month query).
+- **Modal Close Behaviors**: Browser back button closes the modal via `history.pushState/popstate` (both apps); X button and Escape route through `history.back()` for state sync. UserAnalyticsApp gains Escape key support (was TagAnalytics-only). TagAnalytics modal restructured so the X button stays sticky during scroll.
+- **Milestone cards** in TagAnalytics rebuilt with absolute thumbnail positioning to avoid flex `min-content` overflow on narrow viewports.
+- **Tag cloud font size** and SVG `overflow: hidden` tuned for narrow viewports.
+
+### Scatter Plot Enhancements
+- **Tag Count mode Y=10 click**: The "10" tick is rendered red bold and is clickable. Clicking it shows a tooltip with two counts (`gentags:<10` / `tagcount:<10`) and deep links to the corresponding `/posts` queries. Points with t < 10 are highlighted in black on hover/active.
+- **Score mode downvote filter**: Four mutually-exclusive toggle buttons (`>0`, `>2`, `>5`, `>10`) above the chart. The filter applies to both the rendered points and the drag-selection popover so the count and list always agree.
+- **Post hover preview card**: Hovering a post in the scatter popover or the GrassApp approval popover now shows a small floating card with thumbnail, score, fav count, rating, and first artist/copyright/character tag. 100 ms debounce + in-memory cache. Disabled on touch devices.
+- **Drag selection persistence**: The selection rectangle stays visible while the popover is open (used to vanish immediately on mouseup) and is hidden on any re-render or popover close.
+- **Deleted/banned posts in popover list**: shown as gray dots with a "Deleted" / "Banned" tooltip.
+- **Effort scatter mode removed**: The previous attempt at correlating tag effort with score did not surface meaningful insight and was rolled back.
+
+### Milestones
+- **Next Milestone Card**: Both UserAnalyticsApp and TagAnalyticsApp now show an extra "next milestone" placeholder card at the end of the milestones grid, with the upcoming milestone label, "X remaining", and a progress bar measured against the previous milestone. Respects the active step selector mode in UserAnalyticsApp.
+
+### Database Schema (v9 → v10)
+- **New `user_stats` table**: caches `gentags_lt_10` and `tagcount_lt_10` counts per user with a 24 h expiry, used by the scatter plot Y=10 click feature.
+- **`posts` table** gains four new fields: `up_score`, `down_score`, `is_deleted`, `is_banned`. Sync requests now use `only=...,up_score,down_score,is_deleted,is_banned,...` and `score` is stored as `up_score + down_score`.
+- **Silent backfill** runs the next time the dashboard opens for any user with cached posts that predate these fields. It uses cursor pagination over `id:>X order:id status:any` so deleted/banned posts are included, fetches only the new fields, and merges them into existing records. Disables the downvote filter buttons with a "updating XX%" indicator until complete.
+
+### GrassApp
+- **Width restoration fix**: Long-standing issue where the saved grass width / xOffset was clobbered on every dashboard open. The `renderGraph()` column wrapper used to force `mainContainer.style.width = '100%'` after `applyConstraints()` had already set the px value. Removing those two lines lets `applyConstraints` win, and a `ResizeObserver` re-applies once the wrapper has finished its initial layout pass so a 0-width first frame can no longer clamp the saved width down to 300 px.
+
+### Internal
+- **Centralized version constant**: New `src/version.ts` exports `APP_VERSION`, `APP_REPO_URL`, `APP_AUTHOR`. `vite.config.ts` imports the version instead of hardcoding it, so future bumps only touch one file.
+- **Dashboard credit footer**: Both apps append a small centered credit line at the bottom of the dashboard with the version (linking to the GitHub repo) and author. Shared via `src/ui/dashboard-footer.ts`.
+- **Per-theme grass palette memory**: Grass palette selection is now remembered per theme instead of resetting to default on theme switch. Uses a `grassIndexByTheme` map with legacy `grassIndex` migration.
+
+---
+
+## v8.1.0 — Cross-Tab Rate Coordination
+
+- **TabCoordinator**: Uses `BroadcastChannel` to track active tabs and divides the rate budget (RPS, concurrency) equally among them, preventing 429 errors when the user has multiple Danbooru tabs open.
+- **Global 429 Backoff**: On a 429 response, all requests pause for 5 s and the backoff is broadcast to other tabs via TabCoordinator.
+- **Single shared RateLimitedFetch** per tab instead of independent instances per app class.
+- **Dynamic rate reconfiguration**: `RateLimitedFetch.updateLimits()` for runtime changes and `setBackoff()` for cross-tab backoff propagation.
+
+Closes #5.
+
+---
+
+## v8.0.5 — Skip Error Pages
+
+- **Hotfix**: Detect non-Danbooru pages (nginx 429 / 502) by checking `document.body.classList`. Error pages have a bare `<body>` with no classes, which previously caused `ProfileContext` to misparse the error title as a username.
+- `injectGlobalStyles()` is now called after the guard so CSS is not injected on error pages.
+
+---
+
+## v8.0.4 — User History Timeline Discoverability
+
+- **Slim always-visible scrollbar** (8 px) on the User History timeline via `::-webkit-scrollbar` and `scrollbar-width: thin`. Works on Chrome/Firefox where a custom scrollbar style disables overlay auto-hide. Hovering darkens the thumb.
+- **Bottom fade gradient** as a fallback for Safari/macOS where overlay scrollbars auto-hide regardless of custom styles. Only shown when the `has-overflow` class is set via JS after measuring `scrollHeight`.
+
+---
+
+## v8.0.3 — Member(Blue) 2-Tag Query Limit Compatibility
+
+- **Fix**: Gender and Translation Untagged count queries used 4–6 tags, exceeding the Member(Blue) 2-tag search limit and failing silently on those accounts.
+- Decompose Gender into parallel single-tag fetches (summed) and compute Translation Untagged via inclusion-exclusion over 6 subqueries (all ≤ 2 tags).
+- Click navigation URLs are kept aligned with the conceptual count query via `DistributionItem.originalTag`, so Gold+ users see unchanged behavior while Member users get consistent error pages on over-limit categories instead of missing data.
+
+---
+
+## v8.0.2 — Commentary/Translation Pie Chart Click Fix
+
+- **Fix**: Commentary and Translation pie chart click navigation was using the wrong tag for some categories.
+
+---
+
+## v8.0.1 — Firefox Pie Chart Pointer Events Fix
+
+- **Fix**: Firefox breaks SVG pointer events inside CSS 3D-transformed containers (`perspective + rotateX`), making pie chart hover tooltips and click navigation completely non-functional.
+- Detect Firefox via `navigator.userAgent` and skip the 3D perspective, `rotateX`, `preserve-3d`, and shadow layer on Firefox. Use a simple `scale(1.05)` hover instead.
+- Chrome/Safari/Edge: unchanged (3D tilt effect preserved).
+
+---
+
 ## v8.0.0 — New Widgets, Theme System Overhaul & UX Improvements
 
 ### New Widgets
