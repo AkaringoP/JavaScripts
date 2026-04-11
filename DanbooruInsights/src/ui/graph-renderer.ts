@@ -15,6 +15,7 @@ export class GraphRenderer {
   cal: any;
   settingsManager: SettingsManager;
   db: any;
+  dataManager: DataManager | null;
 
   /**
    * @param {SettingsManager} settingsManager The settings manager instance.
@@ -24,6 +25,7 @@ export class GraphRenderer {
     this.cal = null;
     this.settingsManager = settingsManager;
     this.db = db;
+    this.dataManager = null;
   }
 
   /**
@@ -33,6 +35,9 @@ export class GraphRenderer {
    * @return {Promise<boolean>} Resolves to true if injection was successful.
    */
   async injectSkeleton(dataManager: DataManager, userId: string | number): Promise<boolean> {
+    // Save reference for later use (e.g. approval popover hover preview)
+    this.dataManager = dataManager;
+
     // Check if container already exists
     if (document.getElementById(this.containerId)) {
       return true; // Preservation Logic: Do not destroy!
@@ -127,6 +132,35 @@ export class GraphRenderer {
 
     // Initial apply (might be 0 if not 100% rendered, so we use a small delay or observer)
     setTimeout(() => { applyConstraints(); syncPanelPosition(); }, 0);
+
+    // Re-apply on layout stabilization. The wrapper's offsetWidth can be 0
+    // (or smaller than its final value) on the very first frame, especially
+    // when the page is still hydrating. That used to cause savedWidth/xOffset
+    // to be clamped against an underestimated maxAvailableWidth and lock the
+    // graph at minWidth (300px) on the left. ResizeObserver fires whenever
+    // the wrapper's box size changes, so we re-run the constraint pass each
+    // time and stop once we've seen a sensible width settle.
+    if (typeof ResizeObserver !== 'undefined') {
+      let stableTicks = 0;
+      let lastWidth = 0;
+      const ro = new ResizeObserver(() => {
+        const w = wrapper.offsetWidth;
+        if (w <= 0) return;
+        applyConstraints();
+        syncPanelPosition();
+        if (w === lastWidth) {
+          stableTicks++;
+          // Two consecutive identical measurements → layout has settled
+          if (stableTicks >= 2) ro.disconnect();
+        } else {
+          stableTicks = 0;
+          lastWidth = w;
+        }
+      });
+      ro.observe(wrapper);
+      // Safety: always disconnect after 2s so we never observe forever
+      setTimeout(() => ro.disconnect(), 2000);
+    }
 
     container.style.minWidth = '300px';
 
@@ -1065,9 +1099,13 @@ export class GraphRenderer {
           // Move mainContainer inside wrapper
           columnWrapper.appendChild(mainContainer);
 
-          // Ensure mainContainer takes full width of the column
-          mainContainer.style.flex = 'none'; // Reset flex
-          mainContainer.style.width = '100%';
+          // Note: do NOT force `mainContainer.style.width = '100%'` here.
+          // The user's saved width/xOffset (applied earlier by
+          // applyConstraints) must be preserved. The column flex wrapper
+          // already gives mainContainer a sensible default through its own
+          // flex: 1 + minWidth: 300px, so an explicit override is unnecessary
+          // and would clobber the px value the user picked via the resize
+          // handle.
         }
       }
 
@@ -1494,6 +1532,9 @@ export class GraphRenderer {
    * @param {MouseEvent} event The triggering mouse event.
    */
   async showApprovalsDetail(dateStr: string, userId: string | number, event: MouseEvent): Promise<void> {
-    return showApprovalsDetail(this.db, dateStr, userId, event);
+    const fetcher = this.dataManager
+      ? (postId: number) => this.dataManager!.fetchPostDetails(postId)
+      : undefined;
+    return showApprovalsDetail(this.db, dateStr, userId, event, fetcher);
   }
 }

@@ -710,7 +710,7 @@ export class UserAnalyticsApp {
 
       // Pre-fetch all data!
       const dashboardData = await this.dataService.fetchDashboardData(this.context);
-      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral } = dashboardData;
+      const { stats, total, summaryStats, distributions, topPosts, recentPopularPosts, randomPosts, milestones1k, scatterData, levelChanges, timelineMilestones, tagCloudGeneral, userStats, needsBackfill, dataManager } = dashboardData;
       const { maxUploads, maxDate, firstUploadDate, lastUploadDate } = summaryStats;
       const today = new Date();
       const oneDay = 1000 * 60 * 60 * 24;
@@ -1305,7 +1305,17 @@ export class UserAnalyticsApp {
 
       // 6. Scatter Plot Widget
       if (scatterData.length > 0) {
-        renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges);
+        renderScatterPlot(dashboardDiv, scatterData, this.context, levelChanges, {
+          userStats,
+          needsBackfill,
+          runBackfill: needsBackfill
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            ? (onProgress) => dataManager.backfillPostMetadata(this.context.targetUser!, onProgress)
+            : undefined,
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          refreshScatterData: () => dataManager.getScatterData(this.context.targetUser!),
+          fetchPostDetails: (postId: number) => dataManager.fetchPostDetails(postId),
+        });
       }
 
 
