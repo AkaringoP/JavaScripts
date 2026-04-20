@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.4
+// @version      2.5
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -52,6 +52,9 @@
   /** @const {number} Bottom margin for the toast message. */
   const TOAST_MARGIN_BOTTOM = 20;
 
+  /** @const {number} Pixel threshold above which a pointer movement counts as a drag. */
+  const DRAG_THRESHOLD_PX = 5;
+
   /**
    * Mapping of UI IDs to Danbooru tag strings.
    * @const {Object<string, string>}
@@ -83,6 +86,14 @@
   let createStartX = 0;
   let createStartY = 0;
   let createWasVisible = false;
+
+  /**
+   * When true, the next `click` event on the image is consumed and ignored.
+   * Used to suppress the emulated click that follows a `mouseup`-handled drag,
+   * preventing the popover from being immediately toggled off.
+   * @type {boolean}
+   */
+  let suppressNextClick = false;
 
   // DOM Elements
   let boxElement = null;
@@ -696,7 +707,7 @@
     // Auto-hide floating button when typing
     if (inputElement) {
       const floatBtn = document.getElementById('dmna-float-btn');
-      
+
       // Use capture to detect focus/blur on ANY input element in the document
       document.addEventListener('focus', (e) => {
         const target = e.target;
@@ -713,7 +724,7 @@
             // Check if focus moved to another text input
             const active = document.activeElement;
             const isTextInput = isTextInputElement(active);
-            
+
             if (!isTextInput) {
               floatBtn.classList.remove('dmna-hidden');
             }
@@ -724,8 +735,14 @@
 
     const eyeBtn = document.getElementById('dmna-eye-btn');
     if (eyeBtn) {
-      const startShow = (e) => { e.preventDefault(); showDebugZones(); };
-      const stopShow = (e) => { e.preventDefault(); hideDebugZones(); };
+      const startShow = (e) => {
+        e.preventDefault();
+        showDebugZones();
+      };
+      const stopShow = (e) => {
+        e.preventDefault();
+        hideDebugZones();
+      };
 
       eyeBtn.addEventListener('touchstart', startShow);
       eyeBtn.addEventListener('touchend', stopShow);
@@ -809,7 +826,9 @@
         btn.classList.remove('dragging');
         localStorage.setItem(POS_KEY, userBtnMarginY);
       } else {
-        if (Math.abs((e.type.startsWith('touch') ? e.changedTouches[0].clientY : e.clientY) - dragStartY) < 10) {
+        const endY = e.type.startsWith('touch') ?
+            e.changedTouches[0].clientY : e.clientY;
+        if (Math.abs(endY - dragStartY) < 10) {
           toggleState();
         }
       }
@@ -871,7 +890,16 @@
 
   /**
    * Sets up box creation logic on the image.
-   * Handles "Click to Toggle" and "Drag to Create".
+   *
+   * Responsibility split:
+   *   - `mousedown`/`mouseup` chain handles drag-to-create only (PC).
+   *     A drag is confirmed when pointer movement exceeds DRAG_THRESHOLD_PX.
+   *   - `click` handles tap-to-create and tap-to-toggle (both touch and mouse).
+   *
+   * After a successful drag creation, the emulated `click` that trails
+   * `mouseup` is suppressed via `suppressNextClick` so the popover is not
+   * toggled off immediately after it appears.
+   *
    * @param {HTMLElement} img The target image element.
    */
   function setupCreationInteraction(img) {
@@ -881,9 +909,6 @@
         return;
       }
       if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover')) {
-        return;
-      }
-      if (e.type.startsWith('touch')) {
         return;
       }
 
@@ -899,16 +924,24 @@
       document.addEventListener('mouseup', onCreateEnd);
     });
 
-    // 2. Click (Touch & Mouse Click fallthrough)
+    // 2. Click (Touch tap & PC click)
     img.addEventListener('click', (e) => {
       if (!isEnabled) {
         return;
       }
-      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover') || e.target.closest('#dmna-float-btn')) {
+
+      // Consume the emulated click that trails a successful drag creation.
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        e.preventDefault();
+        e.stopPropagation();
         return;
       }
-      if (isCreatingBox) {
-        return; // Prevent double trigger
+
+      if (e.target.closest('#dmna-box') ||
+          e.target.closest('#dmna-popover') ||
+          e.target.closest('#dmna-float-btn')) {
+        return;
       }
 
       e.preventDefault();
@@ -940,7 +973,7 @@
     // Drag threshold to prevent accidental drags
     const dist = Math.hypot(currentX - createStartX, currentY - createStartY);
 
-    if (dist > 5) {
+    if (dist > DRAG_THRESHOLD_PX) {
       // If we just started dragging, ensure UI is reset
       if (boxElement.style.display === 'none' || createWasVisible) {
         boxElement.style.display = 'block';
@@ -963,6 +996,14 @@
 
   /**
    * Handles the end of a creation drag operation.
+   *
+   * On a real drag (distance > threshold): finalizes the box UI and arms
+   * `suppressNextClick` so the emulated click that follows does not
+   * immediately toggle the popover off.
+   *
+   * On a non-drag (tap/stationary click): defers to the image's `click`
+   * handler, which owns tap-to-create and tap-to-toggle behavior.
+   *
    * @param {MouseEvent} e
    */
   function onCreateEnd(e) {
@@ -975,8 +1016,8 @@
 
     const dist = Math.hypot(e.pageX - createStartX, e.pageY - createStartY);
 
-    if (dist > 5) {
-      // Valid drag: Show full UI
+    if (dist > DRAG_THRESHOLD_PX) {
+      // Valid drag: show full UI and suppress the trailing emulated click.
       if (inputElement) {
         inputElement.value = '';
       }
@@ -984,15 +1025,9 @@
       captureInitialToggleState();
       updatePopoverPosition();
       showDebugZones(1500);
-    } else {
-      // Just a click (handled here for PC consistency)
-      if (createWasVisible) {
-        hideBox();
-        showToast('Cancelled');
-      } else {
-        spawnDefaultBox(e.pageX, e.pageY);
-      }
+      suppressNextClick = true;
     }
+    // Otherwise: do nothing and let the `click` handler decide.
   }
 
   /**
@@ -1087,13 +1122,13 @@
 
     popoverElement.style.left = `${clampedX}px`;
     popoverElement.style.top = `${boxBottomY}px`;
-    
+
     // Position 10px below, apply inverse scale
     popoverElement.style.transform = `translateX(-50%) translateY(10px) scale(${invScale})`;
-    
+
     // Anchor transform origin to the arrow tip
     popoverElement.style.transformOrigin = `calc(50% + ${arrowOffset}px) -10px`;
-    
+
     popoverElement.style.setProperty('--arrow-offset', `${arrowOffset}px`);
     popoverElement.style.display = 'flex';
   }
@@ -1344,4 +1379,3 @@
   init();
   setTimeout(init, 1000);
 })();
-
