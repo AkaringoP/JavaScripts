@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.1.1
+// @version      1.1.2
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -948,6 +948,11 @@
     submitBtn.type = 'button';
     submitBtn.className = 'butr-primary';
     submitBtn.textContent = 'Submit';
+    // Disabled until renderSections (or showFallbackDialog) wires
+    // `submitHandler` and switches the button into a usable state. Clicking
+    // Submit during the spinner phase otherwise routes to a no-op
+    // `invokeSubmitHandler` (submitHandler === null), giving no UI feedback.
+    submitBtn.disabled = true;
     const cancelBtn = document.createElement('button');
     cancelBtn.type = 'button';
     cancelBtn.className = 'butr-secondary';
@@ -1285,6 +1290,14 @@
     dialogRefs.masterCheckbox.addEventListener('change', applyMasterToChildren);
     updateMasterFromChildren();
 
+    // Spinner phase ends here — re-enable Submit (disabled in buildDialog)
+    // now that `submitHandler` is wired up by the caller. Refocus so the
+    // showDialog focus call (which no-op'd against the disabled button)
+    // takes effect now that the popover is interactive — keeps keyboard
+    // shortcuts working.
+    dialogRefs.submitBtn.disabled = false;
+    dialogRefs.submitBtn.focus({preventScroll: true});
+
     // Content size changed (spinner → rows). Reposition.
     schedulePosition();
   }
@@ -1597,6 +1610,8 @@
     container.appendChild(msg);
 
     dialogRefs.submitBtn.textContent = 'Submit anyway';
+    dialogRefs.submitBtn.disabled = false;
+    dialogRefs.submitBtn.focus({preventScroll: true});
     submitHandler = submitWithoutModification;
 
     schedulePosition();
@@ -2284,9 +2299,17 @@
    * the full-page reload that form.submit() would force).
    *
    * Sets `bypassNextSubmit` so our own capture handler skips on the
-   * resulting event. Falls back to form.submit() on the rare browser
-   * that lacks form.requestSubmit (Safari < 16); in that case the bypass
-   * flag is cleared because no submit event is dispatched.
+   * resulting event. The flag is cleared synchronously after
+   * `requestSubmit()` returns: the spec dispatches the submit event
+   * synchronously when validation passes (capture handler then runs and
+   * clears the flag — this assignment is a no-op), and skips the event
+   * entirely when validation fails. Without this clear, a validation
+   * failure would leave `bypassNextSubmit === true`, silently bypassing
+   * our popover on the user's NEXT submit attempt.
+   *
+   * Falls back to form.submit() on the rare browser that lacks
+   * form.requestSubmit (Safari < 16); in that case the bypass flag is
+   * cleared because no submit event is dispatched.
    */
   function submitFormViaNativeFlow() {
     if (!tagForm) {
@@ -2295,6 +2318,7 @@
     if (typeof tagForm.requestSubmit === 'function') {
       bypassNextSubmit = true;
       tagForm.requestSubmit();
+      bypassNextSubmit = false;
     } else {
       bypassNextSubmit = false;
       tagForm.submit();
