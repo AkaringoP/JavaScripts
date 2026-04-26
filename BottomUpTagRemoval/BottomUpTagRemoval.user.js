@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.2
+// @version      1.1
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -177,6 +177,20 @@
     @keyframes butr-spin {
       to { transform: rotate(360deg); }
     }
+
+    /*
+     * Applied to Danbooru's tag textarea while our popover is open. The
+     * popover sets readOnly=true to prevent edits that would invalidate
+     * the BFS result; this rule makes the locked state visually obvious
+     * (the readOnly attribute alone has near-zero default visual cue).
+     * Cursor signals "no edits", opacity dims it slightly, and a faint
+     * left bar marks it as currently controlled by another UI.
+     */
+    textarea.butr-locked-tag-input {
+      opacity: 0.7;
+      cursor: not-allowed;
+      box-shadow: inset 3px 0 0 var(--butr-spinner-accent, #0969da);
+    }
   `;
 
   /** @const {string} CSS selector for the post tag input. Same on /posts/{id} and /posts/{id}/edit. */
@@ -295,6 +309,15 @@
    * @type {?(HTMLInputElement|HTMLButtonElement)}
    */
   let anchorButton = null;
+
+  /**
+   * Captures `tagInput.readOnly` at popover mount so unlockTagInput can
+   * restore the prior state instead of unconditionally clearing the flag
+   * (preserves any pre-existing readOnly set by Danbooru or another
+   * userscript). `null` means "not currently locked by us".
+   * @type {?boolean}
+   */
+  let savedTagInputReadOnly = null;
 
   /**
    * Active handler for the popover's Submit button. Switched between
@@ -1002,6 +1025,7 @@
     document.body.appendChild(dialogRefs.root);
     closeAutocomplete();
     disableAnchorButton();
+    lockTagInput();
     positionPopover();
     attachClosingTriggers();
 
@@ -1023,6 +1047,7 @@
   function hideDialog() {
     detachClosingTriggers();
     restoreAnchorButton();
+    unlockTagInput();
     if (!dialogRefs) {
       return;
     }
@@ -1122,6 +1147,43 @@
       anchorButton.disabled = false;
       anchorButton = null;
     }
+  }
+
+  /**
+   * Locks the tag textarea while the popover is open. Without this, a user
+   * editing during the popover's lifetime would invalidate the BFS result
+   * (candidates computed against a stale snapshot), and re-typing would
+   * also reopen Danbooru's autocomplete dropdown over the popover (the
+   * one-shot `closeAutocomplete()` only fires at mount). readOnly blocks
+   * edits without disabling focus or scroll, which is what we want.
+   *
+   * The CSS class adds a visible cue — a faint accent bar plus
+   * not-allowed cursor — because the bare readOnly attribute has nearly
+   * no default styling on most browsers/themes.
+   */
+  function lockTagInput() {
+    if (!tagInput) {
+      return;
+    }
+    savedTagInputReadOnly = tagInput.readOnly;
+    tagInput.readOnly = true;
+    tagInput.classList.add('butr-locked-tag-input');
+  }
+
+  /**
+   * Restores the tag textarea's prior `readOnly` state and removes the
+   * lock styling. Idempotent — safe to call when the input was never
+   * locked (e.g. cleanup paths that run before showDialog).
+   */
+  function unlockTagInput() {
+    if (savedTagInputReadOnly === null) {
+      return;
+    }
+    if (tagInput) {
+      tagInput.readOnly = savedTagInputReadOnly;
+      tagInput.classList.remove('butr-locked-tag-input');
+    }
+    savedTagInputReadOnly = null;
   }
 
   /**
