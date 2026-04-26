@@ -7,7 +7,7 @@ A UserScript for [Danbooru](https://danbooru.donmai.us/) that catches the tags y
 ## At a Glance
 
 - **Confirms before deleting.** Never auto-removes anything. You see every candidate and uncheck what you want to keep.
-- **Multi-step chains.** Handles transitive implications — removing `idolmaster_cinderella_girls_u149_members` walks all three levels up.
+- **Multi-step chains.** Handles transitive implications — removing `idolmaster_cinderella_girls_u149` walks all three levels up.
 - **Smart bypass.** If your edit doesn't actually trigger any cleanup (no removal / no parents / parents would be re-added by other tags you kept), the popover stays out of the way and submit goes through normally.
 - **Keyboard-friendly.** Number/letter shortcuts to toggle rows, `Ctrl+Enter` to submit, `Esc` to cancel.
 - **Cancel-safe.** Cancel closes the popover and leaves you on the edit page with your input untouched. Optional opt-in restore.
@@ -38,27 +38,26 @@ The original Submit button is disabled while the popover is open, so you can't d
 ### Reading the popover
 
 ```
-                       ┌───────────────────────────┐
-                       │ Tags implied by removed   │
-                       │ tags                      │
-                       │  ☑ Delete all             │  ← master toggle
-                       │  ─────────────────────    │
-                       │  ☑ dress                  │  ← more general (top)
-                       │  ☑ sleeveless             │
-                       │  ☑ sleeveless_dress       │  ← less general (bottom)
-                       │  ── from pinafore_dress ──│  ← the seed (already removed)
-                       │                           │
-                       │  ☑ smile                  │
-                       │  ☑ one_eye_closed         │
-                       │  ── from ;D ──            │  ← second seed section
-                       │                           │
-                       │  ☐ Restore removed tags   │
-                       │      on Cancel            │
-                       │       [Submit] [Cancel]   │
-                       └───────────────────────────┘
+                       ┌───────────────────────────────┐
+                       │ Remove their implied parents? │
+                       │  ☑ Delete all                 │  ← master toggle
+                       │  ─────────────────────        │
+                       │  ☑ dress                      │  ← more general (top)
+                       │  ☑ sleeveless                 │
+                       │      ☑ sleeveless_dress       │  ← indented = closer to seed
+                       │  ── from pinafore_dress ──    │  ← the seed (already removed)
+                       │                               │
+                       │  ☑ smile                      │
+                       │  ☑ one_eye_closed             │
+                       │  ── from ;D ──                │  ← second seed section
+                       │                               │
+                       │  ☐ Restore removed tags       │
+                       │      on Cancel                │
+                       │       [Submit] [Cancel]       │
+                       └───────────────────────────────┘
 ```
 
-- **BottomUp ordering.** Within each section, more general parents are at the top, the more specific child is at the bottom, and the very last line shows the seed tag you removed. Reading the section top-to-bottom mirrors the implication chain "wider category → narrower category → the tag you deleted."
+- **BottomUp ordering.** Within each section, more general parents sit flush at the top and more specific children are indented one tab to the right per step toward the seed. The very last line of each section shows the seed tag you removed. Reading the section top-to-bottom mirrors the implication chain "wider category → narrower category → the tag you deleted."
 - **Sections per seed.** Each removed child gets its own section. If you remove two unrelated tags in one edit, you'll see two sections.
 - **Same parent in multiple sections.** When two removed children share a parent (e.g. you delete both `pinafore_dress` and `blue_dress`, and both imply `dress`), `dress` appears in *both* sections. Toggling one clone toggles the other automatically.
 - **`Delete all` master.** Toggles every candidate at once. The master is unchecked whenever any individual candidate is unchecked (no indeterminate state — easier to read at a glance).
