@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0
+// @version      1.0.1
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -435,12 +435,38 @@
   }
 
   /**
+   * Reduces a raw token Set to the tag set that will actually exist on the
+   * post after the server parses Danbooru's add/subtract syntax. Drops:
+   *   - `-tag` directives themselves (they are instructions, not tags).
+   *   - Any `tag` whose `-tag` directive is also present (server resolves
+   *     `tag -tag` to "tag is removed").
+   *
+   * This is the single source of truth for "what tags are effectively
+   * present" — used by `computeRemoved` (diff vs originalTags) and by
+   * `computeDialogPlan` (candidate filtering + Policy B+ stable tokens).
+   * Without this, `-tag` syntax leaks through as a still-present token,
+   * tricking Policy B+ into treating the soon-to-be-removed seed as a
+   * stable parent and filtering its implied parents out as "phantom".
+   *
+   * @param {!Set<string>} rawTokens
+   * @return {!Set<string>}
+   */
+  function finalTokens(rawTokens) {
+    const result = new Set();
+    for (const t of rawTokens) {
+      if (t.startsWith('-')) continue;
+      if (rawTokens.has('-' + t)) continue;
+      result.add(t);
+    }
+    return result;
+  }
+
+  /**
    * Computes the list of original tag tokens that the user is removing in
-   * this submit. Two patterns are detected:
-   *   - Implicit: the tag is no longer in the textarea (user deleted it).
-   *   - Explicit: the tag is still in the textarea AND `-tag` is also
-   *     present (Danbooru's subtraction syntax — server interprets the
-   *     `-tag` instruction as "remove this tag from the post").
+   * this submit. A tag counts as removed when it is absent from the
+   * post-submission tag set (`finalTokens`) — covers both implicit deletion
+   * (the literal token is gone) and explicit `-tag` subtraction (server
+   * will strip it).
    *
    * Returns an empty array when the snapshot has not been taken yet (e.g.
    * init() did not bind to a tag input on this page).
@@ -452,9 +478,8 @@
     if (!originalTags) {
       return [];
     }
-    const current = tokenize(currentValue);
-    return Array.from(originalTags).filter(
-        (tag) => !current.has(tag) || current.has('-' + tag));
+    const final = finalTokens(tokenize(currentValue));
+    return Array.from(originalTags).filter((tag) => !final.has(tag));
   }
 
   // --- IMPLICATION QUERIES ---
@@ -1154,24 +1179,25 @@
   }
 
   /**
-   * Filters the BFS meta map down to candidates currently present in the
-   * tag input (so removing them does something), then emits each candidate
-   * into every section reachable from a different seed (Task 4.7 multi-
-   * parent visibility). Each section is sorted by `(depth desc, name asc)`
-   * — more general parent at top, less general at bottom (BottomUp visual).
+   * Filters the BFS meta map down to candidates that will still be present
+   * after submission (so removing them does something), then emits each
+   * candidate into every section reachable from a different seed (Task 4.7
+   * multi-parent visibility). Each section is sorted by `(depth desc, name
+   * asc)` — more general parent at top, less general at bottom (BottomUp
+   * visual).
    *
    * Same tag may appear in multiple sections with section-relative depth
    * (e.g. `dress` from `pinafore_dress` chain at depth 2, and from
    * `blue_dress` chain at depth 1).
    *
    * @param {!Map<string, {antecedents: !Set<string>, seedRootDepths: !Map<string, number>}>} meta
-   * @param {!Set<string>} currentTokens
+   * @param {!Set<string>} presentTokens  Post-submission token set (`finalTokens`).
    * @return {!Map<string, !Array<{tag: string, depth: number}>>}
    */
-  function groupBySeedRoot(meta, currentTokens) {
+  function groupBySeedRoot(meta, presentTokens) {
     const groups = new Map();
     for (const [tag, info] of meta) {
-      if (!currentTokens.has(tag)) {
+      if (!presentTokens.has(tag)) {
         continue;
       }
       for (const [seedRoot, depth] of info.seedRootDepths) {
@@ -2125,8 +2151,12 @@
       throw new DOMException('Aborted', 'AbortError');
     }
 
-    const currentTokens = tokenize(currentValue);
-    const groups = groupBySeedRoot(meta, currentTokens);
+    // Use post-submission tag set (finalTokens) so candidate filtering and
+    // Policy B+ stable tokens reflect what the server will actually see.
+    // Critical for `-tag` syntax: without this, a seed being negated would
+    // remain in the "stable" set and prop up its implied parents as phantom.
+    const final = finalTokens(tokenize(currentValue));
+    const groups = groupBySeedRoot(meta, final);
 
     if (groups.size === 0) {
       return {status: 'bypass', filteredGroups: null, meta};
@@ -2139,7 +2169,7 @@
         [...groups.values()].flat().map((x) => x.tag))];
     const candidatesSet = new Set(candidatesArr);
     const stableTokens = new Set(
-        [...currentTokens].filter((t) => !candidatesSet.has(t)));
+        [...final].filter((t) => !candidatesSet.has(t)));
 
     // Policy B+ (Task 4.8): identify phantom seeds and still-implied
     // candidates via fixed-point iteration on the antecedent graph. Phantom
