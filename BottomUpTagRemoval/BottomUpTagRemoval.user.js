@@ -101,13 +101,6 @@
     .butr-row input[type="checkbox"] {
       margin: 0;
     }
-    .butr-arrow {
-      padding: 1px 4px 1px 12px;
-      color: var(--butr-text-muted, #888888);
-      font-size: 11px;
-      user-select: none;
-      pointer-events: none;
-    }
     .butr-keyhint {
       display: inline-block;
       min-width: 10px;
@@ -881,7 +874,7 @@
     root.id = 'butr-dialog';
 
     const title = document.createElement('h2');
-    title.textContent = 'Tags implied by removed tags';
+    title.textContent = 'Remove their implied parents?';
     root.appendChild(title);
 
     const masterRow = document.createElement('label');
@@ -1196,8 +1189,11 @@
 
   /**
    * Replaces the spinner with the candidate sections. Each section renders
-   * its rows top-down by descending depth, inserts a `↑` cue when depth
-   * decreases, and ends with a "── from <seedRoot> ──" footer.
+   * its rows top-down by descending depth and indents rows whose depth is
+   * lower (i.e. closer to the seed) so that the BottomUp visual matches an
+   * implication tree — more general parents flush left, more specific
+   * children indented one tab per depth step. Each section ends with a
+   * "── from <seedRoot> ──" footer.
    *
    * Default check state: each row is checked unless its tag is in
    * `stillImplied` — those are pre-unchecked because some non-candidate
@@ -1224,16 +1220,15 @@
       const section = document.createElement('div');
       section.className = 'butr-section';
 
-      let prevDepth = null;
-      for (const {tag, depth} of rows) {
-        if (prevDepth !== null && depth < prevDepth) {
-          const arrow = document.createElement('div');
-          arrow.className = 'butr-arrow';
-          arrow.textContent = '↑';
-          section.appendChild(arrow);
-        }
-        prevDepth = depth;
+      // Per-section max depth → indent step is (maxDepth - depth). Top
+      // (most general) rows sit flush against the keyhint column; each
+      // step toward the seed pushes the checkbox + label one tab right.
+      let sectionMaxDepth = 0;
+      for (const {depth} of rows) {
+        if (depth > sectionMaxDepth) sectionMaxDepth = depth;
+      }
 
+      for (const {tag, depth} of rows) {
         const row = document.createElement('label');
         row.className = 'butr-row';
         const cb = document.createElement('input');
@@ -1241,6 +1236,10 @@
         cb.checked = !implied.has(tag);
         cb.dataset.butrTag = tag;
         cb.addEventListener('change', onCandidateChange);
+        const indentLevel = sectionMaxDepth - depth;
+        if (indentLevel > 0) {
+          cb.style.marginLeft = `${indentLevel * 4}ch`;
+        }
         row.append(
             createKeyHint(candidateKeyHint(candidateIndex)),
             cb,
