@@ -18,6 +18,7 @@ A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 | **[Danbooru Mobile Note Assist](./MobileNoteAssist)** | Assist creating notes on mobile with accurate scaling and touch-friendly controls. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js) |
 | **[Danbooru Grouping Tags](./GroupingTags)** | Advanced tag management system featuring visual grouping, character-first sorting, and Gist synchronization. | [Install](https://github.com/AkaringoP/JavaScripts/raw/build/groupingtags.user.js) |
 | **[Danbooru Post Timeline](./PostTimeline)** | Displays the upload timeline of a post — source platform publish date, media asset upload, and post creation — in Danbooru's Information section. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js) |
+| **[Danbooru Bottom-Up Tag Removal](./BottomUpTagRemoval)** | When you remove a tag on submit, offers to also remove its implied parent tags via a confirmation popover. Walks transitive implication chains. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/BottomUpTagRemoval/BottomUpTagRemoval.user.js) |
 
 ## How to Install
 
