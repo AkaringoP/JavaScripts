@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.2
+// @version      1.0.3
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -2054,25 +2054,29 @@
       return;
     }
 
-    event.preventDefault();
-    event.stopImmediatePropagation();
-
-    // Task 4.9: try the prefetch cache before falling back to the native
-    // flow. The current key recomputed here MUST match the key under which
-    // the prefetch was stored — otherwise the textarea moved on after the
-    // prefetch was started and the cached result is stale.
+    // Task 4.9: try the prefetch cache BEFORE preventDefault. The current
+    // key recomputed here MUST match the key under which the prefetch was
+    // stored — otherwise the textarea moved on after the prefetch was
+    // started and the cached result is stale.
     const currentTokens = tokenize(tagInput.value);
     const currentKey = makeCacheKey(removed, currentTokens);
 
-    // Fast bypass — popover never shows, so no cancel restore is possible.
-    // Skipping currentRemoved bookkeeping here keeps the bypass path zero-
-    // overhead (no module state to clean up if the user never sees the
-    // popover).
+    // Fast bypass — popover never shows, so we just let the original
+    // submit event propagate naturally. We MUST NOT call preventDefault
+    // (or invoke submitFormViaNativeFlow → requestSubmit) here:
+    // handleSubmit always runs synchronously inside a submit event chain,
+    // so a recursive requestSubmit would be no-op'd by the HTML spec
+    // ("firing submission events" guard) and leave bypassNextSubmit stuck
+    // true — silently swallowing this user's submit until they press
+    // again. Returning early without preventDefault lets Danbooru's Turbo
+    // / Rails UJS handlers complete the submission on the FIRST press.
     if (prefetchKey === currentKey && prefetchResult &&
         prefetchResult.status === 'bypass') {
-      submitFormViaNativeFlow();
       return;
     }
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
 
     // Every remaining branch mounts the popover. Stash the seed list so
     // cancel() can restore it if the user has opted into "Restore removed
