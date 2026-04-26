@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.3
+// @version      1.0.4
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -2429,13 +2429,17 @@
     /** @type {!Array<string>} */
     const toAppend = [];
     for (const seed of seeds) {
-      if (current.has(seed) && current.has('-' + seed)) {
+      // Two independent conditions — handles all four cases:
+      //   `tag` only           → no-op (already restored)
+      //   `-tag` only          → drop `-tag`, append `tag`
+      //   `tag` + `-tag` mixed → drop `-tag` (server stops removing it)
+      //   neither              → append `tag` (implicit deletion)
+      if (current.has('-' + seed)) {
         minusToRemove.add('-' + seed);
-      } else if (!current.has(seed)) {
+      }
+      if (!current.has(seed)) {
         toAppend.push(seed);
       }
-      // Else: seed is already present without a -tag directive (user
-      // manually restored or never actually removed). No-op.
     }
 
     const modified = minusToRemove.size > 0 || toAppend.length > 0;
