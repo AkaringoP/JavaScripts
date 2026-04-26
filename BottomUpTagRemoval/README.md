@@ -116,8 +116,8 @@ You want to remove `pinafore_dress` but the post also has `sundress` (which also
 If you want Cancel to also undo the seed tag removal (so the post returns to its original state on the page), tick the **"Restore removed tags on Cancel"** checkbox above the buttons. This is **off by default** and the choice is remembered across pages (in `localStorage`).
 
 - Implicit removals (text deletion) are restored by appending the tag back to the textarea.
-- `-tag` subtraction is restored by stripping the `-tag` token.
-- Already-typed tags are left alone (idempotent).
+- `-tag` subtraction directives are dropped (and the tag is appended if it isn't already in the input), so the originally-removed tag is effectively present again.
+- Tags that are already there with no matching `-tag` directive are left alone (idempotent).
 
 If you click **Submit** with this checkbox ticked, restore does nothing — Submit always proceeds with your selection.
 
@@ -139,7 +139,7 @@ A small grey hint label is shown to the left of each row (e.g. `1`, `a`, `b` …
 ## FAQ
 
 **Does this work on the bulk update / post versions / wiki pages?**
-v1.0 supports `/posts/{id}` and `/posts/{id}/edit` only. Bulk update has different syntax (`add:` / `remove:`) and is on the backlog.
+The script runs only on `/posts/{id}` and `/posts/{id}/edit`. Bulk update has different syntax (`add:` / `remove:`) and is on the backlog.
 
 **What about `-tag` subtraction syntax (Method B)?**
 Detected. If your input has `pinafore_dress -pinafore_dress`, the `-tag` form is treated as a removal, the popover shows the same candidates as a plain delete, and you can decide which parents to also remove.
@@ -157,7 +157,7 @@ Only one optional flag: `butr_restore_on_cancel`, written when you tick the rest
 Use the toggle in your UserScript manager (Tampermonkey/Violentmonkey). Cancelling the popover is functionally identical to having the script off — your input is submitted unchanged when you re-submit without it.
 
 **Does it interact with Danbooru's autocomplete?**
-The autocomplete dropdown is closed automatically when the popover opens, so the two never visually overlap.
+The autocomplete dropdown is closed automatically when the popover opens, so the two never visually overlap. Pressing `Ctrl+Enter` while autocomplete is still open also dismisses it and submits in a single press — no double-press needed.
 
 **It's not appearing on a tag I removed — why?**
 Most common reason: the tag has no implications, or its parents would all be re-added by other tags you kept (still-implied → filtered). Both are bypass cases by design. If you suspect a real bug, check the browser console for warnings starting with `[BUTR]`.
