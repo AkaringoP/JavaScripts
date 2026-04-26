@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.1.1
+// @version      1.1.3
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -2295,6 +2295,7 @@
     if (typeof tagForm.requestSubmit === 'function') {
       bypassNextSubmit = true;
       tagForm.requestSubmit();
+      bypassNextSubmit = false;
     } else {
       bypassNextSubmit = false;
       tagForm.submit();
