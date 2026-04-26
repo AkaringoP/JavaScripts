@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.1
+// @version      1.0.2
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -395,6 +395,15 @@
    * @type {?(event: Event) => void}
    */
   let inputListener = null;
+
+  /**
+   * Reference to the bound capture-phase `keydown` listener on the
+   * textarea. Bound in init(), removed in cleanup(). Used to close
+   * Danbooru's autocomplete dropdown on Ctrl+Enter BEFORE jQuery UI
+   * Autocomplete's bubble-phase handler intercepts the key.
+   * @type {?(event: KeyboardEvent) => void}
+   */
+  let textareaKeydownListener = null;
 
   /**
    * Length of the textarea value at the previous `input` event. Used to
@@ -1768,6 +1777,11 @@
     // ref is kept for symmetric removal in cleanup().
     inputListener = onTextareaInput;
     tagInput.addEventListener('input', inputListener);
+
+    // Capture phase so we run BEFORE jQuery UI Autocomplete's bubble-phase
+    // keydown handler — see onTextareaKeydown for the Ctrl+Enter rationale.
+    textareaKeydownListener = onTextareaKeydown;
+    tagInput.addEventListener('keydown', textareaKeydownListener, true);
   }
 
   /**
@@ -1786,6 +1800,11 @@
       tagInput.removeEventListener('input', inputListener);
     }
     inputListener = null;
+
+    if (tagInput && textareaKeydownListener) {
+      tagInput.removeEventListener('keydown', textareaKeydownListener, true);
+    }
+    textareaKeydownListener = null;
 
     if (tagForm) {
       tagForm.removeEventListener('submit', handleSubmit, true);
@@ -1876,6 +1895,27 @@
         prefetchDebounceTimer = null;
         runPrefetch();
       }, PREFETCH_DEBOUNCE_MS);
+    }
+  }
+
+  /**
+   * Capture-phase `keydown` listener on the tag textarea. Closes Danbooru's
+   * autocomplete dropdown on Ctrl+Enter so jQuery UI Autocomplete's
+   * bubble-phase handler (which would otherwise call `event.preventDefault()`
+   * on the keydown when its menu is active) sees no open menu and lets the
+   * key through to Danbooru's submit shortcut. Without this, the user has to
+   * press Ctrl+Enter twice when the autocomplete dropdown is open: the first
+   * press is consumed by autocomplete (closes the menu), the second actually
+   * submits the form.
+   *
+   * No `preventDefault()` / `stopPropagation()` here — we only nudge the
+   * dropdown closed and let the natural keydown flow continue.
+   *
+   * @param {KeyboardEvent} e
+   */
+  function onTextareaKeydown(e) {
+    if (e.ctrlKey && e.key === 'Enter') {
+      closeAutocomplete();
     }
   }
 
