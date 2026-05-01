@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.1.0
+// @version      1.1.1
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -132,6 +132,14 @@
     .butr-restore input[type="checkbox"] {
       margin: 0;
     }
+    .butr-overline {
+      font-size: 10px;
+      color: var(--butr-text-muted, #888888);
+      text-align: center;
+      margin: 0 0 2px;
+      line-height: 1.2;
+      user-select: none;
+    }
     .butr-buttons {
       display: flex;
       justify-content: flex-end;
@@ -184,6 +192,17 @@
 
   /** @const {string} DOM id used to id-guard injected <style>. */
   const STYLE_ELEMENT_ID = 'butr-styles';
+
+  /** @const {string} Display name shown in the popover footer credit line. */
+  const SCRIPT_NAME = 'BottomUpTagRemoval';
+
+  /**
+   * @const {string} Version string shown in the popover footer. **Must mirror
+   * the @version line in the UserScript header above** — Tampermonkey reads
+   * @version for auto-update detection, while this constant is only for the
+   * in-popover credit display. Keep them in sync on each release.
+   */
+  const SCRIPT_VERSION = '1.1.1';
 
   /**
    * @const {number} Debounce window for typing-style edits before kicking
@@ -906,6 +925,16 @@
   function buildDialog() {
     const root = document.createElement('div');
     root.id = 'butr-dialog';
+
+    // Overline ("kicker" pattern) — small muted label identifying the
+    // script + version, sitting directly above the title with tight
+    // spacing. Plain text only (no link) so it acts as a pure identity
+    // label, not an interactive surface — keeps the popover's
+    // interactive surfaces purely tactical (checkboxes + Submit/Cancel).
+    const overline = document.createElement('div');
+    overline.className = 'butr-overline';
+    overline.textContent = `${SCRIPT_NAME} v${SCRIPT_VERSION}`;
+    root.appendChild(overline);
 
     const title = document.createElement('h2');
     title.textContent = 'Remove their implied parents?';

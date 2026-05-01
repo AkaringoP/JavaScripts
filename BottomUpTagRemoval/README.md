@@ -170,6 +170,7 @@ Most common reason: the tag has no implications, or its parents would all be re-
 
 ## Changelog
 
+- **v1.1.1** (2026-05-02) — Add a small `BottomUpTagRemoval v1.1.1` label above the popover title (kicker / overline style, plain text).
 - **v1.1.0** (2026-05-02) — Maintenance: dead code removal, selector observability (warns in the console when Danbooru's tag-input selector goes missing on a post page), `positionPopover` fallback hardening. **No user-visible behavior change.**
 - **v1.0.4** (2026-04-26) — Fix: restore-on-Cancel correctly drops `-tag`-only directives.
 - **v1.0.3** (2026-04-26) — Fix: cache-hit bypass no longer requires a second Submit press.
