@@ -168,6 +168,14 @@ Most common reason: the tag has no implications, or its parents would all be re-
 - Should work on any UserScript manager that supports standard `@match` and `@grant none`.
 - Requires a modern browser (`fetch`, `AbortController`, `URLSearchParams`, optional chaining).
 
+## Changelog
+
+- **v1.1.0** (2026-05-02) — Maintenance: dead code removal, selector observability (warns in the console when Danbooru's tag-input selector goes missing on a post page), `positionPopover` fallback hardening. **No user-visible behavior change.**
+- **v1.0.4** (2026-04-26) — Fix: restore-on-Cancel correctly drops `-tag`-only directives.
+- **v1.0.3** (2026-04-26) — Fix: cache-hit bypass no longer requires a second Submit press.
+- **v1.0.2** (2026-04-26) — Fix: `Ctrl+Enter` while autocomplete is open now submits in a single press.
+- **v1.0** (2026-04-26) — Initial release.
+
 ## License
 
 MIT. See the repository [LICENSE](https://github.com/AkaringoP/JavaScripts/blob/main/LICENSE) for details.

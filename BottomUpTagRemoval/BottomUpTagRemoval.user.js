@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.4
+// @version      1.1.0
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -1050,8 +1050,13 @@
     }
     const popover = dialogRefs.root;
 
+    // No `?? tagForm` fallback — a form without a submit button is an
+    // abnormal DOM state, and anchoring to the form's bounding rect would
+    // place the popover at a misleading location. Treat it as anchor-lost
+    // and dismiss (= same outcome as the script being inactive on this
+    // page; consistent with F5 regression-safety).
     const anchor = tagForm?.querySelector(
-        'input[type="submit"], button[type="submit"]') ?? tagForm;
+        'input[type="submit"], button[type="submit"]');
     if (!anchor || !document.body.contains(anchor)) {
       cancel();
       return;
@@ -1758,6 +1763,16 @@
 
     tagInput = document.querySelector(TAG_INPUT_SELECTOR);
     if (!tagInput) {
+      // Surface a warning ONLY on pages where we expect a tag textarea
+      // (post show / post edit). The @match glob also fires us on
+      // /posts (index), /posts/random, etc., where a missing textarea is
+      // normal — warning there would be noise. A live warning here is the
+      // earliest signal that Danbooru's DOM has shifted underneath us.
+      if (/^\/posts\/\d+(?:\/edit)?\/?$/.test(location.pathname)) {
+        console.warn(
+            `[BUTR] tag input selector ${TAG_INPUT_SELECTOR} not found ` +
+            `on ${location.pathname} — Danbooru DOM may have changed`);
+      }
       return;
     }
 
@@ -2303,6 +2318,10 @@
       tagInput.value = removeTagsFromInput(tagInput.value, toRemove);
       // Some Danbooru widgets listen for 'input' to update derived UI
       // (character counters, etc.) — replicate the user-typing signal.
+      // The dispatch below is safe ONLY because isProcessing is still
+      // true here — onTextareaInput short-circuits on that flag, so this
+      // synthetic event doesn't kick off a fresh prefetch. Don't reorder
+      // this block (v1.0.2 lesson — fragile zone memory).
       tagInput.dispatchEvent(new Event('input', {bubbles: true}));
     }
 
@@ -2508,37 +2527,4 @@
 
   // Initial execution (direct page load without Turbo navigation).
   init();
-
-  // Debug exposure (Phase 3-4 dev). Opt-in via `localStorage.butr_debug = '1'`
-  // (set once in DevTools console; persists across reloads). To disable:
-  // `delete localStorage.butr_debug`. Commented out for release; re-enable
-  // by uncommenting this block when running future debug sessions.
-  // try {
-  //   if (localStorage.getItem('butr_debug') === '1') {
-  //     window.BUTR = {
-  //       // BFS / API
-  //       upwardClosure, fetchAllImplications, findStillImpliedTargets,
-  //       computeSeedRootDepths,
-  //       // Dialog
-  //       showDialog, hideDialog, renderSections, groupBySeedRoot,
-  //       computeDialogPlan,
-  //       // Cascade (Task 4.7)
-  //       buildChildToParents, findAllParentTags, onCandidateChange,
-  //       // Prefetch (Task 4.9)
-  //       runPrefetch, makeCacheKey,
-  //       get prefetchKey() { return prefetchKey; },
-  //       get prefetchResult() { return prefetchResult; },
-  //       // Keyboard / autocomplete (Task 4.10)
-  //       toggleMasterCheckbox, toggleCandidateAt, closeAutocomplete,
-  //       // Cancel UX (Task 4.11)
-  //       restoreSeedsToInput, readRestorePref, writeRestorePref,
-  //       get currentRemoved() { return currentRemoved; },
-  //       // Utilities
-  //       tokenize, computeRemoved,
-  //     };
-  //     console.log('[BUTR] debug exposure enabled (window.BUTR)');
-  //   }
-  // } catch (_) {
-  //   // localStorage unavailable; skip silently.
-  // }
 })();
