@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.6
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -71,8 +71,9 @@
   // --------------------------------------------------------------------------
 
   let isEnabled = localStorage.getItem(STATE_KEY) === 'true';
-  let userBtnMarginY = parseInt(localStorage.getItem(POS_KEY), 10) ||
-      DEFAULT_BTN_MARGIN_Y;
+  const savedMarginY = parseInt(localStorage.getItem(POS_KEY), 10);
+  let userBtnMarginY = Number.isFinite(savedMarginY) ?
+      savedMarginY : DEFAULT_BTN_MARGIN_Y;
 
   // Interaction State
   let isDraggingBtn = false;
@@ -112,6 +113,7 @@
 
   // Initialization
   let initialized = false;
+  let viewportListenersBound = false;
 
   // Data
   let allPostTags = new Set();
@@ -367,7 +369,6 @@
     if (initialized) {
       return;
     }
-    initialized = true;
 
     loadTagsFromDOM();
     fetchPostData(true);
@@ -376,7 +377,7 @@
     updateStateUI();
     updateVisualViewportPositions();
 
-    if (window.visualViewport) {
+    if (window.visualViewport && !viewportListenersBound) {
       const handleUpdate = () => {
         if (!viewportRaf) {
           viewportRaf = requestAnimationFrame(() => {
@@ -392,6 +393,7 @@
       window.visualViewport.addEventListener('resize', handleUpdate);
       window.visualViewport.addEventListener('scroll', handleUpdate);
       window.addEventListener('scroll', handleUpdate);
+      viewportListenersBound = true;
     }
 
     const sidebarLink = document.getElementById('dmna-sidebar-link');
@@ -403,10 +405,13 @@
       };
     }
 
-    // Bind creation interactions (Click/Drag)
+    // Bind creation interactions (Click/Drag).
+    // Only mark `initialized` true when #image was found and bindings
+    // succeeded — otherwise the setTimeout(init, 1000) fallback retries.
     const img = document.querySelector('#image');
     if (img) {
       setupCreationInteraction(img);
+      initialized = true;
     }
   }
 
@@ -620,6 +625,9 @@
     if (!el) {
       return false;
     }
+    if (el.isContentEditable === true) {
+      return true;
+    }
     return el.tagName === 'TEXTAREA' ||
         (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button',
           'submit', 'image', 'file', 'range', 'color'].includes(el.type));
@@ -706,8 +714,6 @@
 
     // Auto-hide floating button when typing
     if (inputElement) {
-      const floatBtn = document.getElementById('dmna-float-btn');
-
       // Use capture to detect focus/blur on ANY input element in the document
       document.addEventListener('focus', (e) => {
         const target = e.target;
@@ -908,9 +914,6 @@
       if (!isEnabled || e.button !== 0) {
         return;
       }
-      if (e.target.closest('#dmna-box') || e.target.closest('#dmna-popover')) {
-        return;
-      }
 
       e.preventDefault();
       isCreatingBox = true;
@@ -935,12 +938,6 @@
         suppressNextClick = false;
         e.preventDefault();
         e.stopPropagation();
-        return;
-      }
-
-      if (e.target.closest('#dmna-box') ||
-          e.target.closest('#dmna-popover') ||
-          e.target.closest('#dmna-float-btn')) {
         return;
       }
 
@@ -1026,6 +1023,11 @@
       updatePopoverPosition();
       showDebugZones(1500);
       suppressNextClick = true;
+      // Auto-release in case the trailing emulated click never arrives
+      // (e.g. focus shift, contextmenu) — prevents next valid click loss.
+      setTimeout(() => {
+        suppressNextClick = false;
+      }, 500);
     }
     // Otherwise: do nothing and let the `click` handler decide.
   }
@@ -1178,6 +1180,7 @@
       document.addEventListener('touchmove', onMove, {passive: false});
       document.addEventListener('mouseup', onEnd);
       document.addEventListener('touchend', onEnd);
+      document.addEventListener('touchcancel', onEnd);
     };
 
     const onMove = (e) => {
@@ -1255,6 +1258,7 @@
       document.removeEventListener('touchmove', onMove);
       document.removeEventListener('mouseup', onEnd);
       document.removeEventListener('touchend', onEnd);
+      document.removeEventListener('touchcancel', onEnd);
     };
 
     boxElement.addEventListener('mousedown', onStart);
@@ -1287,7 +1291,20 @@
     const originalWidth = postOriginalWidth || img.naturalWidth;
     const originalHeight = postOriginalHeight || img.naturalHeight;
 
+    if (!originalWidth || !originalHeight) {
+      showToast('⚠️ Image dimensions unknown');
+      btn.innerHTML = originHtml;
+      return;
+    }
+
     const imgRect = img.getBoundingClientRect();
+
+    if (!imgRect.width || !imgRect.height) {
+      showToast('⚠️ Image not visible');
+      btn.innerHTML = originHtml;
+      return;
+    }
+
     const scaleX = originalWidth / imgRect.width;
     const scaleY = originalHeight / imgRect.height;
     const relX = boxRect.left - imgRect.left;
@@ -1297,7 +1314,9 @@
     const finalW = Math.round(boxRect.width * scaleX);
     const finalH = Math.round(boxRect.height * scaleY);
 
-    if (finalX < 0 || finalY < 0) {
+    if (finalX < 0 || finalY < 0 ||
+        finalX + finalW > originalWidth ||
+        finalY + finalH > originalHeight) {
       showToast('⚠️ Out of bounds');
       btn.innerHTML = originHtml;
       return;
@@ -1359,16 +1378,27 @@
       }
 
       const results = await Promise.all(promises);
-      const allOk = results.every((r) => r.ok);
+      const noteOk = results[0].ok;
+      const tagOk = results.length < 2 || results[1].ok;
 
-      if (allOk) {
+      if (noteOk && tagOk) {
         if (getChecked('translated')) {
           localStorage.setItem(STATE_KEY, 'false');
         }
         showToast('✅ Saved! Reloading...');
         setTimeout(() => location.reload(), 800);
+      } else if (noteOk) {
+        // Note persisted; tag PUT failed. Reload anyway since the note
+        // itself is saved and a stale tag state is recoverable elsewhere.
+        showToast('⚠️ Note saved, tags failed');
+        setTimeout(() => location.reload(), 800);
+      } else if (tagOk) {
+        // Tags applied but note POST failed — let user retry the note.
+        showToast('❌ Note save failed (tags updated)');
+        btn.innerHTML = originHtml;
       } else {
-        throw new Error('Server returned error');
+        showToast('❌ Save failed');
+        btn.innerHTML = originHtml;
       }
     } catch (err) {
       showToast('Error: ' + err.message);

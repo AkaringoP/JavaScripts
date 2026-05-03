@@ -184,6 +184,7 @@ Nothing else is persisted. No analytics, no remote calls beyond Danbooru itself.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full version history.
 
+- **v2.6** (2026-05-03) — Issue cleanup: `init()` re-binding fix, submitNote correctness (right/bottom boundary check, partial save failure toasts), defensive guards (touchcancel, suppressNextClick auto-release, image-dimension guards, contenteditable auto-hide), and minor cleanup (dead code, variable shadowing, parseInt fallback).
 - **v2.5** (2026-04-20) — Fix: tap-creates-then-cancels regression on mobile (introduced in v2.3's PC drag support). Restore the simple invariant: click owns tap-to-create, mouseup handles drag-to-create only.
 - **v2.4** (2026-03-23) — Maintenance: init guard, dead code removal, GJS style cleanup. No user-visible behavior change.
 
