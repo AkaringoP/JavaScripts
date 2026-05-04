@@ -65,13 +65,13 @@
   const MIN_BOX_SIZE_IMG = 8;
 
   /** @const {number} Minimum box width/height in display pixels.
-   *  Originally 48 for "all four 32px touch zones non-overlapping," but
-   *  with the corner zones now positioned mostly outside the box (NW/NE
-   *  fully outside, SE/SW shifted up half) the in-box overlap concern
-   *  is gone, so this is now driven purely by "how small a box is still
-   *  usable." 40 keeps the body large enough to grab without crowding
-   *  the SE corner triangle affordance. */
-  const MIN_BOX_SIZE_DISPLAY = 40;
+   *  Originally 48 (then 40) for usability of the in-box body drag
+   *  target. Tightened to 24 per user request — small features (an
+   *  eye, a punctuation glyph) need to be markable. The 32px corner
+   *  touch zones extend outside the box (NW/NE fully outside, SE/SW
+   *  shifted up half) so they remain individually grabbable even when
+   *  the box is smaller than a single touch zone. */
+  const MIN_BOX_SIZE_DISPLAY = 24;
 
   /** @const {number} Popover CSS width in display pixels (counter-scaled
    *  by visualViewport so the visual width stays constant under pinch). */
@@ -138,11 +138,29 @@
   /**
    * @typedef {Object} ActionLogEntry
    * @property {string} noteId
-   * @property {'create' | 'edit' | 'delete'} type
+   * @property {'create' | 'edit' | 'delete' | 'transform'} type
+   *     - 'create'    — new temp note spawned. prevState is null.
+   *     - 'edit'      — ✔ checkpoint. prevState is the prior
+   *                     `confirmedState`; undo restores both
+   *                     `current` and `confirmedState` (✔ commits
+   *                     both, so undo reverts both).
+   *     - 'delete'    — 🗑 soft-delete. prevState is `current` at
+   *                     delete time; undo flips `isDeleted=false`
+   *                     and restores `current`.
+   *     - 'transform' — drag/resize gesture finished with movement.
+   *                     prevState is `current` at gesture start;
+   *                     undo restores only the geometry fields
+   *                     (x/y/w/h), leaving text and confirmedState
+   *                     alone. Two reasons for the split: (a) drag
+   *                     doesn't change confirmedState, so resetting
+   *                     it would clobber a prior ✔; (b) typing
+   *                     after a drag shouldn't be undone by a ↶
+   *                     aimed at the drag.
    * @property {?NoteState} prevState  State immediately before the action.
-   *     Null for 'create' (the note didn't exist yet). Per-note Undo finds
-   *     the latest entry matching `noteId` and reverses it; global Undo
-   *     pops the tail regardless of which note it touched.
+   *     Null for 'create' (the note didn't exist yet). Per-note Undo
+   *     (popover ↶) finds the latest entry matching `noteId` and
+   *     reverses it. Wave 3.5 simplified v3.0 scope to per-note only —
+   *     there is no longer a global Undo arc-menu item.
    */
 
   /**
@@ -235,6 +253,10 @@
   /** @type {boolean}  True after the image's click handler has been
    *  attached. Set by `bindImageHandlers()`. */
   let imageHandlersBound = false;
+
+  // PC keyboard shortcuts (Shift+N global toggle). One-time document-level
+  // bind, gated by activeNoteId / focus checks at fire time.
+  let hotkeysBound = false;
 
   // Popover (v3.0 Phase 3 Wave 3). Created lazily on first activation.
 
@@ -371,6 +393,14 @@
       border-style: solid;
       border-color: #ff9800;
       background-color: rgba(255, 152, 0, 0.15);
+    }
+    /* When a deleted box is also active (re-tapped to reveal the undo
+       affordance), keep the red-dashed visual — masking it as orange
+       would hide the very state the popover is asking the user to act on. */
+    .dmna-note-box.is-deleted.is-active {
+      border-style: dashed;
+      border-color: #e53935;
+      background-color: rgba(229, 57, 53, 0.18);
     }
 
     /* Active-mode cursor cue: tapping the image creates a new note. */
@@ -514,10 +544,16 @@
       resize: none;
     }
     #dmna-popover-input:focus { border-color: #0073ff; }
-    #dmna-popover-eye {
+    #dmna-popover-side-stack {
       flex-shrink: 0;
       width: 44px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
       align-self: stretch;
+    }
+    .dmna-popover-side-btn {
+      flex: 1;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.15);
       background: rgba(255, 255, 255, 0.06);
@@ -525,15 +561,47 @@
       font-size: 18px;
       cursor: pointer;
       user-select: none;
-      touch-action: none;
+      touch-action: manipulation;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 0;
+      min-height: 0;
     }
+    /* Eye uses pointer events for press-and-hold, so it overrides
+       touch-action to disable scroll/zoom while held. */
+    #dmna-popover-eye { touch-action: none; }
     #dmna-popover-eye:active,
     #dmna-popover-eye.is-pressed {
       background: rgba(255, 255, 255, 0.22);
+    }
+    #dmna-popover-undo:active {
+      background: rgba(255, 255, 255, 0.22);
+    }
+    /* Disabled state for the popover's interactive controls — used when
+       the active note is soft-deleted, leaving only ↶ (highlighted) live. */
+    #dmna-popover-input:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .dmna-popover-side-btn:disabled,
+    .dmna-popover-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .dmna-popover-side-btn:disabled:active,
+    .dmna-popover-btn:disabled:active {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    /* Highlighted ↶ on a soft-deleted note — accents the only live
+       action so the user knows their next move is "undo to restore." */
+    #dmna-popover-undo.is-highlighted {
+      border-color: #ff9800;
+      background: rgba(255, 152, 0, 0.22);
+      color: #ffb74d;
+    }
+    #dmna-popover-undo.is-highlighted:active {
+      background: rgba(255, 152, 0, 0.36);
     }
     #dmna-popover-buttons {
       display: flex;
@@ -695,6 +763,11 @@
       }
     });
 
+    if (!hotkeysBound) {
+      document.addEventListener('keydown', handleGlobalHotkeys);
+      hotkeysBound = true;
+    }
+
     if (window.visualViewport && !viewportListenersBound) {
       const handleUpdate = () => {
         if (!viewportRaf) {
@@ -819,21 +892,22 @@
         const screenH = window.innerHeight;
         let newMarginX = dragStartMarginX - dx;
         let newMarginY = dragStartMarginY - dy;
-        // Clamps derived from arc menu geometry (r=70, 3 items at -70°,
-        // -115°, -160°) so the entire menu stays on-screen at any button
-        // position:
-        //   • Right limit (min X): ⌈r·cos(-70°)⌉ = ⌈24⌉ = 25.
+        // Clamps derived from arc menu geometry (r=70, 2 items at -70°,
+        // -115°) so the entire menu stays on-screen at any button
+        // position. (Wave 3.5 dropped the -160° Undo item, freeing ~40px
+        // of horizontal slack on the left.)
+        //   • Right limit (min X = 25): ⌈r·cos(-70°)⌉ = 24 → 25.
         //     Prevents item 0 (Confirm, -70°) from clipping the right edge.
-        //   • Left limit (max X = screenW − 110): r·|cos(-160°)| + item_half
-        //     + btn_half ≈ 66 + 20 + 20 = 106 → 110 (round). Item 2 (Edit,
-        //     -160°) is the leftmost.
-        //   • Top limit (max Y = screenH − 105): r·|sin(-115°)| + item_half
-        //     + btn_half ≈ 64 + 20 + 20 = 104 → 105 (round). Item 1 (Undo,
-        //     -115°) is the highest.
+        //   • Left limit (max X = screenW − 70): r·|cos(-115°)| + item_half
+        //     + btn_half ≈ 30 + 20 + 20 = 70. Item 1 (Edit, -115°) is the
+        //     leftmost.
+        //   • Top limit (max Y = screenH − 106): r·|sin(-70°)| + item_half
+        //     + btn_half ≈ 66 + 20 + 20 = 106. Item 0 (Confirm, -70°) is
+        //     the highest (slightly above Edit at -115°).
         //   • Bottom limit (min Y = 20): only the button itself extends
         //     below button-center; all items sit at or above it.
-        newMarginX = Math.max(25, Math.min(screenW - 110, newMarginX));
-        newMarginY = Math.max(20, Math.min(screenH - 105, newMarginY));
+        newMarginX = Math.max(25, Math.min(screenW - 70, newMarginX));
+        newMarginY = Math.max(20, Math.min(screenH - 106, newMarginY));
         userBtnMarginX = newMarginX;
         userBtnMarginY = newMarginY;
         updateVisualViewportPositions();
@@ -917,44 +991,43 @@
     menuElement.id = 'dmna-menu';
 
     /**
-     * @type {Array<{action: 'edit' | 'undo' | 'confirm', icon: string,
+     * @type {Array<{action: 'edit' | 'confirm', icon: string,
      *     label: string}>}
      *
      * Order matches arc traversal from arc-start (closest to top) down
      * to arc-end (closest to floating button). Read "from button outward
-     * / bottom-up": Edit -> Undo -> Confirm.
+     * / bottom-up": Edit -> Confirm.
      *
      * Phase 3 (Z10): create + edit modes were merged into a single
      * `active` mode driven by the Edit item, and the explicit Discard-all
      * item was removed (its role is absorbed by the Z11 off-flow's dirty
      * confirm dialog). Down from 5 items to 3.
+     *
+     * Wave 3.5: global Undo dropped — undo is now per-note via the
+     * popover ↶ button. Down to 2 items.
      */
     const items = [
       {action: 'confirm', icon: '✅', label: 'Confirm'},
-      {action: 'undo', icon: '↶', label: 'Undo'},
       {action: 'edit', icon: '✏️', label: 'Edit'},
     ];
 
-    // Arc geometry: 3 items distributed across a 90° span starting at
-    // -90° + 20° (clockwise tilt) so the topmost item (Confirm) sits at
-    // -70° and the bottom-most item (Edit) sits at -160°. Step = 45°,
-    // radius 70 → button-edge to item-edge gap ≈ 30px (was 60px at r=100).
-    // Adjacent item centers ≈ 54px apart (~14px visible gap) — still
-    // comfortable for mobile touch.
-    // Closed state is translate(0, 0) so items animate out from the
-    // button on open.
+    // Arc geometry: items spaced 45° apart, anchored at -70° (clockwise
+    // tilt of 20° from straight up) and stepping clockwise. Radius 70 →
+    // button-edge to item-edge gap ≈ 30px. Adjacent centers ≈ 54px apart
+    // (~14px visible gap). Step is intentionally fixed (not derived from
+    // a span / item-count) so adding or removing items keeps the spacing
+    // consistent. Closed state is translate(0, 0) so items animate out
+    // from the button on open.
     const r = 70;
     const itemSize = BTN_SIZE;
     const half = itemSize / 2;
     const center = BTN_SIZE / 2;
     const angleOffset = Math.PI / 9; // +20° clockwise tilt
-    const angleSpan = (Math.PI * 90) / 180; // 90° span (was 110° at 5 items)
     const angleStart = -Math.PI / 2 + angleOffset; // -70°
-    const angleEnd = angleStart - angleSpan; // -160°
-    const step = (angleEnd - angleStart) / (items.length - 1);
+    const stepAngle = -Math.PI / 4; // -45° clockwise per item
 
     items.forEach((item, i) => {
-      const theta = angleStart + (step * i);
+      const theta = angleStart + (stepAngle * i);
       const cx = center + (r * Math.cos(theta));
       const cy = center + (r * Math.sin(theta));
       const tx = cx - half;
@@ -1060,6 +1133,50 @@
     }
   }
 
+  /**
+   * Document-level keydown for PC shortcuts.
+   *
+   * Esc — dismiss the active popover (mirrors outside-click:
+   * `dismissActivePopover` hard-deletes fresh-new notes, reverts the
+   * rest). Fires regardless of whether the textarea has focus, so the
+   * user can dismiss after their focus drifted to body/another element
+   * via tab/click. Skipped if focus is in some unrelated text input on
+   * the page (e.g., Danbooru's tag search) so we don't hijack the
+   * native Esc behavior for that input.
+   *
+   * Shift+N — toggle active/idle (mirrors menu Edit). Disabled while a
+   * popover is open or any text input has focus, so it can't fire
+   * while the user is typing. `e.code === 'KeyN'` keeps the binding
+   * stable across keyboard layouts and Caps Lock; the modifier guard
+   * avoids hijacking browser shortcuts (Ctrl/Cmd/Alt + Shift+N).
+   * @param {KeyboardEvent} e
+   */
+  function handleGlobalHotkeys(e) {
+    if (e.key === 'Escape' && activeNoteId !== null) {
+      const ae = document.activeElement;
+      if (isTextInputElement(ae) && ae !== popoverInputElement) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      dismissActivePopover();
+      return;
+    }
+    if (
+      e.shiftKey && e.code === 'KeyN' &&
+      !e.ctrlKey && !e.metaKey && !e.altKey &&
+      activeNoteId === null &&
+      !isTextInputElement(document.activeElement)
+    ) {
+      e.preventDefault();
+      if (mode === 'active') {
+        tryDeactivate();
+      } else {
+        setMode('active');
+      }
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Multi-note State Machine (v3.0 Phase 2)
   // --------------------------------------------------------------------------
@@ -1109,11 +1226,11 @@
   }
 
   /**
-   * Appends an action to the chronological log. Both global Undo (pops
-   * the tail) and per-note Undo (finds the latest entry by noteId) read
-   * from this single source.
+   * Appends an action to the chronological log. The popover ↶ button
+   * (per-note undo) reads from this — it finds the latest entry whose
+   * `noteId` matches the active note and reverses it.
    * @param {string} noteId
-   * @param {'create' | 'edit' | 'delete'} type
+   * @param {'create' | 'edit' | 'delete' | 'transform'} type
    * @param {?NoteState} prevState
    */
   function pushAction(noteId, type, prevState) {
@@ -1367,8 +1484,8 @@
    * The Z11 off-attempt: if any note is dirty, prompts the user with
    * `window.confirm('Discard all changes and turn off?')`. Acceptance
    * runs `setMode('idle')`; cancellation re-opens the arc menu so the
-   * user can pick Confirm or Undo instead. With no dirty notes, off
-   * happens immediately.
+   * user can pick Confirm instead (or per-note ↶ from the popover).
+   * With no dirty notes, off happens immediately.
    *
    * Called from two paths (PLAN.md Z11):
    *   1. Floating-button double-tap.
@@ -1395,7 +1512,7 @@
   /**
    * Dispatch for arc menu item clicks. Wired via the click handler on
    * each `.dmna-menu-item` (which calls closeMenu first).
-   * @param {'edit' | 'undo' | 'confirm'} action
+   * @param {'edit' | 'confirm'} action
    */
   function handleMenuAction(action) {
     switch (action) {
@@ -1406,9 +1523,6 @@
         } else {
           setMode('active');
         }
-        break;
-      case 'undo':
-        showToast('Undo: Phase 5 (TBD)');
         break;
       case 'confirm':
         showToast('Confirm: Phase 4 (TBD)');
@@ -1485,7 +1599,22 @@
         updateNoteVisuals(activeNoteId);
       }
     });
+    // Ctrl/Cmd+Enter inside the textarea = ✔. Bare Enter still inserts
+    // a newline. Esc is handled at document level (handleGlobalHotkeys)
+    // so it works whether or not the textarea has focus.
+    popoverInputElement.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handlePopoverAction('confirm');
+      }
+    });
     inputRow.appendChild(popoverInputElement);
+
+    // Right-side button stack: 👁 (top, hold-to-show debug zones) +
+    // ↶ (bottom, per-note undo). Two narrow stacked buttons share the
+    // same column width as the old single eye button (44px).
+    const sideStack = document.createElement('div');
+    sideStack.id = 'dmna-popover-side-stack';
 
     // 👁 hold-to-show touch-zone debug button. Press-and-hold mirrors
     // the v2.6 affordance (matches user muscle memory for "where do
@@ -1495,9 +1624,13 @@
     const eyeBtn = document.createElement('button');
     eyeBtn.type = 'button';
     eyeBtn.id = 'dmna-popover-eye';
+    eyeBtn.className = 'dmna-popover-side-btn';
     eyeBtn.textContent = '👁';
     eyeBtn.setAttribute('aria-label', 'Show touch zones (press and hold)');
     eyeBtn.addEventListener('pointerdown', (e) => {
+      if (eyeBtn.disabled) {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       try {
@@ -1520,7 +1653,26 @@
     };
     eyeBtn.addEventListener('pointerup', releaseEye);
     eyeBtn.addEventListener('pointercancel', releaseEye);
-    inputRow.appendChild(eyeBtn);
+    sideStack.appendChild(eyeBtn);
+
+    // ↶ per-note undo (Wave 3.5). Pops the most recent actionLog entry
+    // for the active note and reverses it.
+    const undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.id = 'dmna-popover-undo';
+    undoBtn.className = 'dmna-popover-side-btn';
+    undoBtn.textContent = '↶';
+    undoBtn.setAttribute('aria-label', 'Undo last change to this note');
+    undoBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (activeNoteId) {
+        popoverUndo(activeNoteId);
+      }
+    });
+    sideStack.appendChild(undoBtn);
+
+    inputRow.appendChild(sideStack);
 
     popoverElement.appendChild(inputRow);
 
@@ -1572,6 +1724,7 @@
       popoverInputElement.value = note.current.text || '';
       popoverInputElement.dataset.boundNoteId = noteId;
     }
+    updatePopoverForActiveNote();
     // Pre-position BEFORE reveal. If we add `.show` first the popover
     // renders at its previous transform (or at (0, 0) on first show)
     // for one frame before updatePopoverPosition runs, producing a
@@ -1580,6 +1733,37 @@
     // the time the show class flips display to block.
     updatePopoverPosition();
     popoverElement.classList.add('show');
+  }
+
+  /**
+   * Reflects the active note's `isDeleted` state onto the popover's
+   * controls. When the note is soft-deleted the popover enters a
+   * "view + undo only" mode: textarea + ✔ / ✖ / 🗑 / 👁 are all
+   * disabled and ↶ is highlighted as the only live action. Re-enabled
+   * when popoverUndo restores the note (`isDeleted` flips back to
+   * false).
+   */
+  function updatePopoverForActiveNote() {
+    if (!popoverElement || !activeNoteId) {
+      return;
+    }
+    const note = notes.get(activeNoteId);
+    if (!note) {
+      return;
+    }
+    const isDeleted = !!note.isDeleted;
+    popoverInputElement.disabled = isDeleted;
+    popoverElement.querySelectorAll('.dmna-popover-btn').forEach((b) => {
+      /** @type {HTMLButtonElement} */ (b).disabled = isDeleted;
+    });
+    const eyeBtn = popoverElement.querySelector('#dmna-popover-eye');
+    if (eyeBtn instanceof HTMLButtonElement) {
+      eyeBtn.disabled = isDeleted;
+    }
+    const undoBtn = popoverElement.querySelector('#dmna-popover-undo');
+    if (undoBtn) {
+      undoBtn.classList.toggle('is-highlighted', isDeleted);
+    }
   }
 
   /** Hides the popover without destroying it. */
@@ -1673,9 +1857,91 @@
   }
 
   /**
+   * ↶ — Per-note undo (Wave 3.5). Pops the most recent actionLog entry
+   * for `noteId` and reverses it:
+   *   - 'create'    → hardDeleteNote (the note is un-spawned).
+   *   - 'edit'      → restore `prevState` to both `current` and
+   *                   `confirmedState`. The note stays selected so the
+   *                   user can chain ↶ to step further back.
+   *   - 'delete'    → un-soft-delete + restore `current` from prevState.
+   *   - 'transform' → restore geometry (x/y/w/h) on `current` only;
+   *                   text and confirmedState are intentionally left
+   *                   alone (see typedef for the rationale).
+   * Shows a toast if there's nothing to undo for this note.
+   *
+   * Replaces the global Undo arc-menu item that was a Phase 5 stub
+   * (Wave 3.5 simplified v3.0 scope to per-note only).
+   * @param {string} noteId
+   */
+  function popoverUndo(noteId) {
+    for (let i = actionLog.length - 1; i >= 0; i--) {
+      const entry = actionLog[i];
+      if (entry.noteId !== noteId) {
+        continue;
+      }
+      actionLog.splice(i, 1);
+      if (entry.type === 'create') {
+        // hardDeleteNote also strips remaining log entries for this id,
+        // which is fine — there shouldn't be any after the create entry
+        // was the last thing left for this note (we just removed it).
+        hardDeleteNote(noteId);
+        return;
+      }
+      const note = notes.get(noteId);
+      if (!note) {
+        return;
+      }
+      if (entry.type === 'edit') {
+        note.current = {...entry.prevState};
+        note.confirmedState = {...entry.prevState};
+        if (popoverInputElement &&
+            popoverInputElement.dataset.boundNoteId === noteId) {
+          popoverInputElement.value = entry.prevState.text || '';
+        }
+        renderNoteBox(noteId);
+        updateNoteVisuals(noteId);
+        updatePopoverPosition();
+      } else if (entry.type === 'delete') {
+        note.isDeleted = false;
+        // Restore current to the state at delete-time. Defensive: with
+        // drag/resize disabled on soft-deleted boxes (and the popover's
+        // editing controls all disabled), current shouldn't have drifted
+        // — but if a future change ever lets it, this keeps undo
+        // deterministic.
+        note.current = {...entry.prevState};
+        if (popoverInputElement &&
+            popoverInputElement.dataset.boundNoteId === noteId) {
+          popoverInputElement.value = entry.prevState.text || '';
+        }
+        renderNoteBox(noteId);
+        updateNoteVisuals(noteId);
+        // The popover may currently be open and bound to this note (the
+        // user re-tapped the red-dashed box, then pressed ↶). Flip its
+        // disabled/highlighted state back to "live" since the note is
+        // no longer deleted.
+        updatePopoverForActiveNote();
+        updatePopoverPosition();
+      } else if (entry.type === 'transform') {
+        // Geometry-only revert: restoring text or confirmedState here
+        // would also undo unrelated typing / clobber a prior ✔ that
+        // happened before the drag.
+        note.current.x = entry.prevState.x;
+        note.current.y = entry.prevState.y;
+        note.current.w = entry.prevState.w;
+        note.current.h = entry.prevState.h;
+        renderNoteBox(noteId);
+        updateNoteVisuals(noteId);
+        updatePopoverPosition();
+      }
+      return;
+    }
+    showToast('Nothing to undo');
+  }
+
+  /**
    * ✔ — Commit the current geometry and text as the new checkpoint
-   * (`confirmedState`). Push an 'edit' action to the log so global
-   * Undo can roll back to the previous checkpoint.
+   * (`confirmedState`). Push an 'edit' action to the log so the
+   * popover ↶ button can roll back to the previous checkpoint.
    * @param {string} noteId
    */
   function popoverConfirm(noteId) {
@@ -1691,15 +1957,25 @@
   }
 
   /**
-   * ✖ — Discard uncommitted changes by reverting `current` to
-   * `confirmedState`. The note stays in the collection. For a
-   * never-confirmed brand-new note this reverts to its spawn state
-   * (the user can then 🗑 to actually remove it).
+   * ✖ — Two cases:
+   *   1. Fresh-new note (!isServerNote && !everConfirmed): no prior
+   *      checkpoint to revert to, so ✖ behaves like 🗑 next to it —
+   *      hard-delete (cancel the creation entirely). Mirrors Esc and
+   *      outside-tap dismissal.
+   *   2. Confirmed temp / server note: revert `current` to the latest
+   *      `confirmedState`. The note stays in the collection — ✖ here
+   *      is "discard pending edits," not "delete the note." Use 🗑 to
+   *      delete (which on a confirmed note soft-deletes for undo).
    * @param {string} noteId
    */
   function popoverCancel(noteId) {
     const note = notes.get(noteId);
     if (!note) {
+      return;
+    }
+    const isFreshNew = !note.isServerNote && !note.everConfirmed;
+    if (isFreshNew) {
+      hardDeleteNote(noteId);
       return;
     }
     note.current = {...note.confirmedState};
@@ -1708,11 +1984,15 @@
   }
 
   /**
-   * 🗑 — Delete the note. New (temp) notes hard-delete (DOM + Map
-   * removed; no actionLog entry, since they were never persisted
-   * anywhere). Server notes soft-delete (`isDeleted: true`, kept in
-   * the collection so Undo can restore them) and push a 'delete'
-   * action with the prior `current` for revert.
+   * 🗑 — Routing depends on whether the note has a state worth keeping
+   * around for undo:
+   *   - Fresh-new (!isServerNote && !everConfirmed): no committed state
+   *     exists — hard-delete (DOM + Map gone, actionLog stripped).
+   *   - Confirmed temp OR server note: soft-delete (red dashed, kept in
+   *     the collection so the popover ↶ can restore it). Pushes a
+   *     'delete' action with the prior `current` as the prevState.
+   *     Phase 4 Confirm-time will route soft-deleted server notes to
+   *     DELETE and silently drop soft-deleted temps (never persisted).
    * @param {string} noteId
    */
   function popoverDelete(noteId) {
@@ -1720,7 +2000,8 @@
     if (!note) {
       return;
     }
-    if (!note.isServerNote) {
+    const isFreshNew = !note.isServerNote && !note.everConfirmed;
+    if (isFreshNew) {
       hardDeleteNote(noteId);
     } else {
       pushAction(noteId, 'delete', {...note.current});
@@ -1819,6 +2100,13 @@
       if (mode !== 'active') {
         return;
       }
+      // Soft-deleted notes are view-only until the user undoes the
+      // delete via the popover ↶. Block drag/resize so the box can't
+      // drift while the popover is in undo-only mode.
+      const note = notes.get(noteId);
+      if (note && note.isDeleted) {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       // Activate this note if it isn't already, so the handle is even
@@ -1843,6 +2131,16 @@
   function attachBodyDragListener(bodyEl, noteId) {
     bodyEl.addEventListener('pointerdown', (e) => {
       if (mode !== 'active') {
+        return;
+      }
+      const note = notes.get(noteId);
+      // Soft-deleted notes: still selectable (so the user can reach the
+      // popover ↶) but not draggable. Activate without starting a drag
+      // so a tap on a red-dashed box opens the undo-only popover.
+      if (note && note.isDeleted) {
+        if (activeNoteId !== noteId) {
+          setActiveNote(noteId);
+        }
         return;
       }
       // Activate-on-touch so a single tap-and-drag works on inactive
@@ -2004,6 +2302,13 @@
     target.removeEventListener('pointercancel', onInteractionEnd);
 
     if (dragState.moved) {
+      // Record the gesture as a 'transform' entry so the popover ↶ can
+      // roll the box back to its pre-gesture geometry. Captured at
+      // gesture end (rather than on the first frame past the threshold)
+      // so a single push covers the whole drag — chained ↶ presses then
+      // step back through individual gestures, not individual frames.
+      pushAction(dragState.noteId, 'transform', {...dragState.startState});
+
       // Only reset opacity if we actually dimmed (matches the
       // movement-gated dim in onInteractionMove). Pure-tap gestures
       // never touch popover opacity.
@@ -2354,7 +2659,16 @@
       text: '',
     });
     setActiveNote(id);
-    // Phase 3 Wave 3 will open the popover here.
+    // Auto-focus the textarea so the user can type immediately. rAF
+    // lets `.show` flip + layout settle before .focus() runs (pre-flip
+    // the popover is display:none, which would no-op the focus). The
+    // activeNoteId guard handles the unlikely case where the user
+    // dismissed the popover within the same frame.
+    requestAnimationFrame(() => {
+      if (popoverInputElement && activeNoteId === id) {
+        popoverInputElement.focus();
+      }
+    });
   }
 
   /**
