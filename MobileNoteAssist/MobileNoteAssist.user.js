@@ -750,14 +750,14 @@
     window.addEventListener('orientationchange', updateAllNoteBoxPositions);
 
     // Reload / navigate-away guard: if the user is mid-active-mode with
-    // dirty notes, surface the browser's standard "Leave site?" prompt.
-    // Browsers ignore custom messages here for security, so this is a
-    // generic confirm — that's still an upgrade over silent loss.
-    // tryDeactivate's `window.confirm` covers the in-script off paths
-    // (Z11); this handler covers the out-of-band ones (refresh button,
-    // closing the tab, Cmd+R, etc).
+    // pending changes (anything Confirm would actually send), surface
+    // the browser's standard "Leave site?" prompt. Browsers ignore
+    // custom messages here for security, so this is a generic confirm —
+    // still an upgrade over silent loss. tryDeactivate's `window.confirm`
+    // covers the in-script off paths (Z11); this handler covers the
+    // out-of-band ones (refresh button, closing the tab, Cmd+R, etc).
     window.addEventListener('beforeunload', (e) => {
-      if (mode === 'active' && hasDirtyNotes()) {
+      if (mode === 'active' && hasPendingChanges()) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -1365,14 +1365,42 @@
   }
 
   /**
-   * Whether any note in the collection is currently dirty. Used by the
-   * Z11 off-flow to decide whether to show the discard confirm dialog.
+   * Whether the collection has any change that would alter server state
+   * if the user pressed Confirm now. Used by the Z11 off-flow (and the
+   * beforeunload guard) to decide whether to show the discard prompt.
+   *
+   * Distinct from `isDirty(note)` which is a *visual* classification
+   * ("temp notes are always green"). A soft-deleted ✔'d temp note
+   * isDirty=true (still drawn red dashed via CSS) but pending=false
+   * (Confirm would silently drop it — Wave 3.5 D8). Same for fresh-new
+   * uncommitted temps: visible as green boxes but never POSTed unless
+   * ✔'d, so deactivating them is a no-op server-side.
+   *
+   * Pending = the note maps to a non-empty Phase 4 classifyChanges()
+   * bucket (POST / PUT / DELETE), per PLAN.md D8.
    * @return {boolean}
    */
-  function hasDirtyNotes() {
+  function hasPendingChanges() {
     for (const note of notes.values()) {
-      if (isDirty(note)) {
-        return true;
+      if (note.isServerNote) {
+        // Soft-deleted server note → DELETE.
+        if (note.isDeleted) {
+          return true;
+        }
+        // Edited server note → PUT.
+        const a = note.current;
+        const b = note.initialState;
+        if (a.x !== b.x || a.y !== b.y || a.w !== b.w || a.h !== b.h ||
+            a.text !== b.text) {
+          return true;
+        }
+      } else {
+        // Temp note: only ✔'d AND not soft-deleted notes get POSTed.
+        // Fresh-new uncommitted (no ✔) = silent drop. Soft-deleted
+        // ✔'d temp = silent drop (never persisted).
+        if (note.everConfirmed && !note.isDeleted) {
+          return true;
+        }
       }
     }
     return false;
@@ -1481,11 +1509,16 @@
   }
 
   /**
-   * The Z11 off-attempt: if any note is dirty, prompts the user with
+   * The Z11 off-attempt: if there are any pending changes (notes that
+   * Confirm would actually send), prompts the user with
    * `window.confirm('Discard all changes and turn off?')`. Acceptance
    * runs `setMode('idle')`; cancellation re-opens the arc menu so the
    * user can pick Confirm instead (or per-note ↶ from the popover).
-   * With no dirty notes, off happens immediately.
+   * With no pending changes, off happens immediately. The "pending"
+   * check (vs. a naive isDirty count) excludes fresh-new uncommitted
+   * temps and soft-deleted ✔'d temps — both are silent-drop at
+   * Confirm time, so deactivating in their presence is a server no-op
+   * and shouldn't pop a dialog.
    *
    * Called from two paths (PLAN.md Z11):
    *   1. Floating-button double-tap.
@@ -1493,7 +1526,7 @@
    * The third path (post-Confirm reload) is Phase 4.
    */
   function tryDeactivate() {
-    if (hasDirtyNotes()) {
+    if (hasPendingChanges()) {
       // window.confirm is a deliberately simple Phase 3 choice (the v3.1
       // backlog has a custom-modal upgrade). It blocks the page until
       // dismissed, which is fine for a destructive action.
@@ -2791,8 +2824,8 @@
     },
 
     /** @return {boolean} */
-    hasDirty() {
-      return hasDirtyNotes();
+    hasPending() {
+      return hasPendingChanges();
     },
 
     /** Clears all notes from the collection (DOM + Map + log). */
