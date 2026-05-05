@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.10] - 2026-05-05
+
+### Fixed
+- **Tag toggle row STILL flashed white** after v3.1.9. v3.1.9's `-webkit-tap-highlight-color: transparent` + `outline: none` + explicit `:active` / `:focus` rules weren't enough on the affected Android browser — the white background was actually the native `<button>` element rendering bleeding through and overriding our `background` shorthand. Added `appearance: none` + `-webkit-appearance: none` to strip native button styling so our CSS `background` actually wins.
+
 ## [3.1.9] - 2026-05-05
 
 ### Fixed

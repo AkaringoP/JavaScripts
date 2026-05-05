@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.9
+// @version      3.1.10
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.9';
+  const SCRIPT_VERSION = '3.1.10';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -974,13 +974,16 @@
       touch-action: manipulation;
       transition: background 0.12s, border-color 0.12s;
       box-sizing: border-box;
-      /* Mobile-default tap-highlight + focus-ring inversions made the
-         row background flash bright white after a tap (Android Chrome
-         / Samsung Internet user-agent default), hiding the white label
-         text. v3.1.9: kill the tap highlight, kill the focus outline,
-         and own the press feedback explicitly via :active. The toggle
-         lives inside a popover-only context (no keyboard nav target),
-         so dropping :focus-visible outline is acceptable for a11y. */
+      /* Strip native <button> rendering. Without appearance: none
+         (and the -webkit prefix for older Android), some Android
+         browsers apply their own focus/pressed background that
+         overrides our background shorthand — the row went bright
+         white after a tap, hiding the white "Translated" label
+         (v3.1.9 tried tap-highlight + outline only; insufficient).
+         The popover-only context (no keyboard nav target) makes
+         dropping :focus-visible outline acceptable for a11y. */
+      appearance: none;
+      -webkit-appearance: none;
       -webkit-tap-highlight-color: transparent;
       outline: none;
     }
