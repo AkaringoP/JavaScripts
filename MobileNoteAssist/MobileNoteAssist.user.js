@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.5
+// @version      3.1.6
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.5';
+  const SCRIPT_VERSION = '3.1.6';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -656,8 +656,8 @@
        v2.6 carry-over pattern.
        Border-width is driven by --dmna-triangle-size (CSS px), set on
        the active note element by renderNoteBox in JS (proportional to
-       box display: min(width,height) / 6, capped at 16 CSS px so the
-       affordance never dominates large boxes). Pinch zoom is
+       box display: min(width,height) / 6, capped at 8 CSS px to match
+       the v3.0 / v3.1.1 baseline visual). Pinch zoom is
        NOT counter-scaled here — the triangle is a fraction of the
        box's CSS-px size, so its on-screen device-px size scales with
        the box itself (smaller box → smaller triangle, bigger box →
@@ -1959,19 +1959,16 @@
       note.domElement.style.width = `${screen.width}px`;
       note.domElement.style.height = `${screen.height}px`;
       // SE corner triangle (::after) tracks 1/6 of the box's smaller
-      // display dimension, capped at 16 CSS px. Pinch zoom is
-      // intentionally NOT in this expression — the triangle scales
-      // with the box's CSS-px size, and the visual viewport magnifies
-      // both the box and triangle by the same factor, so the on-screen
-      // ratio (~16.7% of box, up to the cap) is constant across zoom
-      // levels. The cap kicks in at box ≥ 96 CSS px; below that the
-      // proportional shrink applies (e.g., MIN_BOX_SIZE_DISPLAY=48
-      // device px ≈ 48 CSS px at vv=1 → triangle ~8 device px, same
-      // as the v3.1.1 default visual). The 16-CSS-px cap means at
-      // vv=1 the triangle is at most 16 device px on screen — a
-      // visible affordance, smaller than the 32-device-px handle.
+      // display dimension, capped at 8 CSS px (matches v3.0 / v3.1.1
+      // baseline). Pinch zoom is intentionally NOT in this expression —
+      // the triangle scales with the box's CSS-px size, and the visual
+      // viewport magnifies both the box and triangle by the same factor,
+      // so the on-screen ratio is constant across zoom levels. The cap
+      // kicks in at box ≥ 48 CSS px (= MIN_BOX_SIZE_DISPLAY at vv=1);
+      // below that the proportional shrink applies for sub-MIN states
+      // that can occur transiently at high pinch zoom.
       const triSize = Math.min(
-          Math.min(screen.width, screen.height) / 6, 16);
+          Math.min(screen.width, screen.height) / 6, 8);
       note.domElement.style.setProperty(
           '--dmna-triangle-size', `${triSize}px`);
     } else {
