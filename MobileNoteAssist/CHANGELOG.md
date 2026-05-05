@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.9] - 2026-05-05
+
+### Fixed
+- **Tag toggle row went bright white after tap, hiding the white label text.** On Android Chrome / Samsung Internet, `<button>` elements have a default `-webkit-tap-highlight-color` (light flash on tap) and a focus indicator that's a light/white background — and tag toggles, unlike the per-note popover's ✓/✗/🗑 buttons, don't close the popover on tap, so the focus state persists indefinitely. The "Translated" row in the user's screenshot showed the failure mode: white background, white "Translated" text invisible against it. Fixed by setting `-webkit-tap-highlight-color: transparent`, `outline: none`, and explicit `:active` / `:focus` background rules that stay within the dark theme.
+
 ## [3.1.8] - 2026-05-05
 
 ### Changed

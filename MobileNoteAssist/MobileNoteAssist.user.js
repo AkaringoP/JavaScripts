@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.8
+// @version      3.1.9
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.8';
+  const SCRIPT_VERSION = '3.1.9';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -974,9 +974,24 @@
       touch-action: manipulation;
       transition: background 0.12s, border-color 0.12s;
       box-sizing: border-box;
+      /* Mobile-default tap-highlight + focus-ring inversions made the
+         row background flash bright white after a tap (Android Chrome
+         / Samsung Internet user-agent default), hiding the white label
+         text. v3.1.9: kill the tap highlight, kill the focus outline,
+         and own the press feedback explicitly via :active. The toggle
+         lives inside a popover-only context (no keyboard nav target),
+         so dropping :focus-visible outline is acceptable for a11y. */
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
     }
     .dmna-tag-toggle:hover {
       background: rgba(255, 255, 255, 0.10);
+    }
+    .dmna-tag-toggle:active {
+      background: rgba(255, 255, 255, 0.18);
+    }
+    .dmna-tag-toggle:focus {
+      background: rgba(255, 255, 255, 0.06);
     }
     /* Forced-on state: rule 3 (check_translation or partially_translated
        implies translation_request) locks translation_request ON. Click
