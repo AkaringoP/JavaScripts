@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.6
+// @version      3.1.7
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.6';
+  const SCRIPT_VERSION = '3.1.7';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -743,13 +743,23 @@
       border-color: transparent transparent rgba(30, 30, 30, 0.96) transparent;
       pointer-events: none;
     }
+    /* Input row + button row both use a 3-column grid with the same
+       gap so the side-stack column lines up exactly with the delete
+       button column below. Pre-3.1.7 the input row was flex with a
+       fixed 44px side stack (~half the ~95px delete button width
+       below), which made the side-stack feel cramped + the grid
+       broken. Now: textarea spans columns 1-2 (matching confirm +
+       cancel + their gap), side-stack occupies column 3 (matching
+       delete). */
     #dmna-popover-input-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 8px;
       align-items: stretch;
     }
     #dmna-popover-input {
-      flex: 1;
+      grid-column: 1 / span 2;
+      min-width: 0;
       padding: 8px 10px;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.18);
@@ -764,12 +774,10 @@
     }
     #dmna-popover-input:focus { border-color: #0073ff; }
     #dmna-popover-side-stack {
-      flex-shrink: 0;
-      width: 44px;
+      grid-column: 3;
       display: flex;
       flex-direction: column;
       gap: 6px;
-      align-self: stretch;
     }
     .dmna-popover-side-btn {
       flex: 1;
@@ -823,12 +831,12 @@
       background: rgba(255, 152, 0, 0.36);
     }
     #dmna-popover-buttons {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 8px;
       margin-top: 10px;
     }
     .dmna-popover-btn {
-      flex: 1;
       padding: 10px 0;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.32);

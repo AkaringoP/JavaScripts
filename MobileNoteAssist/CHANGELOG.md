@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.7] - 2026-05-05
+
+### Changed
+- **Popover input row + button row now share a 3-column CSS grid.** Pre-3.1.7 the input row was flex with a fixed 44-CSS-px side stack (👁 / ↶), while the button row had three flex-1 buttons (~95 CSS px each). The eye/undo column ended up half the width of the trash button directly below it — visually cramped + grid misalignment. Now both rows use `grid-template-columns: 1fr 1fr 1fr` with the same 8 CSS px gap; the textarea spans columns 1-2 (matching confirm + cancel + their gap), the side stack occupies column 3 (matching delete). Eye/undo column width now equals trash column width — clean alignment, less cramped.
+
 ## [3.1.6] - 2026-05-05
 
 ### Changed
