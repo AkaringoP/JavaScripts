@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.3
+// @version      3.1.4
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.3';
+  const SCRIPT_VERSION = '3.1.4';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -654,23 +654,27 @@
        (.is-interacting set in onInteractionMove) so the user's view of
        the underlying art isn't obscured by chrome they're not aiming at —
        v2.6 carry-over pattern.
-       Counter-scaled by the same --dmna-handle-scale variable as the
-       handles (v3.1.1) — pre-3.1.1 the 8×8 CSS-px triangle was magnified
-       by the visual viewport at high pinch zoom and could fully cover
-       a small box. Anchor at bottom right since the triangle is drawn
-       FROM the box's bottom-right corner outward (border-bottom-left). */
+       Border-width is driven by --dmna-triangle-size (CSS px), set on
+       the active note element by renderNoteBox in JS (proportional to
+       box display: min(width,height) / 6). Pinch zoom is
+       NOT counter-scaled here — the triangle is a fraction of the
+       box's CSS-px size, so its on-screen device-px size scales with
+       the box itself (smaller box → smaller triangle, bigger box →
+       bigger triangle), constant ratio across pinch zoom levels. v3.1.1
+       attempted to counter-scale the triangle by vv.scale (constant 8
+       device px on screen); v3.1.4 swaps to box-proportional per user
+       request — at MIN_BOX_SIZE_DISPLAY=48 device px the triangle is
+       8 device px, matching the v3.1.1 default visual. */
     .dmna-note-box.is-active::after {
       content: '';
       position: absolute;
       bottom: 0; right: 0;
       width: 0; height: 0;
       border-style: solid;
-      border-width: 0 0 8px 8px;
+      border-width: 0 0 var(--dmna-triangle-size, 8px) var(--dmna-triangle-size, 8px);
       border-color: transparent transparent #ff9800 transparent;
       pointer-events: none;
       opacity: 1;
-      transform: scale(var(--dmna-handle-scale, 1));
-      transform-origin: 100% 100%;
       transition: opacity 0.2s ease;
     }
     .dmna-note-box.is-active.is-interacting::after {
@@ -1224,31 +1228,32 @@
   }
 
   /**
-   * Counter-scales the active note's 4 corner handles AND the SE corner
-   * triangle (::after) against `visualViewport.scale` so their visual
-   * footprints stay a constant ~32 / 8 device-px across pinch-zoom
-   * levels. Each element's transform-origin (set in CSS) is the point
-   * on its bounding box that coincides with the box's actual corner,
-   * so `scale(invScale)` collapses each element TOWARD the box corner
-   * — at high pinch zoom the CSS bounding box (and pointer-event hit
-   * region) shrinks proportionally, letting small boxes (down to
-   * MIN_BOX_SIZE_DISPLAY) remain interactable without handle collision.
+   * Counter-scales the active note's 4 corner handles against
+   * `visualViewport.scale` so each handle's visual footprint stays a
+   * constant ~32 device-px across pinch-zoom levels. Each handle's
+   * transform-origin (set in CSS) is the point on its bounding box
+   * that coincides with the box's actual corner, so `scale(invScale)`
+   * collapses the handle TOWARD the box corner — at high pinch zoom
+   * the CSS bounding box (and pointer-event hit region) shrinks
+   * proportionally, letting small boxes (down to MIN_BOX_SIZE_DISPLAY)
+   * remain interactable without handle collision.
    *
    * Implementation: writes a single `--dmna-handle-scale` CSS custom
-   * property on the active note element (the parent of all 4 handles
-   * and the ::after triangle). All 5 elements read the variable via
-   * `transform: scale(var(--dmna-handle-scale, 1))`. Pseudo-elements
-   * can't be styled directly from JS, so the CSS-variable approach is
-   * the only way to drive ::after's transform — covering the handles
-   * by the same mechanism keeps the write surface to one property per
-   * frame.
+   * property on the active note element (the parent of all 4 handles).
+   * Each handle reads the variable via
+   * `transform: scale(var(--dmna-handle-scale, 1))`. One property
+   * write per frame instead of four inline-transform writes.
+   *
+   * The SE corner triangle (::after) is NOT counter-scaled here as of
+   * v3.1.4 — its size tracks box display dimensions instead, set
+   * separately by `renderNoteBox` via `--dmna-triangle-size`.
    *
    * Scoped to activeNoteId because CSS gates `.dmna-handle` to
-   * `display: none` off `.is-active` and the ::after rule itself is
-   * `.is-active::after` — non-active boxes don't need transform writes.
+   * `display: none` off `.is-active` — non-active boxes don't need
+   * transform writes.
    *
    * Called from `updateVisualViewportPositions` (RAF-batched on vv
-   * resize/scroll) and from `showPopover` (so chrome is pre-scaled
+   * resize/scroll) and from `showPopover` (so handles are pre-scaled
    * before reveal — same flicker-avoidance pattern as the popover).
    */
   function updateActiveHandleScales() {
@@ -1952,6 +1957,16 @@
       note.domElement.style.top = `${screen.top}px`;
       note.domElement.style.width = `${screen.width}px`;
       note.domElement.style.height = `${screen.height}px`;
+      // SE corner triangle (::after) tracks 1/6 of the box's smaller
+      // display dimension. Pinch zoom is intentionally NOT in this
+      // expression — the triangle scales with the box's CSS-px size,
+      // and the visual viewport magnifies both the box and triangle
+      // by the same factor, so the on-screen ratio (~16.7% of box) is
+      // constant across zoom levels. At MIN_BOX_SIZE_DISPLAY=48 device
+      // px this works out to ~8 device px, matching v3.1.1 default.
+      const triSize = Math.min(screen.width, screen.height) / 6;
+      note.domElement.style.setProperty(
+          '--dmna-triangle-size', `${triSize}px`);
     } else {
       // Image rect not yet known — hide until the next re-render
       // (window resize, image load, or explicit updateAllNoteBoxPositions).

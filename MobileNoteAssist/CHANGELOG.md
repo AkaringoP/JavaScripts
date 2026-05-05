@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.4] - 2026-05-05
+
+### Changed
+- **SE corner triangle now scales with box display size, not pinch zoom.** v3.1.1 counter-scaled the triangle by `visualViewport.scale` (constant 8 device px on screen) — same mechanism as the handles — but per user feedback, on small boxes the constant-size triangle felt out of proportion. Now `renderNoteBox` writes a `--dmna-triangle-size` CSS custom property = `min(width, height) / 6` (display CSS px) on the active note element, and the `::after` border-width reads it via `var()`. The visual viewport magnifies both the box and the triangle by the same factor, so the on-screen ratio is constant ~16.7% across pinch zoom levels. At MIN_BOX_SIZE_DISPLAY=48 device px this works out to ~8 device px on screen, matching v3.1.1's default visual; bigger boxes get proportionally bigger triangles.
+
 ## [3.1.3] - 2026-05-05
 
 ### Changed
