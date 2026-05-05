@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.11] - 2026-05-05
+
+### Changed
+- **Tag toggle row is no longer a `<button>`.** v3.1.9 (`-webkit-tap-highlight-color: transparent` + `outline: none`) and v3.1.10 (`appearance: none`) both failed to suppress the bright-white background some Android browsers paint on the row's tap/focus state — the white "Translated" label vanished against it. v3.1.11 restructures the row: outer is a non-interactive `<div class="dmna-tag-row">`, the click target is now the inner pill switch only (`<button class="dmna-tag-switch-btn">` wrapping the existing pill visual). The row never gets `:focus` / `:active` / tap-highlight, sidestepping the entire class of native-button rendering issues. Hit area shrinks from full-row to ~52×36 around the pill — acceptable trade-off since the tag popover is briefly used during the Confirm flow, not a primary action surface. `is-on` / `is-disabled` classes move to the row div; descendant CSS selectors (e.g. `.dmna-tag-row.is-on .dmna-tag-switch`) update accordingly.
+
 ## [3.1.10] - 2026-05-05
 
 ### Fixed

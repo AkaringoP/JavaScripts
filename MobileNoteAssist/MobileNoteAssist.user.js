@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.10
+// @version      3.1.11
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.10';
+  const SCRIPT_VERSION = '3.1.11';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -957,7 +957,14 @@
        right. The whole row is a <button>, so clicks anywhere on it flip
        the state. Inner spans use pointer-events: none so the click
        target is always the button itself. */
-    .dmna-tag-toggle {
+    /* Tag row container — non-interactive div, NOT a button. v3.1.9 +
+       v3.1.10 tried to fight native <button> rendering on Android via
+       appearance: none + tap-highlight + outline; some browsers still
+       leaked a bright-white background on tap/focus that hid the white
+       label text. v3.1.11 sidesteps the whole class of issues by
+       moving the click target onto the inner pill button only — the
+       row itself never receives :focus / :active / tap-highlight. */
+    .dmna-tag-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -969,50 +976,46 @@
       background: rgba(255, 255, 255, 0.06);
       color: #ffffff;
       font-size: 13px;
-      cursor: pointer;
       user-select: none;
-      touch-action: manipulation;
-      transition: background 0.12s, border-color 0.12s;
       box-sizing: border-box;
-      /* Strip native <button> rendering. Without appearance: none
-         (and the -webkit prefix for older Android), some Android
-         browsers apply their own focus/pressed background that
-         overrides our background shorthand — the row went bright
-         white after a tap, hiding the white "Translated" label
-         (v3.1.9 tried tap-highlight + outline only; insufficient).
-         The popover-only context (no keyboard nav target) makes
-         dropping :focus-visible outline acceptable for a11y. */
-      appearance: none;
-      -webkit-appearance: none;
-      -webkit-tap-highlight-color: transparent;
-      outline: none;
-    }
-    .dmna-tag-toggle:hover {
-      background: rgba(255, 255, 255, 0.10);
-    }
-    .dmna-tag-toggle:active {
-      background: rgba(255, 255, 255, 0.18);
-    }
-    .dmna-tag-toggle:focus {
-      background: rgba(255, 255, 255, 0.06);
     }
     /* Forced-on state: rule 3 (check_translation or partially_translated
-       implies translation_request) locks translation_request ON. Click
-       is a no-op; the visual cue is reduced opacity. */
-    .dmna-tag-toggle:disabled {
-      cursor: not-allowed;
+       implies translation_request) locks translation_request ON. The
+       inner switch button itself carries the disabled attr; this class on the
+       row drives the visual cue (reduced opacity). */
+    .dmna-tag-row.is-disabled {
       opacity: 0.7;
     }
     .dmna-tag-label {
       flex: 1;
       text-align: left;
-      pointer-events: none;
+    }
+    /* Pill switch button — the actual click target. Padding expands the
+       hit area beyond the 36x20 visual pill (final hit zone ~52x36);
+       not quite the 44x44 mobile guideline but sized for a popover
+       used briefly during the Confirm flow, not a primary action. */
+    .dmna-tag-switch-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+      border: none;
+      background: transparent;
+      padding: 8px;
+      margin: -8px -8px -8px 0;
+      cursor: pointer;
+      touch-action: manipulation;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .dmna-tag-switch-btn:disabled {
+      cursor: not-allowed;
     }
     /* Pill switch: 36x20 track + 16x16 thumb. ON = green track + thumb
        slides to the right; OFF = neutral track + thumb on the left. */
     .dmna-tag-switch {
       position: relative;
-      flex-shrink: 0;
       width: 36px;
       height: 20px;
       border-radius: 999px;
@@ -1020,7 +1023,7 @@
       transition: background 0.14s;
       pointer-events: none;
     }
-    .dmna-tag-toggle.is-on .dmna-tag-switch {
+    .dmna-tag-row.is-on .dmna-tag-switch {
       background: rgba(46, 204, 113, 0.85);
     }
     .dmna-tag-switch-thumb {
@@ -1035,7 +1038,7 @@
       transition: transform 0.14s;
       pointer-events: none;
     }
-    .dmna-tag-toggle.is-on .dmna-tag-switch-thumb {
+    .dmna-tag-row.is-on .dmna-tag-switch-thumb {
       transform: translateX(16px);
     }
 
@@ -4608,13 +4611,18 @@
       return;
     }
     TAG_OPTIONS.forEach((tag) => {
-      const btn = tagPopoverElement.querySelector(
-          `button.dmna-tag-toggle[data-tag="${tag}"]`);
-      if (!(btn instanceof HTMLButtonElement)) {
+      const row = tagPopoverElement.querySelector(
+          `.dmna-tag-row[data-tag="${tag}"]`);
+      if (!(row instanceof HTMLElement)) {
         return;
       }
-      btn.classList.toggle('is-on', !!tagPopoverState[tag]);
-      btn.disabled = isTagToggleDisabled(tagPopoverState, tag);
+      const switchBtn = row.querySelector('.dmna-tag-switch-btn');
+      const disabled = isTagToggleDisabled(tagPopoverState, tag);
+      row.classList.toggle('is-on', !!tagPopoverState[tag]);
+      row.classList.toggle('is-disabled', disabled);
+      if (switchBtn instanceof HTMLButtonElement) {
+        switchBtn.disabled = disabled;
+      }
     });
   }
 
@@ -4649,27 +4657,32 @@
     const list = document.createElement('div');
     list.id = 'dmna-tag-popover-toggles';
     TAG_OPTIONS.forEach((tag) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'dmna-tag-toggle';
-      btn.dataset.tag = tag;
+      const row = document.createElement('div');
+      row.className = 'dmna-tag-row';
+      row.dataset.tag = tag;
 
       const label = document.createElement('span');
       label.className = 'dmna-tag-label';
       label.textContent = TAG_LABELS[tag];
-      btn.appendChild(label);
+      row.appendChild(label);
+
+      const switchBtn = document.createElement('button');
+      switchBtn.type = 'button';
+      switchBtn.className = 'dmna-tag-switch-btn';
+      switchBtn.dataset.tag = tag;
 
       const sw = document.createElement('span');
       sw.className = 'dmna-tag-switch';
       const thumb = document.createElement('span');
       thumb.className = 'dmna-tag-switch-thumb';
       sw.appendChild(thumb);
-      btn.appendChild(sw);
+      switchBtn.appendChild(sw);
+      row.appendChild(switchBtn);
 
-      btn.addEventListener('click', (e) => {
+      switchBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (btn.disabled || !tagPopoverState) {
+        if (switchBtn.disabled || !tagPopoverState) {
           return;
         }
         const currentlyOn = !!tagPopoverState[tag];
@@ -4677,7 +4690,7 @@
             tagPopoverState, tag, !currentlyOn);
         renderTagToggles();
       });
-      list.appendChild(btn);
+      list.appendChild(row);
     });
     tagPopoverElement.appendChild(list);
 
