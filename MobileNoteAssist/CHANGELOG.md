@@ -5,6 +5,15 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-05-05
+
+### Fixed
+- **SE/SW handle transform-origin** was wrong for the counter-scale system shipped in v3.1.0. The plan assumed each handle's anchor was a CSS keyword corner of the handle element (`top left` for SE, `top right` for SW), but those corners don't coincide with the box's actual bottom-right/bottom-left corners — because SE/SW handles are shifted up by half (`bottom: -16px`), the box's bottom edge passes through the **vertical middle** of those handle elements, not their tops. At small box sizes + high pinch zoom the bug placed the SE/SW anchors NORTH-WEST and NORTH-EAST of the box, so SE collapsed onto NW and SW onto NE — the user saw two visible handles at the top of the box instead of four around it. Fixed by setting SE to `transform-origin: 0% 50%` (left center) and SW to `100% 50%` (right center). NW/NE are unchanged (rewritten to the equivalent `100% 100%` / `0% 100%` percentage form for symmetry).
+
+### Changed
+- **SE corner triangle now counter-scales with pinch zoom.** The 8×8 CSS px `::after` resize-affordance was magnified by the visual viewport at high pinch zoom (e.g., 24 device px at vv.scale=3) and could fully cover a small box. Now reads the same `--dmna-handle-scale` CSS variable as the handles, anchored at `100% 100%` (the box's bottom-right corner — which the triangle is drawn FROM via its bottom-left border), so its visual footprint stays a constant ~8 device-px.
+- **Handle counter-scale is driven by a CSS custom property** (`--dmna-handle-scale` on the active note element) instead of per-handle inline `style.transform`. One property write per frame instead of four; pseudo-elements like `::after` couldn't be reached from JS otherwise. CSS rule `transform: scale(var(--dmna-handle-scale, 1))` covers all five elements (4 handles + ::after) with a sensible fallback of 1 if JS hasn't run yet.
+
 ## [3.1.0] - 2026-05-05
 
 ### Added

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.1.1
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.0';
+  const SCRIPT_VERSION = '3.1.1';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -573,31 +573,36 @@
     /* Resize/Move handles (v3.0 Phase 3 Wave 3) — only shown on the
        active box. NW/SE are resize handles, NE/SW are move-only handles.
        Each handle is a 32×32 invisible touch zone, counter-scaled per
-       active frame against visualViewport.scale (see
-       updateActiveHandleScales in JS). At vv.scale=1 the handle fills its
-       full 32 CSS px footprint; at higher pinch zoom the inverse-scale
-       transform shrinks the CSS bounding box (and pointer-event hit
-       region) while the visual/device-px size stays constant — so
-       boxes can shrink below 32 CSS px without handle collision.
+       active frame against visualViewport.scale via the
+       --dmna-handle-scale CSS custom property set on the active note
+       element by updateActiveHandleScales in JS. At vv.scale=1 the
+       handle fills its full 32 CSS px footprint; at higher pinch zoom
+       the inverse-scale transform shrinks the CSS bounding box (and
+       pointer-event hit region) while the visual/device-px size stays
+       constant — so boxes can shrink below 32 CSS px without handle
+       collision.
 
-       Per-corner transform-origin glues the handle's box-touching
-       corner so scale() collapses each handle TOWARD the box, not away
-       from it:
-         NW  top: -32, left: -32  → origin bottom right
-         NE  top: -32, right: -32 → origin bottom left
-         SE  bottom: -16, right: -32 → origin top left
-         SW  bottom: -16, left: -32  → origin top right
+       Per-corner transform-origin anchors each handle to the box's
+       actual corner so scale() collapses the handle TOWARD that corner.
+       The anchor must be the point on the handle's bounding box that
+       coincides with the box corner — which is NOT a CSS keyword corner
+       for SE/SW because those handles are shifted up by half (their
+       y-center is the box's bottom edge):
+
+         NW  top:-32 left:-32   → bottom right (100% 100%) → box top-left
+         NE  top:-32 right:-32  → bottom left  (0% 100%)   → box top-right
+         SE  bottom:-16 right:-32 → left center  (0% 50%)  → box bottom-right
+         SW  bottom:-16 left:-32  → right center (100% 50%) → box bottom-left
 
        NW/NE (top): fully outside the box at vv.scale=1, never collide
        with the popover (which is below).
 
-       SE/SW (bottom): shifted UP by half — bottom: -16 instead of -32.
+       SE/SW (bottom): shifted UP by half — bottom:-16 instead of -32.
        Matches v2.6's pattern (a 15px shift on a 30px touch-outer): with
        POPOVER_OFFSET=12, the bottom 16px outside still has 12px visible
        above the popover top (4px hidden behind the popover, accepted).
-       The other 16px sits INSIDE the box at vv.scale=1; at vv.scale>1
-       the top-left/top-right origin pulls the scaled handle toward the
-       box's interior corner, REDUCING popover collision risk further. */
+       The other 16px sits INSIDE the box at vv.scale=1; at higher pinch
+       zoom the inside extent shrinks proportionally with the handle. */
     .dmna-handle {
       display: none;
       position: absolute;
@@ -608,6 +613,7 @@
       pointer-events: auto;
       z-index: 1;
       touch-action: none;
+      transform: scale(var(--dmna-handle-scale, 1));
       /* Fade-in/out for the debug-zone overlay (v2.6 carry-over pattern).
          Baseline is fully transparent so toggling the debug-zones body
          class only flips colors — transition then animates the swap.
@@ -617,16 +623,21 @@
       transition: background-color 0.3s ease, border-color 0.3s ease;
     }
     .dmna-note-box.is-active .dmna-handle { display: block; }
-    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; transform-origin: bottom right; }
-    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; transform-origin: bottom left; }
-    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; transform-origin: top left; }
-    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; transform-origin: top right; }
+    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; transform-origin: 100% 100%; }
+    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; transform-origin: 0% 100%; }
+    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; transform-origin: 0% 50%; }
+    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; transform-origin: 100% 50%; }
 
     /* SE corner triangle: visual resize affordance on active box. Color
        tracks the active border (orange). Fades out during drag/resize
        (.is-interacting set in onInteractionMove) so the user's view of
        the underlying art isn't obscured by chrome they're not aiming at —
-       v2.6 carry-over pattern. */
+       v2.6 carry-over pattern.
+       Counter-scaled by the same --dmna-handle-scale variable as the
+       handles (v3.1.1) — pre-3.1.1 the 8×8 CSS-px triangle was magnified
+       by the visual viewport at high pinch zoom and could fully cover
+       a small box. Anchor at bottom right since the triangle is drawn
+       FROM the box's bottom-right corner outward (border-bottom-left). */
     .dmna-note-box.is-active::after {
       content: '';
       position: absolute;
@@ -637,6 +648,8 @@
       border-color: transparent transparent #ff9800 transparent;
       pointer-events: none;
       opacity: 1;
+      transform: scale(var(--dmna-handle-scale, 1));
+      transform-origin: 100% 100%;
       transition: opacity 0.2s ease;
     }
     .dmna-note-box.is-active.is-interacting::after {
@@ -1190,22 +1203,31 @@
   }
 
   /**
-   * Counter-scales the active note's 4 corner handles against
-   * `visualViewport.scale` so each handle's visual footprint stays a
-   * constant ~32 device-px across pinch-zoom levels. Each handle's
-   * transform-origin (set in CSS, per-corner) is the corner glued to
-   * the box, so `scale(invScale)` collapses the handle TOWARD that
-   * anchor — at high pinch zoom the CSS bounding box (and pointer-
-   * event hit region) shrinks proportionally, letting small boxes
-   * (down to MIN_BOX_SIZE_DISPLAY) remain interactable without handle
-   * collision.
+   * Counter-scales the active note's 4 corner handles AND the SE corner
+   * triangle (::after) against `visualViewport.scale` so their visual
+   * footprints stay a constant ~32 / 8 device-px across pinch-zoom
+   * levels. Each element's transform-origin (set in CSS) is the point
+   * on its bounding box that coincides with the box's actual corner,
+   * so `scale(invScale)` collapses each element TOWARD the box corner
+   * — at high pinch zoom the CSS bounding box (and pointer-event hit
+   * region) shrinks proportionally, letting small boxes (down to
+   * MIN_BOX_SIZE_DISPLAY) remain interactable without handle collision.
+   *
+   * Implementation: writes a single `--dmna-handle-scale` CSS custom
+   * property on the active note element (the parent of all 4 handles
+   * and the ::after triangle). All 5 elements read the variable via
+   * `transform: scale(var(--dmna-handle-scale, 1))`. Pseudo-elements
+   * can't be styled directly from JS, so the CSS-variable approach is
+   * the only way to drive ::after's transform — covering the handles
+   * by the same mechanism keeps the write surface to one property per
+   * frame.
    *
    * Scoped to activeNoteId because CSS gates `.dmna-handle` to
-   * `display: none` off `.is-active` — non-active handles aren't
-   * visible or hit-tested and don't need transform writes.
+   * `display: none` off `.is-active` and the ::after rule itself is
+   * `.is-active::after` — non-active boxes don't need transform writes.
    *
    * Called from `updateVisualViewportPositions` (RAF-batched on vv
-   * resize/scroll) and from `showPopover` (so handles are pre-scaled
+   * resize/scroll) and from `showPopover` (so chrome is pre-scaled
    * before reveal — same flicker-avoidance pattern as the popover).
    */
   function updateActiveHandleScales() {
@@ -1214,10 +1236,8 @@
     if (!note || !note.domElement) return;
     const vv = window.visualViewport;
     const invScale = vv ? (1 / vv.scale) : 1;
-    const handles = note.domElement.querySelectorAll('.dmna-handle');
-    for (const h of handles) {
-      /** @type {HTMLElement} */ (h).style.transform = `scale(${invScale})`;
-    }
+    note.domElement.style.setProperty(
+        '--dmna-handle-scale', String(invScale));
   }
 
   /**
