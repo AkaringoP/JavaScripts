@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.0.1
+// @version      3.1.0
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.0.1';
+  const SCRIPT_VERSION = '3.1.0';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -75,14 +75,48 @@
    *  net so we never store an effectively-zero rect. */
   const MIN_BOX_SIZE_IMG = 8;
 
-  /** @const {number} Minimum box width/height in display pixels.
-   *  Originally 48 (then 40) for usability of the in-box body drag
-   *  target. Tightened to 24 per user request — small features (an
-   *  eye, a punctuation glyph) need to be markable. The 32px corner
-   *  touch zones extend outside the box (NW/NE fully outside, SE/SW
-   *  shifted up half) so they remain individually grabbable even when
-   *  the box is smaller than a single touch zone. */
-  const MIN_BOX_SIZE_DISPLAY = 24;
+  /** @const {number} Minimum box width/height in DEVICE pixels (on-
+   *  screen, constant across pinch-zoom levels). The clamp expression
+   *  `(MIN_BOX_SIZE_DISPLAY / vvScale) / scale` projects this through
+   *  vv.scale and image-display scale to image px — at vv.scale=1 the
+   *  CSS-px and device-px values coincide, at higher pinch the CSS-px
+   *  floor shrinks proportionally so the box's on-screen device-px
+   *  footprint stays at this constant.
+   *
+   *  Geometric collision threshold: with handles counter-scaled per
+   *  `updateActiveHandleScales`, the top and bottom touch zones meet
+   *  at box.height_device = 16 device px (top handle's bottom edge
+   *  vs SE/SW handle's top edge, which sits 16/vv.scale CSS px above
+   *  the box's bottom = 16 device px regardless of pinch). 16 is just
+   *  the no-overlap floor; visually the box still looks like a sliver
+   *  between the 32-device-px handles. We set the floor to 48 = 1.5×
+   *  the handle's device-px size, so the box is the visually dominant
+   *  element of the active-box assembly rather than a thin strip
+   *  squeezed between the four handles. v3.1.2 used 24 (= collision
+   *  threshold + 8 px buffer + matched v3.0's CSS-px baseline at
+   *  vv.scale=1) but user feedback was that 24 device px on a high-
+   *  DPR phone (~1.5mm) was still dot-like.
+   *
+   *  Pre-3.1.0: 24 CSS px (which became 24 device px at vv=1 but grew
+   *  to 72 device px at vv=3 — preventing small-feature marking even
+   *  with pinch zoom). v3.1 introduces device-px semantics: on-screen
+   *  size stays consistent, but IMAGE-space floor shrinks with pinch
+   *  (e.g., display:image scale 0.4 → at vv=3, image floor is
+   *  48/3/0.4 = 40 image px instead of 120 at vv=1). This is the
+   *  small-feature-marking workflow: pinch in over a small glyph →
+   *  resize handles → pinch out, box stays small in image space.
+   *
+   *  `MIN_BOX_SIZE_IMG` is the absolute safety floor in image space. */
+  const MIN_BOX_SIZE_DISPLAY = 48;
+
+  /** @const {number} PC-only drag-to-create threshold in CSS pixels.
+   *  Distinguishes a deliberate drag-rect from an accidental tiny mouse
+   *  jitter. Decoupled from `MIN_BOX_SIZE_DISPLAY` (the runtime resize
+   *  floor) because the create gesture has no pinch-zoom context to
+   *  scale against — drag-to-create is desktop-only, where vv.scale=1
+   *  in practice and CSS px ≡ device px. Once a box exists the user
+   *  can pinch+resize down to MIN_BOX_SIZE_DISPLAY device px. */
+  const MIN_DRAG_CREATE_SIZE_DISPLAY = 24;
 
   /** @const {number} Popover CSS width in display pixels (counter-scaled
    *  by visualViewport so the visual width stays constant under pinch). */
@@ -559,19 +593,37 @@
 
     /* Resize/Move handles (v3.0 Phase 3 Wave 3) — only shown on the
        active box. NW/SE are resize handles, NE/SW are move-only handles.
-       Each handle is a 32×32 invisible touch zone.
+       Each handle is a 32×32 invisible touch zone, counter-scaled per
+       active frame against visualViewport.scale via the
+       --dmna-handle-scale CSS custom property set on the active note
+       element by updateActiveHandleScales in JS. At vv.scale=1 the
+       handle fills its full 32 CSS px footprint; at higher pinch zoom
+       the inverse-scale transform shrinks the CSS bounding box (and
+       pointer-event hit region) while the visual/device-px size stays
+       constant — so boxes can shrink below 32 CSS px without handle
+       collision.
 
-       NW/NE (top): fully outside the box (bottom edge at box top, top
-       edge 32px above). They sit above the box, never collide with the
-       popover (which is below).
+       Per-corner transform-origin anchors each handle to the box's
+       actual corner so scale() collapses the handle TOWARD that corner.
+       The anchor must be the point on the handle's bounding box that
+       coincides with the box corner — which is NOT a CSS keyword corner
+       for SE/SW because those handles are shifted up by half (their
+       y-center is the box's bottom edge):
 
-       SE/SW (bottom): shifted UP by half — bottom: -16 instead of -32.
+         NW  top:-32 left:-32   → bottom right (100% 100%) → box top-left
+         NE  top:-32 right:-32  → bottom left  (0% 100%)   → box top-right
+         SE  bottom:-16 right:-32 → left center  (0% 50%)  → box bottom-right
+         SW  bottom:-16 left:-32  → right center (100% 50%) → box bottom-left
+
+       NW/NE (top): fully outside the box at vv.scale=1, never collide
+       with the popover (which is below).
+
+       SE/SW (bottom): shifted UP by half — bottom:-16 instead of -32.
        Matches v2.6's pattern (a 15px shift on a 30px touch-outer): with
        POPOVER_OFFSET=12, the bottom 16px outside still has 12px visible
        above the popover top (4px hidden behind the popover, accepted).
-       The other 16px sits INSIDE the box; this is the unavoidable
-       trade-off — handles can't be both "fully outside" AND "not
-       covered by popover" when the popover sits directly below. */
+       The other 16px sits INSIDE the box at vv.scale=1; at higher pinch
+       zoom the inside extent shrinks proportionally with the handle. */
     .dmna-handle {
       display: none;
       position: absolute;
@@ -582,6 +634,7 @@
       pointer-events: auto;
       z-index: 1;
       touch-action: none;
+      transform: scale(var(--dmna-handle-scale, 1));
       /* Fade-in/out for the debug-zone overlay (v2.6 carry-over pattern).
          Baseline is fully transparent so toggling the debug-zones body
          class only flips colors — transition then animates the swap.
@@ -591,23 +644,35 @@
       transition: background-color 0.3s ease, border-color 0.3s ease;
     }
     .dmna-note-box.is-active .dmna-handle { display: block; }
-    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; }
-    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; }
-    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; }
-    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; }
+    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; transform-origin: 100% 100%; }
+    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; transform-origin: 0% 100%; }
+    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; transform-origin: 0% 50%; }
+    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; transform-origin: 100% 50%; }
 
     /* SE corner triangle: visual resize affordance on active box. Color
        tracks the active border (orange). Fades out during drag/resize
        (.is-interacting set in onInteractionMove) so the user's view of
        the underlying art isn't obscured by chrome they're not aiming at —
-       v2.6 carry-over pattern. */
+       v2.6 carry-over pattern.
+       Border-width is driven by --dmna-triangle-size (CSS px), set on
+       the active note element by renderNoteBox in JS (proportional to
+       box display: min(width,height) / 6, capped at 8 CSS px to match
+       the v3.0 / v3.1.1 baseline visual). Pinch zoom is
+       NOT counter-scaled here — the triangle is a fraction of the
+       box's CSS-px size, so its on-screen device-px size scales with
+       the box itself (smaller box → smaller triangle, bigger box →
+       bigger triangle), constant ratio across pinch zoom levels. v3.1.1
+       attempted to counter-scale the triangle by vv.scale (constant 8
+       device px on screen); v3.1.4 swaps to box-proportional per user
+       request — at MIN_BOX_SIZE_DISPLAY=48 device px the triangle is
+       8 device px, matching the v3.1.1 default visual. */
     .dmna-note-box.is-active::after {
       content: '';
       position: absolute;
       bottom: 0; right: 0;
       width: 0; height: 0;
       border-style: solid;
-      border-width: 0 0 8px 8px;
+      border-width: 0 0 var(--dmna-triangle-size, 8px) var(--dmna-triangle-size, 8px);
       border-color: transparent transparent #ff9800 transparent;
       pointer-events: none;
       opacity: 1;
@@ -678,13 +743,28 @@
       border-color: transparent transparent rgba(30, 30, 30, 0.96) transparent;
       pointer-events: none;
     }
+    /* Input row layout: 2-column grid where the side stack (👁 + ↶)
+       occupies HALF of one bottom-row button column (= 1/6 of the
+       grid track width), and the textarea takes everything else.
+       v3.1.7 had the side stack take a full button column (1/3),
+       which was clean alignment-wise but ate too much textarea
+       width. Per user request the side-stack column is halved and
+       the textarea grows by the freed space (+ ~47 CSS px). The
+       side-stack is right-aligned with the delete button's right
+       edge — both end at the popover's right padding edge — by
+       design (the 2nd grid column ends at 100% just like the
+       3rd column of the bottom row).
+       The calc((100% - 16px) / 6) width matches half a bottom-row
+       button: bottom is 3 buttons + 2*8px gap = 100%, so each
+       button is (100% - 16px) / 3, and half is (100% - 16px) / 6. */
     #dmna-popover-input-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr calc((100% - 16px) / 6);
       gap: 8px;
       align-items: stretch;
     }
     #dmna-popover-input {
-      flex: 1;
+      min-width: 0;
       padding: 8px 10px;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.18);
@@ -699,12 +779,9 @@
     }
     #dmna-popover-input:focus { border-color: #0073ff; }
     #dmna-popover-side-stack {
-      flex-shrink: 0;
-      width: 44px;
       display: flex;
       flex-direction: column;
       gap: 6px;
-      align-self: stretch;
     }
     .dmna-popover-side-btn {
       flex: 1;
@@ -758,12 +835,12 @@
       background: rgba(255, 152, 0, 0.36);
     }
     #dmna-popover-buttons {
-      display: flex;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 8px;
       margin-top: 10px;
     }
     .dmna-popover-btn {
-      flex: 1;
       padding: 10px 0;
       border-radius: 6px;
       border: 1px solid rgba(255, 255, 255, 0.32);
@@ -880,7 +957,14 @@
        right. The whole row is a <button>, so clicks anywhere on it flip
        the state. Inner spans use pointer-events: none so the click
        target is always the button itself. */
-    .dmna-tag-toggle {
+    /* Tag row container — non-interactive div, NOT a button. v3.1.9 +
+       v3.1.10 tried to fight native <button> rendering on Android via
+       appearance: none + tap-highlight + outline; some browsers still
+       leaked a bright-white background on tap/focus that hid the white
+       label text. v3.1.11 sidesteps the whole class of issues by
+       moving the click target onto the inner pill button only — the
+       row itself never receives :focus / :active / tap-highlight. */
+    .dmna-tag-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -892,32 +976,46 @@
       background: rgba(255, 255, 255, 0.06);
       color: #ffffff;
       font-size: 13px;
-      cursor: pointer;
       user-select: none;
-      touch-action: manipulation;
-      transition: background 0.12s, border-color 0.12s;
       box-sizing: border-box;
     }
-    .dmna-tag-toggle:hover {
-      background: rgba(255, 255, 255, 0.10);
-    }
     /* Forced-on state: rule 3 (check_translation or partially_translated
-       implies translation_request) locks translation_request ON. Click
-       is a no-op; the visual cue is reduced opacity. */
-    .dmna-tag-toggle:disabled {
-      cursor: not-allowed;
+       implies translation_request) locks translation_request ON. The
+       inner switch button itself carries the disabled attr; this class on the
+       row drives the visual cue (reduced opacity). */
+    .dmna-tag-row.is-disabled {
       opacity: 0.7;
     }
     .dmna-tag-label {
       flex: 1;
       text-align: left;
-      pointer-events: none;
+    }
+    /* Pill switch button — the actual click target. Padding expands the
+       hit area beyond the 36x20 visual pill (final hit zone ~52x36);
+       not quite the 44x44 mobile guideline but sized for a popover
+       used briefly during the Confirm flow, not a primary action. */
+    .dmna-tag-switch-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      -webkit-tap-highlight-color: transparent;
+      outline: none;
+      border: none;
+      background: transparent;
+      padding: 8px;
+      margin: -8px -8px -8px 0;
+      cursor: pointer;
+      touch-action: manipulation;
+      display: inline-flex;
+      align-items: center;
+      flex-shrink: 0;
+    }
+    .dmna-tag-switch-btn:disabled {
+      cursor: not-allowed;
     }
     /* Pill switch: 36x20 track + 16x16 thumb. ON = green track + thumb
        slides to the right; OFF = neutral track + thumb on the left. */
     .dmna-tag-switch {
       position: relative;
-      flex-shrink: 0;
       width: 36px;
       height: 20px;
       border-radius: 999px;
@@ -925,7 +1023,7 @@
       transition: background 0.14s;
       pointer-events: none;
     }
-    .dmna-tag-toggle.is-on .dmna-tag-switch {
+    .dmna-tag-row.is-on .dmna-tag-switch {
       background: rgba(46, 204, 113, 0.85);
     }
     .dmna-tag-switch-thumb {
@@ -940,7 +1038,7 @@
       transition: transform 0.14s;
       pointer-events: none;
     }
-    .dmna-tag-toggle.is-on .dmna-tag-switch-thumb {
+    .dmna-tag-row.is-on .dmna-tag-switch-thumb {
       transform: translateX(16px);
     }
 
@@ -1164,6 +1262,45 @@
   }
 
   /**
+   * Counter-scales the active note's 4 corner handles against
+   * `visualViewport.scale` so each handle's visual footprint stays a
+   * constant ~32 device-px across pinch-zoom levels. Each handle's
+   * transform-origin (set in CSS) is the point on its bounding box
+   * that coincides with the box's actual corner, so `scale(invScale)`
+   * collapses the handle TOWARD the box corner — at high pinch zoom
+   * the CSS bounding box (and pointer-event hit region) shrinks
+   * proportionally, letting small boxes (down to MIN_BOX_SIZE_DISPLAY)
+   * remain interactable without handle collision.
+   *
+   * Implementation: writes a single `--dmna-handle-scale` CSS custom
+   * property on the active note element (the parent of all 4 handles).
+   * Each handle reads the variable via
+   * `transform: scale(var(--dmna-handle-scale, 1))`. One property
+   * write per frame instead of four inline-transform writes.
+   *
+   * The SE corner triangle (::after) is NOT counter-scaled here as of
+   * v3.1.4 — its size tracks box display dimensions instead, set
+   * separately by `renderNoteBox` via `--dmna-triangle-size`.
+   *
+   * Scoped to activeNoteId because CSS gates `.dmna-handle` to
+   * `display: none` off `.is-active` — non-active boxes don't need
+   * transform writes.
+   *
+   * Called from `updateVisualViewportPositions` (RAF-batched on vv
+   * resize/scroll) and from `showPopover` (so handles are pre-scaled
+   * before reveal — same flicker-avoidance pattern as the popover).
+   */
+  function updateActiveHandleScales() {
+    if (activeNoteId === null) return;
+    const note = notes.get(activeNoteId);
+    if (!note || !note.domElement) return;
+    const vv = window.visualViewport;
+    const invScale = vv ? (1 / vv.scale) : 1;
+    note.domElement.style.setProperty(
+        '--dmna-handle-scale', String(invScale));
+  }
+
+  /**
    * Updates positions of fixed elements (float button, toast) based on the visual viewport.
    * This is necessary to handle mobile keyboard layout changes and pinch-zooming correctly.
    */
@@ -1216,6 +1353,7 @@
     // rect. Skip when no box is active (popover is hidden anyway).
     if (activeNoteId !== null) {
       updatePopoverPosition();
+      updateActiveHandleScales();
     }
 
     // Tag popover (Phase 4 D9) is anchored to the (would-be) Confirm
@@ -1853,6 +1991,19 @@
       note.domElement.style.top = `${screen.top}px`;
       note.domElement.style.width = `${screen.width}px`;
       note.domElement.style.height = `${screen.height}px`;
+      // SE corner triangle (::after) tracks 1/6 of the box's smaller
+      // display dimension, capped at 8 CSS px (matches v3.0 / v3.1.1
+      // baseline). Pinch zoom is intentionally NOT in this expression —
+      // the triangle scales with the box's CSS-px size, and the visual
+      // viewport magnifies both the box and triangle by the same factor,
+      // so the on-screen ratio is constant across zoom levels. The cap
+      // kicks in at box ≥ 48 CSS px (= MIN_BOX_SIZE_DISPLAY at vv=1);
+      // below that the proportional shrink applies for sub-MIN states
+      // that can occur transiently at high pinch zoom.
+      const triSize = Math.min(
+          Math.min(screen.width, screen.height) / 6, 8);
+      note.domElement.style.setProperty(
+          '--dmna-triangle-size', `${triSize}px`);
     } else {
       // Image rect not yet known — hide until the next re-render
       // (window resize, image load, or explicit updateAllNoteBoxPositions).
@@ -2426,6 +2577,7 @@
     // while still display:none means the inline style is in place by
     // the time the show class flips display to block.
     updatePopoverPosition();
+    updateActiveHandleScales();
     popoverElement.classList.add('show');
     // Hide the floating button while the popover is up so it can't be
     // tapped open and trigger ✓ Confirm prematurely. CSS in STYLES
@@ -2934,13 +3086,20 @@
     const dxImg = dx / scale;
     const dyImg = dy / scale;
     // Resize floor: max of the absolute image-space minimum and the
-    // display-space minimum projected to image space. The display
-    // floor wins at most zoom levels — a small image rendered larger
-    // than its original would still need the box big enough for the
-    // 32px touch zones to not collide, which is a display-space
-    // constraint.
+    // device-px display floor projected to image space.
+    // MIN_BOX_SIZE_DISPLAY is in DEVICE px (on-screen, constant across
+    // pinch zoom); dividing by vvScale gives the CSS px floor at the
+    // current pinch level (CSS px = device px / vv.scale), then
+    // dividing by `scale` (display CSS px per image px) gives image
+    // px. Net effect: the box's on-screen footprint stays ≥
+    // MIN_BOX_SIZE_DISPLAY device px while the IMAGE-space floor
+    // shrinks with pinch zoom — letting users mark progressively
+    // smaller image features by pinching in.
+    // MIN_BOX_SIZE_IMG is the absolute image-space safety floor.
+    const vv = window.visualViewport;
+    const vvScale = vv ? vv.scale : 1;
     const minImg = Math.max(
-        MIN_BOX_SIZE_IMG, MIN_BOX_SIZE_DISPLAY / scale);
+        MIN_BOX_SIZE_IMG, (MIN_BOX_SIZE_DISPLAY / vvScale) / scale);
 
     const start = dragState.startState;
     let nx = start.x;
@@ -3588,7 +3747,7 @@
   /**
    * pointerup ending a drag-to-create gesture. Owns BOTH paths because
    * pointerdown's preventDefault killed the click chain:
-   *   - Drag (moved past threshold AND rect ≥ MIN_BOX_SIZE_DISPLAY) →
+   *   - Drag (moved past threshold AND rect ≥ MIN_DRAG_CREATE_SIZE_DISPLAY) →
    *     create temp note from drag rect.
    *   - Tap (no movement) or sub-min drag → spawn a default-sized box
    *     at the release point, mirroring `handleImageClick`'s tap path.
@@ -3612,8 +3771,8 @@
     suppressNextImageClick = true;
 
     const usableDrag = moved && finalRect &&
-        finalRect.width >= MIN_BOX_SIZE_DISPLAY &&
-        finalRect.height >= MIN_BOX_SIZE_DISPLAY;
+        finalRect.width >= MIN_DRAG_CREATE_SIZE_DISPLAY &&
+        finalRect.height >= MIN_DRAG_CREATE_SIZE_DISPLAY;
     if (usableDrag) {
       const imgState = screenToImageRect(finalRect);
       if (!imgState) {
@@ -4452,13 +4611,18 @@
       return;
     }
     TAG_OPTIONS.forEach((tag) => {
-      const btn = tagPopoverElement.querySelector(
-          `button.dmna-tag-toggle[data-tag="${tag}"]`);
-      if (!(btn instanceof HTMLButtonElement)) {
+      const row = tagPopoverElement.querySelector(
+          `.dmna-tag-row[data-tag="${tag}"]`);
+      if (!(row instanceof HTMLElement)) {
         return;
       }
-      btn.classList.toggle('is-on', !!tagPopoverState[tag]);
-      btn.disabled = isTagToggleDisabled(tagPopoverState, tag);
+      const switchBtn = row.querySelector('.dmna-tag-switch-btn');
+      const disabled = isTagToggleDisabled(tagPopoverState, tag);
+      row.classList.toggle('is-on', !!tagPopoverState[tag]);
+      row.classList.toggle('is-disabled', disabled);
+      if (switchBtn instanceof HTMLButtonElement) {
+        switchBtn.disabled = disabled;
+      }
     });
   }
 
@@ -4493,27 +4657,32 @@
     const list = document.createElement('div');
     list.id = 'dmna-tag-popover-toggles';
     TAG_OPTIONS.forEach((tag) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'dmna-tag-toggle';
-      btn.dataset.tag = tag;
+      const row = document.createElement('div');
+      row.className = 'dmna-tag-row';
+      row.dataset.tag = tag;
 
       const label = document.createElement('span');
       label.className = 'dmna-tag-label';
       label.textContent = TAG_LABELS[tag];
-      btn.appendChild(label);
+      row.appendChild(label);
+
+      const switchBtn = document.createElement('button');
+      switchBtn.type = 'button';
+      switchBtn.className = 'dmna-tag-switch-btn';
+      switchBtn.dataset.tag = tag;
 
       const sw = document.createElement('span');
       sw.className = 'dmna-tag-switch';
       const thumb = document.createElement('span');
       thumb.className = 'dmna-tag-switch-thumb';
       sw.appendChild(thumb);
-      btn.appendChild(sw);
+      switchBtn.appendChild(sw);
+      row.appendChild(switchBtn);
 
-      btn.addEventListener('click', (e) => {
+      switchBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        if (btn.disabled || !tagPopoverState) {
+        if (switchBtn.disabled || !tagPopoverState) {
           return;
         }
         const currentlyOn = !!tagPopoverState[tag];
@@ -4521,7 +4690,7 @@
             tagPopoverState, tag, !currentlyOn);
         renderTagToggles();
       });
-      list.appendChild(btn);
+      list.appendChild(row);
     });
     tagPopoverElement.appendChild(list);
 
