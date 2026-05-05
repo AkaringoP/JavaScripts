@@ -5,6 +5,16 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-05-05
+
+### Added
+- **Pinch-zoom counter-scaled corner handles.** Each of the 4 resize/move handles is now scaled by `1 / visualViewport.scale` per active frame, so the handle's visual footprint stays a constant ~32 device-px regardless of pinch zoom. Per-corner `transform-origin` (NW: bottom right, NE: bottom left, SE: top left, SW: top right) glues each handle's box-touching corner — so as the user pinches in, handles collapse TOWARD the box instead of away from it. Their CSS bounding box (and pointer-event hit region) shrinks proportionally, which is what unlocks the lower `MIN_BOX_SIZE_DISPLAY` below. Driven by `updateActiveHandleScales`, called from the existing RAF batch in `updateVisualViewportPositions` and pre-reveal in `showPopover` (same flicker-avoidance pattern as the popover itself).
+- **`MIN_DRAG_CREATE_SIZE_DISPLAY = 24px`** constant for PC drag-to-create's "this drag was deliberate" threshold. Decoupled from `MIN_BOX_SIZE_DISPLAY` so lowering the runtime resize floor doesn't make accidental tiny mouse jitters spawn boxes.
+
+### Changed
+- **`MIN_BOX_SIZE_DISPLAY`: 24 → 5 (CSS px at vv.scale=1).** User report: small features like single hiragana glyphs in tight word balloons (e.g. post #11304460's lower-right "ちょ") couldn't be marked because the 24px floor was larger than the glyph itself. The pre-3.1 floor was set by the four 32×32 fixed-size handles colliding below ~24 CSS px; now that handles counter-scale with pinch zoom, the collision constraint lives at the device-px level, and the CSS floor can drop. Intended workflow: pinch in over the small feature → drag handles to shrink past 24 CSS px → pinch back out, box stays small. At vv.scale=1 a 5px box is too small to grab — the workflow assumes pinch-zoom, which the resize clamp now reads on every move.
+- **Resize clamp accounts for `visualViewport.scale`.** `onInteractionMove`'s `minImg` formula is now `Math.max(MIN_BOX_SIZE_IMG, (MIN_BOX_SIZE_DISPLAY / vvScale) / scale)` — the display floor scales with pinch zoom, image-space safety floor (`MIN_BOX_SIZE_IMG = 8`) unchanged. At vv.scale=1 the math reduces to the v3.0 expression, preserving default behavior.
+
 ## [3.0.1] - 2026-05-05
 
 ### Changed

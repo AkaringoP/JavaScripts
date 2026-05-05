@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.0.1
+// @version      3.1.0
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.0.1';
+  const SCRIPT_VERSION = '3.1.0';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -75,14 +75,27 @@
    *  net so we never store an effectively-zero rect. */
   const MIN_BOX_SIZE_IMG = 8;
 
-  /** @const {number} Minimum box width/height in display pixels.
-   *  Originally 48 (then 40) for usability of the in-box body drag
-   *  target. Tightened to 24 per user request — small features (an
-   *  eye, a punctuation glyph) need to be markable. The 32px corner
-   *  touch zones extend outside the box (NW/NE fully outside, SE/SW
-   *  shifted up half) so they remain individually grabbable even when
-   *  the box is smaller than a single touch zone. */
-  const MIN_BOX_SIZE_DISPLAY = 24;
+  /** @const {number} Minimum box width/height in display (CSS) pixels at
+   *  visualViewport.scale=1. Handles are counter-scaled against
+   *  `visualViewport.scale` (see `updateActiveHandleScales`), so at
+   *  higher pinch zoom the effective floor shrinks proportionally — at
+   *  vv.scale=3 the box can shrink to ~1.7 CSS px while remaining
+   *  ≥5 device px wide, the threshold below which the four counter-
+   *  scaled corner handles would start to collide. Pre-v3.1 the floor
+   *  was 24 because handles were a fixed 32×32 CSS px; that constraint
+   *  now lives at the device-px level via the inverse-scale transform.
+   *  Intended workflow: pinch in over a small feature, drag handles to
+   *  shrink box past 24 CSS px, pinch back out — the box stays small.
+   *  `MIN_BOX_SIZE_IMG` is the absolute safety floor in image space. */
+  const MIN_BOX_SIZE_DISPLAY = 5;
+
+  /** @const {number} PC-only drag-to-create threshold (display px).
+   *  Distinguishes a deliberate drag-rect from an accidental tiny mouse
+   *  jitter. Decoupled from `MIN_BOX_SIZE_DISPLAY` (the runtime resize
+   *  floor) because the create gesture has no pinch-zoom context to
+   *  scale against — drag-to-create is desktop-only. Once a box exists
+   *  the user can pinch+resize down to MIN_BOX_SIZE_DISPLAY. */
+  const MIN_DRAG_CREATE_SIZE_DISPLAY = 24;
 
   /** @const {number} Popover CSS width in display pixels (counter-scaled
    *  by visualViewport so the visual width stays constant under pinch). */
@@ -559,19 +572,32 @@
 
     /* Resize/Move handles (v3.0 Phase 3 Wave 3) — only shown on the
        active box. NW/SE are resize handles, NE/SW are move-only handles.
-       Each handle is a 32×32 invisible touch zone.
+       Each handle is a 32×32 invisible touch zone, counter-scaled per
+       active frame against visualViewport.scale (see
+       updateActiveHandleScales in JS). At vv.scale=1 the handle fills its
+       full 32 CSS px footprint; at higher pinch zoom the inverse-scale
+       transform shrinks the CSS bounding box (and pointer-event hit
+       region) while the visual/device-px size stays constant — so
+       boxes can shrink below 32 CSS px without handle collision.
 
-       NW/NE (top): fully outside the box (bottom edge at box top, top
-       edge 32px above). They sit above the box, never collide with the
-       popover (which is below).
+       Per-corner transform-origin glues the handle's box-touching
+       corner so scale() collapses each handle TOWARD the box, not away
+       from it:
+         NW  top: -32, left: -32  → origin bottom right
+         NE  top: -32, right: -32 → origin bottom left
+         SE  bottom: -16, right: -32 → origin top left
+         SW  bottom: -16, left: -32  → origin top right
+
+       NW/NE (top): fully outside the box at vv.scale=1, never collide
+       with the popover (which is below).
 
        SE/SW (bottom): shifted UP by half — bottom: -16 instead of -32.
        Matches v2.6's pattern (a 15px shift on a 30px touch-outer): with
        POPOVER_OFFSET=12, the bottom 16px outside still has 12px visible
        above the popover top (4px hidden behind the popover, accepted).
-       The other 16px sits INSIDE the box; this is the unavoidable
-       trade-off — handles can't be both "fully outside" AND "not
-       covered by popover" when the popover sits directly below. */
+       The other 16px sits INSIDE the box at vv.scale=1; at vv.scale>1
+       the top-left/top-right origin pulls the scaled handle toward the
+       box's interior corner, REDUCING popover collision risk further. */
     .dmna-handle {
       display: none;
       position: absolute;
@@ -591,10 +617,10 @@
       transition: background-color 0.3s ease, border-color 0.3s ease;
     }
     .dmna-note-box.is-active .dmna-handle { display: block; }
-    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; }
-    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; }
-    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; }
-    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; }
+    .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; transform-origin: bottom right; }
+    .dmna-handle-ne { top: -32px; right: -32px; cursor: move; transform-origin: bottom left; }
+    .dmna-handle-se { bottom: -16px; right: -32px; cursor: nwse-resize; transform-origin: top left; }
+    .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; transform-origin: top right; }
 
     /* SE corner triangle: visual resize affordance on active box. Color
        tracks the active border (orange). Fades out during drag/resize
@@ -1164,6 +1190,37 @@
   }
 
   /**
+   * Counter-scales the active note's 4 corner handles against
+   * `visualViewport.scale` so each handle's visual footprint stays a
+   * constant ~32 device-px across pinch-zoom levels. Each handle's
+   * transform-origin (set in CSS, per-corner) is the corner glued to
+   * the box, so `scale(invScale)` collapses the handle TOWARD that
+   * anchor — at high pinch zoom the CSS bounding box (and pointer-
+   * event hit region) shrinks proportionally, letting small boxes
+   * (down to MIN_BOX_SIZE_DISPLAY) remain interactable without handle
+   * collision.
+   *
+   * Scoped to activeNoteId because CSS gates `.dmna-handle` to
+   * `display: none` off `.is-active` — non-active handles aren't
+   * visible or hit-tested and don't need transform writes.
+   *
+   * Called from `updateVisualViewportPositions` (RAF-batched on vv
+   * resize/scroll) and from `showPopover` (so handles are pre-scaled
+   * before reveal — same flicker-avoidance pattern as the popover).
+   */
+  function updateActiveHandleScales() {
+    if (activeNoteId === null) return;
+    const note = notes.get(activeNoteId);
+    if (!note || !note.domElement) return;
+    const vv = window.visualViewport;
+    const invScale = vv ? (1 / vv.scale) : 1;
+    const handles = note.domElement.querySelectorAll('.dmna-handle');
+    for (const h of handles) {
+      /** @type {HTMLElement} */ (h).style.transform = `scale(${invScale})`;
+    }
+  }
+
+  /**
    * Updates positions of fixed elements (float button, toast) based on the visual viewport.
    * This is necessary to handle mobile keyboard layout changes and pinch-zooming correctly.
    */
@@ -1216,6 +1273,7 @@
     // rect. Skip when no box is active (popover is hidden anyway).
     if (activeNoteId !== null) {
       updatePopoverPosition();
+      updateActiveHandleScales();
     }
 
     // Tag popover (Phase 4 D9) is anchored to the (would-be) Confirm
@@ -2426,6 +2484,7 @@
     // while still display:none means the inline style is in place by
     // the time the show class flips display to block.
     updatePopoverPosition();
+    updateActiveHandleScales();
     popoverElement.classList.add('show');
     // Hide the floating button while the popover is up so it can't be
     // tapped open and trigger ✓ Confirm prematurely. CSS in STYLES
@@ -2935,12 +2994,17 @@
     const dyImg = dy / scale;
     // Resize floor: max of the absolute image-space minimum and the
     // display-space minimum projected to image space. The display
-    // floor wins at most zoom levels — a small image rendered larger
-    // than its original would still need the box big enough for the
-    // 32px touch zones to not collide, which is a display-space
-    // constraint.
+    // floor itself is divided by visualViewport.scale because handles
+    // are counter-scaled per `updateActiveHandleScales` — the "handles
+    // don't collide" constraint is a constant in DEVICE px, so its
+    // projection to CSS px shrinks proportionally with pinch zoom.
+    // At vv.scale=1 this reduces to the v3.0 expression. The image-
+    // space MIN_BOX_SIZE_IMG remains the absolute safety floor so the
+    // box can't collapse to zero at extreme zoom.
+    const vv = window.visualViewport;
+    const vvScale = vv ? vv.scale : 1;
     const minImg = Math.max(
-        MIN_BOX_SIZE_IMG, MIN_BOX_SIZE_DISPLAY / scale);
+        MIN_BOX_SIZE_IMG, (MIN_BOX_SIZE_DISPLAY / vvScale) / scale);
 
     const start = dragState.startState;
     let nx = start.x;
@@ -3588,7 +3652,7 @@
   /**
    * pointerup ending a drag-to-create gesture. Owns BOTH paths because
    * pointerdown's preventDefault killed the click chain:
-   *   - Drag (moved past threshold AND rect ≥ MIN_BOX_SIZE_DISPLAY) →
+   *   - Drag (moved past threshold AND rect ≥ MIN_DRAG_CREATE_SIZE_DISPLAY) →
    *     create temp note from drag rect.
    *   - Tap (no movement) or sub-min drag → spawn a default-sized box
    *     at the release point, mirroring `handleImageClick`'s tap path.
@@ -3612,8 +3676,8 @@
     suppressNextImageClick = true;
 
     const usableDrag = moved && finalRect &&
-        finalRect.width >= MIN_BOX_SIZE_DISPLAY &&
-        finalRect.height >= MIN_BOX_SIZE_DISPLAY;
+        finalRect.width >= MIN_DRAG_CREATE_SIZE_DISPLAY &&
+        finalRect.height >= MIN_DRAG_CREATE_SIZE_DISPLAY;
     if (usableDrag) {
       const imgState = screenToImageRect(finalRect);
       if (!imgState) {
