@@ -1,73 +1,95 @@
 # Danbooru Mobile Note Assist
 
-A UserScript for [Danbooru](https://danbooru.donmai.us/) that turns multi-note translation work into a one-thumb operation on mobile, with full PC keyboard + drag support.
+A user manual for **Mobile Note Assist** — a UserScript that adds a touch-friendly note editor to [Danbooru](https://danbooru.donmai.us/) post pages. It lets you draw, edit, and submit translation notes on a phone with one thumb, and adds keyboard + drag-to-create on PC.
 
-> **The gap this fills.** Danbooru's built-in note tool was designed for a mouse on a wide screen, with each note round-tripping to the server on save. On a phone, drawing a precise rectangle, resizing it, editing tags, and saving — repeated for every speech bubble — is a mess. v3.0 collapses that into: enter Edit mode, drop boxes for every bubble at once, type each translation, then commit them all in a single Confirm.
+> Danbooru's built-in note tool was designed for a mouse on a wide screen, and it saves each note to the server the moment you press ✔. On a phone — drawing a precise rectangle, picking tags, then waiting for the page to round-trip for every speech bubble — that flow falls apart. This script collapses translating a whole page into: enter Edit mode, drop boxes for every bubble at once, type each translation, then commit them all in a single ✓ Confirm.
 
-## At a Glance
-
-- **Multi-note batch workflow.** Drop and edit several boxes in one pass, then Confirm them all together. No more save-reload-save-reload chain per note.
-- **Arc menu.** Tap (or long-press) the floating button to fan out a 2-item arc: ✓ Confirm and ✏️ Edit.
-- **Per-note popover.** Tap any box to edit just that note's text and toggle ✔/✖/🗑/👁/↶. Translation tags are decided once per Confirm, not per note.
-- **Per-note undo (↶).** Each box has its own undo stack. Step back through ✔'s, drags, resizes, deletes individually.
-- **PC keyboard shortcuts.** `Ctrl/Cmd+Enter` = ✔ box; `Esc` = dismiss popover; `Shift+N` = toggle Edit mode.
-- **PC drag-to-create.** Click and drag on the image to draw a custom-size rectangle. Tap stays as default-size spawn.
-- **Color-coded boxes.** Green = uncommitted new note. Blue = ✔'d. Red dashed = soft-deleted (undo to restore).
-- **Zoom-aware UI.** Popovers, menu, floating button, and toast all counter-scale via `visualViewport` so they stay readable while pinch-zooming.
-- **Movable floating button.** Long-press to enter reposition mode; drag freely. Position is remembered across pages.
-- Works on `/posts/{id}` — same URL the native note tool uses.
+---
 
 ## Install
 
 1. Install a UserScript manager:
-   - **[Tampermonkey](https://www.tampermonkey.net/)** (recommended — Chrome / Edge / Firefox / Safari, including iOS Safari)
-   - **[Violentmonkey](https://violentmonkey.github.io/)**
-2. **[Click here to install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js)**
-3. Confirm the installation in your manager.
+   - **[Tampermonkey](https://www.tampermonkey.net/)** — recommended. Works on Chrome, Edge, Firefox, and Safari (including iOS Safari).
+   - **[Violentmonkey](https://violentmonkey.github.io/)** — also supported.
+2. **[Click here to install the script](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js)**.
+3. Confirm the installation in your manager when prompted.
+4. Open any post page (`https://danbooru.donmai.us/posts/{id}`). You should see a 📝 floating button in the bottom-right corner.
 
-No login or extra permissions required (`@grant none`). All API calls are same-origin to Danbooru.
+No login or extra permissions required. The script makes no remote calls outside Danbooru itself.
 
-## How It Works
+---
 
-### Edit mode
+## Quick Start — translate one speech bubble
 
-The script lives in two states: **idle** (script visible but inert) and **active** (Edit mode — interactive).
+The fastest way to learn the workflow. Open any post you want to translate and follow along:
 
-Three ways to flip state:
-- **Tap the 📝 floating button** — flips active. The icon becomes ✏️.
-- **Long-press the floating button** — opens the arc menu; tap ✏️ Edit to flip.
-- **`Shift+N` keyboard shortcut** (PC, when no popover is open and no input has focus).
+1. Tap the **📝** floating button. Its icon flips to **✏️** — you're now in **Edit mode**.
+2. Tap directly on the speech bubble. A green box drops onto the bubble and a popover opens with the textarea focused.
+3. Type your translation.
+4. Tap **✔** in the popover. The popover closes and the box turns blue (committed locally — not sent to the server yet).
+5. Tap (or long-press) the floating button to bring up the arc menu, then tap **✓ Confirm**.
+6. The tag popover appears. Toggle the appropriate translation tags (most often `Translated`).
+7. Tap **Submit**. The page reloads with the note saved.
 
-Entering Edit mode triggers two background fetches: post metadata (image dimensions) and existing notes. Existing notes appear as boxes you can move/edit/delete; their original colors are preserved until you change them.
+That's the full loop. Everything below is detail on how each piece works.
 
-### Creating a box
+---
+
+## The Interface
+
+### The floating button
+
+The 📝 button in the bottom-right is the script's only entry point. It has three behaviors:
+
+- **Tap (short press)** — toggles Edit mode on/off. Icon flips between 📝 (idle) and ✏️ (active).
+- **Long-press (~0.5s, with the menu animating in)** — opens the **arc menu** (see below).
+- **Long-hold (~1.5s)** — enters drag-to-reposition mode. The button turns orange; drag to move it, release to save its new position. (See [Customization](#customization).)
+
+When a per-note popover is open, the floating button **hides** so it doesn't get in the way of the popover's ✔ / ✖ / 🗑 buttons (which sit in the same screen region on mobile).
+
+### The arc menu
+
+Long-press the floating button to open a 2-item arc:
+
+```
+        ✓ Confirm
+            \
+             \
+              ✏️ Edit
+              /
+             /
+        📝 (floating button)
+```
+
+- **✏️ Edit** — toggle Edit mode on/off (same as a short tap on the button).
+- **✓ Confirm** — send all your local changes to the server (covered in [Sending your work to the server](#sending-your-work-to-the-server)).
+
+### Idle vs Edit mode
+
+The script lives in two states:
+
+| State | What you see | What's interactive |
+|---|---|---|
+| **Idle** | 📝 floating button only | Nothing else; the script is invisible to the page. |
+| **Edit mode** | ✏️ button + every existing note appears as a colored box | Tap a box to edit it. Tap empty image space to drop a new box. |
+
+Entering Edit mode triggers two background fetches: image dimensions and existing notes. Existing notes appear as boxes you can move, edit, or delete.
+
+---
+
+## Working with notes
+
+### Creating a note
+
+Once Edit mode is on:
 
 | Input | Result |
 |---|---|
-| **Tap on the image** (mobile or PC) | Drops a default-sized box at the tap point, clamped inside the image. Default size = 10% of the image's shorter dimension, clamped to 30–150px. |
-| **Click-and-drag on the image** (PC only) | Draws a custom rectangle from the drag start point. A drag is registered when the pointer moves more than 5px; below that threshold it's treated as a tap. A dashed yellow ghost rectangle previews the size as you drag. |
-| **Tap the box** | Activates that note (selects it) and opens its popover. |
+| **Tap on the image** (mobile or PC) | Drops a default-sized box at your tap point, clamped inside the image bounds. The box auto-opens its popover with the textarea focused. |
+| **Click and drag on the image** (PC mouse only) | Draws a custom-size rectangle from your drag start point. A dashed yellow ghost rectangle previews the size as you drag. Release to spawn. |
+| **Tap an existing box** | Opens that note's popover so you can edit it. |
 
-Newly-created boxes auto-focus the popover textarea, so you can type immediately on PC.
-
-### Manipulating the box
-
-The active box has four invisible handle zones at its corners with generous touch padding.
-
-```
-   ↖ ─────────────── ✥
-   │                 │
-   │   note box      │
-   │                 │
-   ✥ ─────────────── ↘
-```
-
-- **↖ / ↘ (NW / SE corners)** — Resize. NW grows up-left, SE grows down-right. Each is constrained to stay inside the image.
-- **✥ (NE / SW corners)** — Move. Drag from either to translate the whole box. Tapping the box body itself also enters drag mode.
-
-Drag and resize gestures are individually undoable via the popover's ↶ button — each gesture is one entry on the per-note undo stack.
-
-The 👁 button on the popover **temporarily reveals** the invisible touch zones (red squares with the handle icon) for as long as you hold it.
+The default box size is 10% of the image's shorter dimension, clamped to 30–150px. The smallest box you can draw is 24px on each side — small enough to mark single eyes or glyphs.
 
 ### The per-note popover
 
@@ -85,129 +107,173 @@ The 👁 button on the popover **temporarily reveals** the invisible touch zones
                   (anchored under box)
 ```
 
-- **✔** — Commit the current geometry + text as the note's checkpoint. Doesn't send to the server yet — that happens at Confirm time. The box turns blue.
-- **✖** — Cancel uncommitted edits. On a fresh-new (never-✔'d) box, ✖ hard-deletes the box. On a ✔'d or server-loaded box, ✖ reverts text/geometry back to the last checkpoint.
-- **🗑** — Delete. Fresh-new boxes are hard-deleted. ✔'d temp notes and server notes become red-dashed soft-deletions; ↶ restores them.
-- **↶** — Per-note undo. Steps back through this box's history (✔ → drag → resize → 🗑 etc.).
-- **👁** — Hold to reveal touch zones (debug overlay).
+| Button | What it does |
+|---|---|
+| **Textarea** | Type or edit the note text. |
+| **✔ Commit** | Save the current text + geometry as the note's local checkpoint. The popover closes and the box turns blue. **Does not** send to the server yet — that happens at ✓ Confirm time. |
+| **✖ Cancel** | Discard uncommitted changes. On a brand-new box that was never ✔'d, this hard-deletes it. On a ✔'d or server-loaded box, this reverts text and geometry to the last checkpoint. |
+| **🗑 Delete** | Mark this note for deletion. New boxes are deleted immediately. Already-✔'d or server-loaded notes turn into a red dashed box (soft-deleted) — they aren't gone until ✓ Confirm runs, so you can ↶ to bring them back. |
+| **↶ Undo** | Step back through this note's history. Each box has its own undo stack — independent from every other box. Reverts ✔ commits, drag/resize moves, and 🗑 deletes one at a time. |
+| **👁 Peek** | Hold this button to temporarily reveal the box's invisible touch zones (red squares, see below). Useful for aiming on small boxes. |
 
-Translation tags **don't appear here** — they're handled once per Confirm, in the tag popover (see below).
+> The four translation tags (`Translated`, `Translation request`, `Check translation`, `Partially translated`) **don't appear in the per-note popover.** They're handled once per ✓ Confirm, in a separate tag popover.
 
-### Confirm flow
+### Moving and resizing
 
-When you're done editing all boxes, tap (or long-press → arc menu) ✓ **Confirm**:
+Each box has four invisible handle zones at its corners with generous touch padding:
 
-1. The script classifies pending changes — new notes (POST), edits (PUT), deletes (DELETE), and notes that need their tags reviewed.
-2. If new notes were created or text was changed, a **tag popover** appears anchored to the Confirm button. Toggle the four translation tags as iOS-style pill switches:
-   - `Translated` (excludes the other three)
-   - `Translation request` (independent — can stay ON when c_t / p_t are off)
-   - `Check translation` (forces `Translation request` ON when ON)
-   - `Partially translated` (forces `Translation request` ON when ON)
-3. Tap **Submit** in the tag popover to start the batch send. Order: DELETE → PUT → POST → tag PATCH (so a temp box that fails to POST doesn't get its tags applied to the wrong post).
-4. **Full success** → `✓ Saved` toast → page reloads.
-5. **Partial failure** → error modal listing which calls failed and why (Danbooru's actual error response — e.g., "Box overlaps existing note"). Choose **Retry** (re-classify and re-send only what's missing) or **Cancel** (stay in Edit mode with the partial state, server's truth applied locally).
+```
+   ↖ ─────────────── ✥
+   │                 │
+   │   note box      │
+   │                 │
+   ✥ ─────────────── ↘
+```
 
-### PC keyboard shortcuts
+- **↖ / ↘ (top-left and bottom-right)** — Resize. ↖ grows up-left, ↘ grows down-right. Both stay clamped inside the image.
+- **✥ (top-right and bottom-left)** — Move. Drag from either corner to translate the whole box.
+- **The box body itself** — Also drag-to-move. Moves the same way as the ✥ corners.
+
+Each drag and each resize is a single entry on the per-note undo stack, so a misjudged drag can be reverted with ↶ without losing the text.
+
+If you can't tell where the touch zones are on a small box, **hold 👁** in the popover to highlight them.
+
+### Box colors at a glance
+
+```
+┌─────────────┐  ┌─────────────┐  ┌╴╴╴╴╴╴╴╴╴╴╴╴╴┐  ┌─────────────┐
+│   Default   │  │    Dirty    │  ╵   Deleted   ╵  │    Active   │
+│  (saved)    │  │  (changed)  │  ╵  (soft del) ╵  │ (popover    │
+│   blue      │  │    green    │  ╵     red     ╵  │   open)     │
+└─────────────┘  └─────────────┘  └╴╴╴╴╴╴╴╴╴╴╴╴╴┘  └─orange──────┘
+```
+
+| State | Color | Meaning |
+|---|---|---|
+| **Default** | solid blue | Loaded from the server, no local changes yet. |
+| **Dirty** | solid green | Has local edits (text or geometry) not yet sent to the server. |
+| **Deleted** | red, dashed | Soft-deleted via 🗑 — restorable with ↶ until ✓ Confirm runs. |
+| **Active** | solid orange | The box whose popover is currently open. |
+
+If a box has multiple states at once (e.g. a deleted box you've tapped to reveal its undo affordance), the higher-priority color wins: `active > deleted > dirty > default`. The one exception is `deleted + active` — it stays red dashed, so you can still see what you're being asked to undo.
+
+---
+
+## Sending your work to the server
+
+When you're done editing all the boxes, tap (or long-press → arc menu) **✓ Confirm**.
+
+1. The script collects your pending changes — new notes, edits, deletes — and decides what to send.
+2. If you've added notes or changed any text, a **tag popover** appears anchored to the Confirm button. Toggle the four translation tags as iOS-style pill switches:
+
+   | Tag | Behavior |
+   |---|---|
+   | **Translated** | When ON, automatically forces the other three OFF. (You can't be both translated and partially translated.) |
+   | **Translation request** | Independent — can stay ON on its own. |
+   | **Check translation** | When ON, forces `Translation request` ON too. |
+   | **Partially translated** | When ON, forces `Translation request` ON too. |
+
+3. Tap **Submit** in the tag popover. The script sends your changes in batch.
+4. **On full success**: a `✓ Saved` toast flashes, and the page reloads with everything applied.
+5. **On partial failure**: an error modal lists which calls failed and Danbooru's actual error message (e.g. `Box overlaps existing note`). You can choose:
+   - **Retry** — re-classify what's left and try again.
+   - **Cancel** — stay in Edit mode with the partial state. Successful changes are kept locally; failed ones still show as pending so you can fix them.
+
+> Tip: if you want to update **only** the translation tags on a post (e.g. flip from `translation_request` to `translated` because someone else translated already), just enter Edit mode and tap ✓ Confirm directly without touching any boxes. The tag popover still opens.
+
+---
+
+## PC users
+
+### Keyboard shortcuts
 
 | Shortcut | Context | Action |
 |---|---|---|
-| `Ctrl/Cmd+Enter` | Cursor in popover textarea | ✔ Confirm box |
-| `Esc` | Popover open | Dismiss (fresh-new = hard-delete; ✔'d = revert) |
-| `Shift+N` | No popover, no input focus | Toggle Edit on/off |
+| `Ctrl/Cmd + Enter` | Cursor in the popover textarea | ✔ Confirm box (same as clicking ✔) |
+| `Esc` | Popover open | Dismiss the popover. Behaves like ✖: hard-deletes brand-new boxes, reverts ✔'d ones. |
+| `Shift + N` | No popover open, no input focused | Toggle Edit mode on/off. A toast confirms the new state. |
 
-`Shift+N` is also disabled while a tag popover or error modal is open, to prevent accidental dismiss.
+`Shift + N` is intentionally disabled while the tag popover or error modal is open, so you don't accidentally lose your in-progress submission.
 
-### Repositioning the floating button
+### Drag-to-create
 
-The 📝 button defaults to the bottom-right corner. To move it:
+In addition to tap-to-create, on PC you can **click and drag** on the image to draw a rectangle of any size. A dashed yellow ghost previews the result; release to spawn. Touch users always get tap-to-create plus drag-the-handles to resize, since drag-to-create on touch would conflict with pinch and pan gestures.
 
-1. Press and hold the button for ~1.5s. A short vibration (if supported) and an `✥ Drag to reposition` toast confirm you're in drag mode. The button turns orange and scales up.
-2. Drag in any direction (both axes are free in v3.0). Both clamps stay inside the screen with margin.
-3. Release to commit. Position is saved to `localStorage`.
+A drag is registered when the pointer moves more than 5px during the press; below that threshold it's treated as a tap.
 
-A regular tap (no hold) fires the menu instead.
+---
+
+## Mobile tips
+
+- **Pinch-zoom freely.** The popover, arc menu, floating button, and toasts all counter-scale, so they stay the same physical size on screen no matter how far you zoom in. Position your zoom on the bubble before tapping, and the box will land precisely.
+- **Hold 👁 when aiming on a small box.** The corner touch zones extend ~30px past the visible box edge, which is invisible by default. Holding 👁 shows you exactly where they are.
+- **Tap any box to switch focus.** No need to ✔ before moving on — tapping a different box will close the current popover. If the current note has a useful checkpoint (text was changed), it stays as `dirty` (green) and waits for ✓ Confirm.
+
+---
+
+## Customization
+
+### Moving the floating button
+
+The 📝 button defaults to the bottom-right corner. To reposition it:
+
+1. Press and hold the button for ~1.5 seconds. A short vibration (if your device supports it) and an `✥ Drag to reposition` toast confirm you're in drag mode. The button turns orange and scales up.
+2. Drag in any direction. Both axes are free; the button stays clamped inside the screen with margin.
+3. Release. The new position is saved to your browser and persists across pages and reloads.
+
+A regular short tap (no hold) opens the menu instead, so you won't accidentally trigger drag mode.
 
 ### Auto-hide while typing
 
-When focus enters any text input on the page (the per-note textarea, the tag editor, comment forms, etc.), the floating button hides itself so it doesn't cover the keyboard's UI. It reappears 100ms after focus leaves, unless focus moved to another text input.
+When focus enters any text input on the page (the per-note textarea, the tag editor, comment forms, contenteditable fields, etc.), the floating button auto-hides so it doesn't cover the keyboard's UI on mobile. It reappears 100ms after focus leaves, unless focus moved straight to another text input.
 
-## Usage Examples
+---
 
-### The basic mobile case — translating one bubble
+## Troubleshooting
 
-1. Tap **📝** to enter Edit mode (or long-press → ✏️).
-2. Tap the speech bubble. A green box drops, popover open, textarea focused.
-3. Type the translation. Tap **✔** to commit (box turns blue).
-4. Tap (or long-press →) **✓ Confirm**. The tag popover appears.
-5. Toggle the appropriate tag switches. Tap **Submit**.
-6. Page reloads with the note saved.
+**The 📝 button isn't appearing.**
+Check that you're on a `/posts/{id}` page (the only place this script runs), and that your UserScript manager shows it as enabled for `danbooru.donmai.us`.
 
-### Translating a whole page
+**`No changes to confirm` when I tap ✓.**
+You haven't ✔'d any local changes. Either tap ✔ on at least one box, or — if you only meant to update tags — make sure you're triggering the tag-only path (enter Edit mode, then tap ✓ Confirm without changing any boxes).
 
-1. Enter Edit mode.
-2. Drop a box on each bubble (tap each). Type the translation in each. Tap ✔ between bubbles, or just tap the next bubble (auto-commits).
-3. Made a mistake on box #3? Tap that box, ↶ reverts last action; or 🗑 to soft-delete (red dashed); or move/resize directly.
-4. When all boxes look right, **✓ Confirm** → tag popover → **Submit**.
+**`Image dimensions unknown` toast.**
+The post's image hadn't finished loading when you tried to drop a box. Wait a moment for the image to settle, or scroll to make sure the `<img>` is in view, and try again.
 
-### Drag-to-create on PC
+**`HTTP 422` or `Box overlaps existing note` after Submit.**
+This is Danbooru's server response — the script just surfaces it. Move or resize your overlapping box and Retry. Successful boxes from the same submit are already saved; only the rejected ones come back for editing.
 
-1. Enter Edit mode.
-2. Click and drag on the image to draw a custom-size rectangle. Release to spawn.
-3. Type, ✔, repeat. **Submit** when done.
+**A misclick deleted a box I needed.**
+If the popover is still open, tap **↶**. If you've already closed it, tap the box (now red dashed) and tap **↶** to undo the delete. Hard-deleted brand-new boxes can't be recovered — but their undo stack lives until you leave Edit mode entirely.
 
-### Re-classifying tags without changing notes
+---
 
-When you only want to update the post's translation tags (e.g., flip from `translation_request` to `translated` after someone else translated):
+## Storage & Privacy
 
-1. Enter Edit mode. Existing notes load as movable boxes (no need to touch them).
-2. Tap **✓ Confirm** directly. Since text/geometry didn't change, the script skips the per-note PUT but still opens the tag popover (the `everConfirmed` heuristic).
-
-   *Edge case:* if you genuinely have no notes to add and don't want PUTs, just toggle Edit off — Confirm with no changes shows `No changes to confirm`.
-
-### Recovering from partial save failure
-
-You created 5 new boxes. Submit. Server accepts 4 but rejects 1 because of an overlap.
-
-1. Error modal appears: "1 POST failed — Box overlaps existing note". Click **Retry**.
-2. The 4 successful POSTs are now server notes (re-keyed locally), so re-classify finds only the 1 failed temp.
-3. Move that temp to not overlap, ✔, **✓ Confirm**, **Submit**.
-
-## Tips
-
-- **Pinch-zoom freely.** Popovers, menu, and floating button counter-scale, so they stay the same physical size on screen no matter how far you zoom in. Position your zoom on the area of interest before tapping.
-- **Hold 👁 when aiming on a small box.** The corner touch zones extend ~30px past the visible box. Holding 👁 shows you exactly where they are.
-- **MIN box size is 24px.** v3.0 lowered the minimum from 40px so you can mark small details (eyes, glyphs).
-- **Edit-mode round-trip = 0.** Toggling Edit on doesn't fetch or save anything until you actually create / change / delete notes. Existing server notes load on Edit-on but are inert until you touch them.
-
-## Storage & Permissions
-
-The script writes two `localStorage` keys, both scoped to `danbooru.donmai.us`:
+The script writes two `localStorage` keys, scoped to `danbooru.donmai.us`:
 
 | Key | Value | Purpose |
 |---|---|---|
 | `dmna_btn_margin_x` | integer (px) | Saved horizontal position of the floating button |
 | `dmna_btn_margin_y` | integer (px) | Saved vertical position of the floating button |
 
-The legacy v2.x `dmna_enabled` key (script on/off persistence) is removed on first v3.0 launch — Edit mode is now per-page rather than global, so persistence isn't needed.
+Nothing else is persisted. The script makes no remote calls beyond Danbooru's own API, sends no analytics, and does not require any GM_* APIs (`@grant none`).
 
-Nothing else is persisted. No analytics, no remote calls beyond Danbooru itself.
-
-`@grant none` — no GM APIs are required. All requests use the page's existing CSRF token.
+---
 
 ## Compatibility
 
 - Tested with Tampermonkey on iOS Safari, desktop Safari, and Chrome.
-- Requires `visualViewport` (used for zoom-aware positioning); falls back gracefully on browsers without it.
+- Requires `visualViewport` (used for zoom-aware UI sizing). Falls back gracefully on older browsers.
 - Requires `fetch`, Pointer Events, and standard ES2017+ (`async`/`await`, optional chaining, default parameter values).
+
+---
 
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full version history.
 
-- **v3.0.0** (2026-05-05) — Major: paradigm shift from single-note immediate-save to multi-note batched Confirm. Adds arc menu, multi-note state machine, per-note undo, PC drag-to-create + keyboard shortcuts, iOS-style tag pill switches, error modal with Retry, per-type toasts. Removes sidebar link, immediate-save flow, global Undo. See CHANGELOG.md for the full breakdown.
-- **v2.6** (2026-05-03) — Issue cleanup: `init()` re-binding fix, submitNote correctness, defensive guards.
-- **v2.5** (2026-04-20) — Fix: tap-creates-then-cancels regression on mobile.
-- **v2.4** (2026-03-23) — Maintenance: init guard, dead code removal.
+The current release is **v3.0.1** (2026-05-05). v3.0 introduced the multi-note batched workflow that this manual describes; v3.0.1 was a same-day hotfix for the floating button hiding behind open popovers.
 
 ## License
 
