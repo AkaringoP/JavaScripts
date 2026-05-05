@@ -5,6 +5,12 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2] - 2026-05-05
+
+### Fixed
+- **Box could shrink to a "dot" with overlapping touch zones.** v3.1.0/3.1.1 set `MIN_BOX_SIZE_DISPLAY = 5`, intending it as a CSS-px floor — but the clamp formula `(MIN / vvScale) / scale` actually produces a **constant device-px** on-screen footprint, not a constant CSS px. So the box could shrink to ~5 device px regardless of pinch zoom, well below the 16 device px threshold where adjacent counter-scaled handle touch zones overlap vertically (top handle's bottom edge meets bottom handle's top edge). User saw the four red debug zones merge into a tiny clump with the box reduced to a single visible dot in the middle.
+- Bumped to **24 device px** (16 collision threshold + 8 buffer; also matches v3.0's CSS-px baseline at vv.scale=1). Documented the formula's actual semantics in the constant's jsdoc and the clamp comment — the v3.1.0 phrasing implied CSS-px floor + claimed a 5 device-px collision threshold, both incorrect. The image-space floor still shrinks with pinch zoom (e.g., display:image scale 0.4 → 60 image px at vv=1, 30 at vv=2, 20 at vv=3), preserving v3.1's small-feature-marking workflow without letting the box become invisible.
+
 ## [3.1.1] - 2026-05-05
 
 ### Fixed

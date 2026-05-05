@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.1
+// @version      3.1.2
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.1';
+  const SCRIPT_VERSION = '3.1.2';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -75,26 +75,42 @@
    *  net so we never store an effectively-zero rect. */
   const MIN_BOX_SIZE_IMG = 8;
 
-  /** @const {number} Minimum box width/height in display (CSS) pixels at
-   *  visualViewport.scale=1. Handles are counter-scaled against
-   *  `visualViewport.scale` (see `updateActiveHandleScales`), so at
-   *  higher pinch zoom the effective floor shrinks proportionally — at
-   *  vv.scale=3 the box can shrink to ~1.7 CSS px while remaining
-   *  ≥5 device px wide, the threshold below which the four counter-
-   *  scaled corner handles would start to collide. Pre-v3.1 the floor
-   *  was 24 because handles were a fixed 32×32 CSS px; that constraint
-   *  now lives at the device-px level via the inverse-scale transform.
-   *  Intended workflow: pinch in over a small feature, drag handles to
-   *  shrink box past 24 CSS px, pinch back out — the box stays small.
+  /** @const {number} Minimum box width/height in DEVICE pixels (on-
+   *  screen, constant across pinch-zoom levels). The clamp expression
+   *  `(MIN_BOX_SIZE_DISPLAY / vvScale) / scale` projects this through
+   *  vv.scale and image-display scale to image px — at vv.scale=1 the
+   *  CSS-px and device-px values coincide, at higher pinch the CSS-px
+   *  floor shrinks proportionally so the box's on-screen device-px
+   *  footprint stays at this constant.
+   *
+   *  Geometric collision threshold: with handles counter-scaled per
+   *  `updateActiveHandleScales`, the top and bottom touch zones meet
+   *  at box.height_device = 16 device px (top handle's bottom edge
+   *  vs SE/SW handle's top edge, which sits 16/vv.scale CSS px above
+   *  the box's bottom = 16 device px regardless of pinch). Below 16
+   *  the touch zones literally overlap and the box "looks like a dot"
+   *  visually. We set the floor to 24 = 16 + 8 device px buffer, which
+   *  also matches v3.0's CSS-px baseline at vv.scale=1.
+   *
+   *  Pre-3.1.0: 24 CSS px (which became 24 device px at vv=1 but grew
+   *  to 72 device px at vv=3 — preventing small-feature marking even
+   *  with pinch zoom). v3.1 introduces device-px semantics: on-screen
+   *  size stays consistent, but IMAGE-space floor shrinks with pinch
+   *  (e.g., display:image scale 0.4 → at vv=3, image floor is
+   *  24/3/0.4 = 20 image px instead of 60 at vv=1). This is the small-
+   *  feature-marking workflow: pinch in over a small glyph → resize
+   *  handles → pinch out, box stays small in image space.
+   *
    *  `MIN_BOX_SIZE_IMG` is the absolute safety floor in image space. */
-  const MIN_BOX_SIZE_DISPLAY = 5;
+  const MIN_BOX_SIZE_DISPLAY = 24;
 
-  /** @const {number} PC-only drag-to-create threshold (display px).
+  /** @const {number} PC-only drag-to-create threshold in CSS pixels.
    *  Distinguishes a deliberate drag-rect from an accidental tiny mouse
    *  jitter. Decoupled from `MIN_BOX_SIZE_DISPLAY` (the runtime resize
    *  floor) because the create gesture has no pinch-zoom context to
-   *  scale against — drag-to-create is desktop-only. Once a box exists
-   *  the user can pinch+resize down to MIN_BOX_SIZE_DISPLAY. */
+   *  scale against — drag-to-create is desktop-only, where vv.scale=1
+   *  in practice and CSS px ≡ device px. Once a box exists the user
+   *  can pinch+resize down to MIN_BOX_SIZE_DISPLAY device px. */
   const MIN_DRAG_CREATE_SIZE_DISPLAY = 24;
 
   /** @const {number} Popover CSS width in display pixels (counter-scaled
@@ -3013,14 +3029,16 @@
     const dxImg = dx / scale;
     const dyImg = dy / scale;
     // Resize floor: max of the absolute image-space minimum and the
-    // display-space minimum projected to image space. The display
-    // floor itself is divided by visualViewport.scale because handles
-    // are counter-scaled per `updateActiveHandleScales` — the "handles
-    // don't collide" constraint is a constant in DEVICE px, so its
-    // projection to CSS px shrinks proportionally with pinch zoom.
-    // At vv.scale=1 this reduces to the v3.0 expression. The image-
-    // space MIN_BOX_SIZE_IMG remains the absolute safety floor so the
-    // box can't collapse to zero at extreme zoom.
+    // device-px display floor projected to image space.
+    // MIN_BOX_SIZE_DISPLAY is in DEVICE px (on-screen, constant across
+    // pinch zoom); dividing by vvScale gives the CSS px floor at the
+    // current pinch level (CSS px = device px / vv.scale), then
+    // dividing by `scale` (display CSS px per image px) gives image
+    // px. Net effect: the box's on-screen footprint stays ≥
+    // MIN_BOX_SIZE_DISPLAY device px while the IMAGE-space floor
+    // shrinks with pinch zoom — letting users mark progressively
+    // smaller image features by pinching in.
+    // MIN_BOX_SIZE_IMG is the absolute image-space safety floor.
     const vv = window.visualViewport;
     const vvScale = vv ? vv.scale : 1;
     const minImg = Math.max(
