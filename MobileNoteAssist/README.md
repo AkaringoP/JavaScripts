@@ -23,11 +23,11 @@ No login or extra permissions required. The script makes no remote calls outside
 
 The fastest way to learn the workflow. Open any post you want to translate and follow along:
 
-1. Tap the **📝** floating button. Its icon flips to **✏️** — you're now in **Edit mode**.
+1. **Double-tap** the **📝** floating button. Its icon flips to **✏️** — you're now in **Edit mode**.
 2. Tap directly on the speech bubble. A green box drops onto the bubble and a popover opens with the textarea focused.
 3. Type your translation.
 4. Tap **✔** in the popover. The popover closes and the box turns blue (committed locally — not sent to the server yet).
-5. Tap (or long-press) the floating button to bring up the arc menu, then tap **✓ Confirm**.
+5. Tap the floating button **once** to open the arc menu, then tap **✓ Confirm**.
 6. The tag popover appears. Toggle the appropriate translation tags (most often `Translated`).
 7. Tap **Submit**. The page reloads with the note saved.
 
@@ -39,17 +39,20 @@ That's the full loop. Everything below is detail on how each piece works.
 
 ### The floating button
 
-The 📝 button in the bottom-right is the script's only entry point. It has three behaviors:
+The 📝 button in the bottom-right is the script's only entry point. It responds to four distinct gestures:
 
-- **Tap (short press)** — toggles Edit mode on/off. Icon flips between 📝 (idle) and ✏️ (active).
-- **Long-press (~0.5s, with the menu animating in)** — opens the **arc menu** (see below).
-- **Long-hold (~1.5s)** — enters drag-to-reposition mode. The button turns orange; drag to move it, release to save its new position. (See [Customization](#customization).)
+| Gesture | What it does |
+|---|---|
+| **Single tap** | Opens the **arc menu** (see below). |
+| **Double-tap** (within ~300ms) | Toggles Edit mode on/off. Icon flips between 📝 (idle) and ✏️ (active). If the arc menu was already opening from the first tap, it closes automatically. |
+| **Long-press (~1.5s hold)** | Enters drag-to-reposition mode. The button turns orange; drag to move it, release to save its new position. (See [Customization](#customization).) |
+| **Auto-hide** | While a per-note popover is open, the button is hidden so it doesn't sit on top of the popover's ✔ / ✖ / 🗑 buttons (which fall in the same screen region on mobile). |
 
-When a per-note popover is open, the floating button **hides** so it doesn't get in the way of the popover's ✔ / ✖ / 🗑 buttons (which sit in the same screen region on mobile).
+The single-tap-opens-menu / double-tap-toggles design means the menu shows up instantly on every tap (no waiting for a long-press) but is canceled if your second tap arrives quickly enough — so you can use a fast double-tap as a quick toggle when you don't need the menu.
 
 ### The arc menu
 
-Long-press the floating button to open a 2-item arc:
+Tap the floating button once to open a 2-item arc:
 
 ```
         ✓ Confirm
@@ -61,7 +64,7 @@ Long-press the floating button to open a 2-item arc:
         📝 (floating button)
 ```
 
-- **✏️ Edit** — toggle Edit mode on/off (same as a short tap on the button).
+- **✏️ Edit** — toggle Edit mode on/off (same as double-tapping the floating button).
 - **✓ Confirm** — send all your local changes to the server (covered in [Sending your work to the server](#sending-your-work-to-the-server)).
 
 ### Idle vs Edit mode
@@ -161,7 +164,7 @@ If a box has multiple states at once (e.g. a deleted box you've tapped to reveal
 
 ## Sending your work to the server
 
-When you're done editing all the boxes, tap (or long-press → arc menu) **✓ Confirm**.
+When you're done editing all the boxes, tap the floating button to open the arc menu, then tap **✓ Confirm**.
 
 1. The script collects your pending changes — new notes, edits, deletes — and decides what to send.
 2. If you've added notes or changed any text, a **tag popover** appears anchored to the Confirm button. Toggle the four translation tags as iOS-style pill switches:
