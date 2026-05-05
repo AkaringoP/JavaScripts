@@ -90,6 +90,41 @@
    *  the popover's rounded corners. */
   const POPOVER_ARROW_HALF = 8;
 
+  /** @const {number} Arc menu radius (px). Shared by createArcMenu and
+   *  the tag popover positioning so the popover anchors correctly to
+   *  whatever spot the Confirm item occupies. */
+  const ARC_RADIUS = 70;
+
+  /** @const {number} Confirm item arc angle (radians, math convention).
+   *  Used for both menu rendering and tag-popover anchoring. */
+  const ARC_CONFIRM_THETA = (-100 * Math.PI) / 180;
+
+  /** @const {number} CSS-px width of the tag popover. */
+  const TAG_POPOVER_WIDTH = 240;
+
+  /** @const {number} Visual gap (CSS px) between the tag popover's
+   *  arrow tip and the top edge of the Confirm button. */
+  const TAG_POPOVER_GAP = 6;
+
+  /** @const {string[]} The four translation-status tags v3.0 surfaces
+   *  in the Confirm-time tag popover (Phase 4 D9). Order = display order. */
+  const TAG_OPTIONS = [
+    'translated',
+    'translation_request',
+    'check_translation',
+    'partially_translated',
+  ];
+
+  /** @const {Object<string, string>} Display labels for TAG_OPTIONS.
+   *  Capitalized + spaced for readability; the raw tag (the key) is
+   *  what gets sent to the server. */
+  const TAG_LABELS = {
+    translated: 'Translated',
+    translation_request: 'Translation request',
+    check_translation: 'Check translation',
+    partially_translated: 'Partially translated',
+  };
+
   // --------------------------------------------------------------------------
   // Type Definitions (JSDoc)
   // --------------------------------------------------------------------------
@@ -258,6 +293,11 @@
   // bind, gated by activeNoteId / focus checks at fire time.
   let hotkeysBound = false;
 
+  // Phase 4 D11: in-flight Confirm send. Locks all interactive paths
+  // (keyboard shortcuts, box clicks, menu) so the user can't mutate
+  // state while requests are in flight.
+  let isSending = false;
+
   // Popover (v3.0 Phase 3 Wave 3). Created lazily on first activation.
 
   /** @type {?HTMLElement} */
@@ -268,6 +308,40 @@
 
   /** @type {?HTMLElement} */
   let popoverArrowElement = null;
+
+  // Tag popover (v3.0 Phase 4 D9). Created lazily on first Confirm
+  // that needs it.
+
+  /** @type {?HTMLElement} */
+  let tagPopoverElement = null;
+
+  /** @type {?Set<string>}  Snapshot of which TAG_OPTIONS the post
+   *  already had at popover-open time. Used to compute add/remove
+   *  deltas at submit. */
+  let tagPopoverInitialTags = null;
+
+  /** @type {?Object<string, boolean>}  Live working state of the four
+   *  toggles. Mutated through `applyTagConstraints` so the four rules
+   *  (translated XOR rest, c_t/p_t implies t_r, etc.) stay invariant
+   *  across every click. */
+  let tagPopoverState = null;
+
+  /** @type {?(result: ?{tagsToAdd: string[], tagsToRemove: string[]}) => void}
+   *  Active resolver for the in-flight `showTagPopover()` promise.
+   *  Null when no popover is open. */
+  let pendingTagPopoverResolver = null;
+
+  // Error modal (v3.0 Phase 4 D12). Shown after sendBatch when any
+  // call failed. User picks Retry or Cancel.
+
+  /** @type {?HTMLElement} */
+  let errorModalElement = null;
+
+  /** @type {?HTMLElement} */
+  let errorModalBackdropElement = null;
+
+  /** @type {?(choice: 'retry' | 'cancel') => void} */
+  let pendingErrorModalResolver = null;
 
   // Box drag/resize state (v3.0 Phase 3 Wave 3). One interaction at a
   // time — pointer events with setPointerCapture serialize the gesture.
@@ -298,6 +372,29 @@
    *  (and reset) by the trailing click handler so a finished drag
    *  doesn't also re-activate the box via click. */
   let suppressNextBoxClick = false;
+
+  /**
+   * Active drag-to-create state on the image (PC mouse only). Set on
+   * `pointerdown`, cleared on `pointerup` / `pointercancel`. The `moved`
+   * flag flips once the pointer travels DRAG_THRESHOLD_PX, gating the
+   * ghost-rect render and the "create with drag rect vs. default-size
+   * click" branch in pointerup.
+   * @typedef {{
+   *   startX: number,
+   *   startY: number,
+   *   imageRect: {left: number, top: number, width: number, height: number},
+   *   ghostEl: ?HTMLDivElement,
+   *   moved: boolean,
+   * }} DragCreateState
+   */
+
+  /** @type {?DragCreateState} */
+  let dragCreate = null;
+
+  /** @type {boolean}  Set when drag-to-create resolves with movement;
+   *  consumed (and reset) by `handleImageClick` so the trailing click
+   *  doesn't also spawn a default-sized box on top of the dragged one. */
+  let suppressNextImageClick = false;
 
   // --------------------------------------------------------------------------
   // Styles
@@ -416,6 +513,18 @@
       pointer-events: auto;
       cursor: pointer;
       touch-action: none;
+    }
+
+    /* Drag-to-create ghost rect (PC mouse only). Shown while the user
+       is dragging on the image; converted to a real note on pointerup.
+       Dashed accent border + faint fill to read as "in progress". */
+    #dmna-drag-ghost {
+      position: absolute;
+      border: 2px dashed rgba(255, 200, 0, 0.85);
+      background: rgba(255, 200, 0, 0.12);
+      pointer-events: none;
+      z-index: 10500;
+      box-sizing: border-box;
     }
 
     /* Hide Danbooru's native note overlay while our active mode is on.
@@ -630,6 +739,256 @@
     .dmna-popover-btn[data-action="cancel"] { color: #f0f0f0; }
     .dmna-popover-btn[data-action="delete"] { color: #ff8b8b; }
 
+    /* Phase 4 (D11): Confirm in-flight UI lock. Pointer events off on
+       boxes + popover + floating button so any stray tap/drag is a
+       no-op while requests are in flight. The ⏳ icon stays visible
+       (pointer-events: none doesn't hide). */
+    body.dmna-sending .dmna-note-box,
+    body.dmna-sending #dmna-popover,
+    body.dmna-sending #dmna-float-btn {
+      pointer-events: none !important;
+    }
+
+    /* Phase 4 (D9): tag popover — anchored to the LEFT of the floating
+       button with a rightward-pointing arrow. The earlier "above Confirm"
+       anchor overflowed the right edge of the viewport when the floating
+       button sat near the screen edge (which it does by default), so the
+       anchor was moved to the floating button itself. Counter-scaled by
+       visualViewport like the active-note popover so the visual size
+       stays constant across pinch zoom. */
+    #dmna-tag-popover {
+      position: absolute;
+      left: 0; top: 0;
+      width: ${TAG_POPOVER_WIDTH}px;
+      background: rgba(30, 30, 30, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 12px;
+      z-index: 11500;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      color: white;
+      display: none;
+      box-sizing: border-box;
+      font-size: 14px;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+    #dmna-tag-popover.show { display: block; }
+
+    /* Right-pointing arrow at popover bottom-right, aligned with the
+       floating button's vertical center. Offset 12px from popover
+       bottom = (BTN_SIZE/2) − arrow_half = 20 − 8: when the popover's
+       bottom edge sits at the floating button's bottom edge, this puts
+       the arrow's vertical midpoint at the button's vertical midpoint. */
+    #dmna-tag-popover-arrow {
+      position: absolute;
+      right: -8px;
+      bottom: 12px;
+      width: 0; height: 0;
+      border-style: solid;
+      border-width: 8px 0 8px 8px;
+      border-color: transparent transparent transparent rgba(30, 30, 30, 0.96);
+      pointer-events: none;
+    }
+
+    .dmna-tag-popover-header {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: #ffffff;
+    }
+
+    #dmna-tag-popover-toggles {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    /* Tag toggle row — label on the left, iOS-style pill switch on the
+       right. The whole row is a <button>, so clicks anywhere on it flip
+       the state. Inner spans use pointer-events: none so the click
+       target is always the button itself. */
+    .dmna-tag-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.06);
+      color: #ffffff;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+      transition: background 0.12s, border-color 0.12s;
+      box-sizing: border-box;
+    }
+    .dmna-tag-toggle:hover {
+      background: rgba(255, 255, 255, 0.10);
+    }
+    /* Forced-on state: rule 3 (check_translation or partially_translated
+       implies translation_request) locks translation_request ON. Click
+       is a no-op; the visual cue is reduced opacity. */
+    .dmna-tag-toggle:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+    .dmna-tag-label {
+      flex: 1;
+      text-align: left;
+      pointer-events: none;
+    }
+    /* Pill switch: 36x20 track + 16x16 thumb. ON = green track + thumb
+       slides to the right; OFF = neutral track + thumb on the left. */
+    .dmna-tag-switch {
+      position: relative;
+      flex-shrink: 0;
+      width: 36px;
+      height: 20px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.22);
+      transition: background 0.14s;
+      pointer-events: none;
+    }
+    .dmna-tag-toggle.is-on .dmna-tag-switch {
+      background: rgba(46, 204, 113, 0.85);
+    }
+    .dmna-tag-switch-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      transition: transform 0.14s;
+      pointer-events: none;
+    }
+    .dmna-tag-toggle.is-on .dmna-tag-switch-thumb {
+      transform: translateX(16px);
+    }
+
+    #dmna-tag-popover-buttons {
+      display: flex;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .dmna-tag-popover-btn {
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.32);
+      background: rgba(255, 255, 255, 0.13);
+      color: white;
+      font-size: 13px;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    .dmna-tag-popover-btn:active {
+      background: rgba(255, 255, 255, 0.28);
+    }
+    /* Primary action (Submit) — Danbooru convention: primary first. */
+    .dmna-tag-popover-btn[data-action="submit"] {
+      border-color: rgba(0, 115, 255, 0.6);
+      background: rgba(0, 115, 255, 0.45);
+    }
+    .dmna-tag-popover-btn[data-action="submit"]:active {
+      background: rgba(0, 115, 255, 0.65);
+    }
+
+    /* Phase 4 (D12): error modal — same backdrop/card pattern as tag
+       modal. Shows failure summary + Retry / Cancel. */
+    #dmna-error-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 11500;
+      display: none;
+    }
+    #dmna-error-modal-backdrop.show { display: block; }
+
+    #dmna-error-modal {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 360px;
+      max-width: calc(100vw - 32px);
+      max-height: calc(100vh - 64px);
+      background: rgba(30, 30, 30, 0.96);
+      border: 1px solid rgba(229, 57, 53, 0.4);
+      border-radius: 10px;
+      padding: 16px;
+      z-index: 11501;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      color: white;
+      display: none;
+      box-sizing: border-box;
+      font-size: 13px;
+      overflow-y: auto;
+    }
+    #dmna-error-modal.show { display: block; }
+
+    .dmna-error-modal-header {
+      font-size: 15px;
+      font-weight: bold;
+      color: #ff8b8b;
+      margin-bottom: 8px;
+    }
+    .dmna-error-modal-summary {
+      color: #cccccc;
+      margin-bottom: 12px;
+    }
+    .dmna-error-modal-list {
+      max-height: 240px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+      padding: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 6px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .dmna-error-modal-list-item {
+      color: #f0c0c0;
+      word-break: break-word;
+    }
+    .dmna-error-modal-list-item + .dmna-error-modal-list-item {
+      margin-top: 4px;
+    }
+    #dmna-error-modal-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .dmna-error-modal-btn {
+      padding: 8px 18px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.32);
+      background: rgba(255, 255, 255, 0.13);
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    .dmna-error-modal-btn:active {
+      background: rgba(255, 255, 255, 0.28);
+    }
+    .dmna-error-modal-btn[data-action="retry"] {
+      border-color: rgba(0, 115, 255, 0.6);
+      background: rgba(0, 115, 255, 0.45);
+    }
+    .dmna-error-modal-btn[data-action="retry"]:active {
+      background: rgba(0, 115, 255, 0.65);
+    }
+
     #dmna-toast {
       visibility: hidden; min-width: 160px;
       background-color: rgba(30, 30, 30, 0.95); color: #fff;
@@ -726,6 +1085,13 @@
     // rect. Skip when no box is active (popover is hidden anyway).
     if (activeNoteId !== null) {
       updatePopoverPosition();
+    }
+
+    // Tag popover (Phase 4 D9) is anchored to the (would-be) Confirm
+    // arc-menu position, so it follows the floating button.
+    if (tagPopoverElement &&
+        tagPopoverElement.classList.contains('show')) {
+      updateTagPopoverPosition();
     }
   }
 
@@ -892,22 +1258,23 @@
         const screenH = window.innerHeight;
         let newMarginX = dragStartMarginX - dx;
         let newMarginY = dragStartMarginY - dy;
-        // Clamps derived from arc menu geometry (r=70, 2 items at -70°,
-        // -115°) so the entire menu stays on-screen at any button
-        // position. (Wave 3.5 dropped the -160° Undo item, freeing ~40px
-        // of horizontal slack on the left.)
-        //   • Right limit (min X = 25): ⌈r·cos(-70°)⌉ = 24 → 25.
-        //     Prevents item 0 (Confirm, -70°) from clipping the right edge.
-        //   • Left limit (max X = screenW − 70): r·|cos(-115°)| + item_half
-        //     + btn_half ≈ 30 + 20 + 20 = 70. Item 1 (Edit, -115°) is the
-        //     leftmost.
-        //   • Top limit (max Y = screenH − 106): r·|sin(-70°)| + item_half
-        //     + btn_half ≈ 66 + 20 + 20 = 106. Item 0 (Confirm, -70°) is
-        //     the highest (slightly above Edit at -115°).
+        // Clamps derived from arc menu geometry (r=70, 2 items at -100°,
+        // -150°) so the entire menu stays on-screen at any button
+        // position. With both items now on the left half (Phase 4 tag
+        // popover anchored above Confirm), the leftward overhang grows.
+        //   • Right limit (min X = 25): items don't extend right of
+        //     button (cos < 0 for both), so the constraint is just
+        //     "button visible." Use 25 for a small margin from edge.
+        //   • Left limit (max X = screenW − 110): r·|cos(-150°)| +
+        //     item_half + btn_half ≈ 61 + 20 + 20 = 101 → 110. Item 1
+        //     (Edit, -150°) is the leftmost.
+        //   • Top limit (max Y = screenH − 110): r·|sin(-100°)| +
+        //     item_half + btn_half ≈ 69 + 20 + 20 = 109 → 110. Item 0
+        //     (Confirm, -100°) is the highest.
         //   • Bottom limit (min Y = 20): only the button itself extends
         //     below button-center; all items sit at or above it.
-        newMarginX = Math.max(25, Math.min(screenW - 70, newMarginX));
-        newMarginY = Math.max(20, Math.min(screenH - 106, newMarginY));
+        newMarginX = Math.max(25, Math.min(screenW - 110, newMarginX));
+        newMarginY = Math.max(20, Math.min(screenH - 110, newMarginY));
         userBtnMarginX = newMarginX;
         userBtnMarginY = newMarginY;
         updateVisualViewportPositions();
@@ -1011,20 +1378,20 @@
       {action: 'edit', icon: '✏️', label: 'Edit'},
     ];
 
-    // Arc geometry: items spaced 45° apart, anchored at -70° (clockwise
-    // tilt of 20° from straight up) and stepping clockwise. Radius 70 →
-    // button-edge to item-edge gap ≈ 30px. Adjacent centers ≈ 54px apart
-    // (~14px visible gap). Step is intentionally fixed (not derived from
-    // a span / item-count) so adding or removing items keeps the spacing
-    // consistent. Closed state is translate(0, 0) so items animate out
-    // from the button on open.
-    const r = 70;
+    // Arc geometry: both items sit on the LEFT half of the floating
+    // button (per user feedback — the right side is the user's thumb's
+    // resting area in mobile portrait, and the upper-right is also
+    // close to common toolbar overlays). Confirm at -100° ("just before
+    // 12"), Edit at -150° ("10 o'clock"). Radius 70 → button-edge to
+    // item-edge gap ≈ 30px. Adjacent centers ≈ 60px apart. Closed
+    // state is translate(0, 0) so items animate out from the button
+    // on open.
+    const r = ARC_RADIUS;
     const itemSize = BTN_SIZE;
     const half = itemSize / 2;
     const center = BTN_SIZE / 2;
-    const angleOffset = Math.PI / 9; // +20° clockwise tilt
-    const angleStart = -Math.PI / 2 + angleOffset; // -70°
-    const stepAngle = -Math.PI / 4; // -45° clockwise per item
+    const angleStart = ARC_CONFIRM_THETA;       // -100° (just before 12)
+    const stepAngle = (-50 * Math.PI) / 180;    // -50° clockwise per step
 
     items.forEach((item, i) => {
       const theta = angleStart + (stepAngle * i);
@@ -1152,6 +1519,16 @@
    * @param {KeyboardEvent} e
    */
   function handleGlobalHotkeys(e) {
+    // Lock keyboard shortcuts while a Confirm batch is in flight (D11).
+    if (isSending) {
+      return;
+    }
+    // Tag popover (D9) and error modal (D12) own Esc / Ctrl-Enter
+    // while they're open — own handlers fire first, this one stays out.
+    if (document.body.classList.contains('dmna-tag-popover-open') ||
+        document.body.classList.contains('dmna-error-modal-open')) {
+      return;
+    }
     if (e.key === 'Escape' && activeNoteId !== null) {
       const ae = document.activeElement;
       if (isTextInputElement(ae) && ae !== popoverInputElement) {
@@ -1406,6 +1783,110 @@
     return false;
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 4: Confirm classification (D8 + D9)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Buckets the current `notes` collection by what API call (if any)
+   * Confirm should make for each entry. The result drives both the
+   * "anything to do?" check and the eventual `sendBatch()` (Task 4.3).
+   *
+   * Routing rules (PLAN.md D8):
+   *   - !isServerNote && !isDeleted && everConfirmed         → posts
+   *   - !isServerNote && !isDeleted && !everConfirmed        → dropped.uncommittedTemps
+   *   - !isServerNote && isDeleted                           → dropped.softDeletedTemps
+   *   - isServerNote && !isDeleted && current ≠ initialState → puts
+   *   - isServerNote && !isDeleted && current === initialState → dropped.unchangedServer
+   *   - isServerNote && isDeleted                            → deletes
+   *
+   * `puts[i].textChanged` flags whether the PUT carries a text edit
+   * (vs. geometry-only) — drives the tag popover decision (D9).
+   *
+   * Server note ids: server-loaded notes use the numeric id directly
+   * as their Map key, so `noteId === serverId` for them. The
+   * separate field is kept for self-documenting call-sites at
+   * `sendBatch` time.
+   *
+   * @return {{
+   *   posts: Array<{noteId: string, state: NoteState}>,
+   *   puts: Array<{noteId: string, serverId: string, state: NoteState,
+   *                textChanged: boolean}>,
+   *   deletes: Array<{noteId: string, serverId: string}>,
+   *   dropped: {
+   *     uncommittedTemps: string[],
+   *     softDeletedTemps: string[],
+   *     unchangedServer: string[],
+   *   },
+   *   hasChanges: boolean
+   * }}
+   */
+  function classifyChanges() {
+    const posts = [];
+    const puts = [];
+    const deletes = [];
+    const dropped = {
+      uncommittedTemps: [],
+      softDeletedTemps: [],
+      unchangedServer: [],
+    };
+
+    for (const [noteId, note] of notes.entries()) {
+      if (note.isServerNote) {
+        if (note.isDeleted) {
+          deletes.push({noteId, serverId: noteId});
+          continue;
+        }
+        const a = note.current;
+        const b = note.initialState;
+        const geomChanged = a.x !== b.x || a.y !== b.y ||
+            a.w !== b.w || a.h !== b.h;
+        const textChanged = a.text !== b.text;
+        if (geomChanged || textChanged) {
+          puts.push({
+            noteId,
+            serverId: noteId,
+            state: {...a},
+            textChanged,
+          });
+        } else {
+          dropped.unchangedServer.push(noteId);
+        }
+      } else {
+        // Temp note
+        if (note.isDeleted) {
+          dropped.softDeletedTemps.push(noteId);
+        } else if (!note.everConfirmed) {
+          dropped.uncommittedTemps.push(noteId);
+        } else {
+          posts.push({noteId, state: {...note.current}});
+        }
+      }
+    }
+
+    const hasChanges =
+        posts.length > 0 || puts.length > 0 || deletes.length > 0;
+
+    return {posts, puts, deletes, dropped, hasChanges};
+  }
+
+  /**
+   * Whether the classified changes require the tag popover (D9):
+   * any creation, any deletion, or any text edit. Geometry-only edits
+   * proceed straight to send.
+   * @param {ReturnType<typeof classifyChanges>} c
+   * @return {boolean}
+   */
+  function needsTagPopover(c) {
+    if (c.posts.length > 0) {
+      return true;
+    }
+    if (c.deletes.length > 0) {
+      return true;
+    }
+    return c.puts.some((p) => p.textChanged);
+  }
+
   /**
    * Wipes all notes from the session: removes their DOM, clears the
    * `notes` Map and `actionLog`, and unsets the active selection.
@@ -1558,7 +2039,9 @@
         }
         break;
       case 'confirm':
-        showToast('Confirm: Phase 4 (TBD)');
+        // Fire-and-forget — runConfirmFlow is async but the menu click
+        // handler doesn't need to wait. Re-entrancy guarded inside.
+        runConfirmFlow();
         break;
     }
   }
@@ -2556,6 +3039,34 @@
   }
 
   /**
+   * Fetches the post's current `tag_string`. Used by the tag modal
+   * (Phase 4 D9) to seed initial toggle state — a TAG_OPTIONS entry
+   * already present on the post starts out checked, so the user is
+   * computing a delta against the live state at modal-open time.
+   *
+   * Not cached: notes the user took a few minutes ago shouldn't pin
+   * a stale tag set, and the request is small (`?only=tag_string`).
+   *
+   * @return {Promise<string>}
+   */
+  function fetchPostTagString() {
+    const id = getPostId();
+    if (!id) {
+      return Promise.reject(new Error('No post id in URL'));
+    }
+    return fetch(
+        `/posts/${id}.json?only=tag_string`,
+        {credentials: 'same-origin'})
+        .then((r) => {
+          if (!r.ok) {
+            throw new Error(`HTTP ${r.status}`);
+          }
+          return r.json();
+        })
+        .then((data) => String(data.tag_string || ''));
+  }
+
+  /**
    * Inserts a server note into the local collection as `isServerNote:true`
    * with the server's numeric id as the noteId (string-cast). Idempotent —
    * if the same id is already in the Map (e.g., from a stale enterActive
@@ -2628,47 +3139,41 @@
   // --------------------------------------------------------------------------
 
   /**
-   * Click handler for the post image. In active mode, an empty-area
-   * click spawns a default-sized box centered on the click and activates
-   * it. Idle-mode clicks are no-ops (the body class also makes this a
-   * dead path visually).
-   * @param {MouseEvent} e
+   * Spawns a default-sized box centered at the given client coords.
+   * Shared by `handleImageClick` (browser click event) and
+   * `onImageDragPointerUp` (synthesized tap when pointerdown was
+   * preventDefault'd, suppressing the click chain). Returns the new
+   * note id, or null if the spawn was a no-op (image not visible /
+   * dimensions unknown).
+   *
+   * The textarea autofocus uses requestAnimationFrame so the popover's
+   * `.show` flip + layout settles before `.focus()` runs (pre-flip the
+   * popover is `display: none`, which would no-op the focus). The
+   * `activeNoteId === id` guard handles the unlikely case where the
+   * user dismissed the popover within the same frame.
+   * @param {number} clientX
+   * @param {number} clientY
+   * @return {?string}
    */
-  function handleImageClick(e) {
-    if (mode !== 'active') {
-      return;
-    }
-    // Popover-open guard: a click on the image while a box is active
-    // does NOT spawn a second box — it dismisses the active popover
-    // (matching v2.6's "tap empty image cancels" UX). See
-    // `dismissActivePopover` for the fresh-new vs ✔'d/server routing.
-    // The user has to dismiss first, then tap again to create.
-    if (activeNoteId !== null) {
-      dismissActivePopover();
-      return;
-    }
+  function spawnDefaultBoxAtClient(clientX, clientY) {
     if (!postOriginalWidth || !postOriginalHeight) {
       showToast('⚠️ Image dimensions unknown');
-      return;
+      return null;
     }
     const rect = getImageDisplayRect();
     if (!rect) {
       showToast('⚠️ Image not visible');
-      return;
+      return null;
     }
-
-    // Default size in display space (matches v2.6 spawnDefaultBox), then
-    // converted to image space at storage time.
     const shortSide = Math.min(rect.width, rect.height);
     const sizeDisplay = Math.max(MIN_INITIAL_SIZE,
         Math.min(MAX_INITIAL_SIZE, shortSide * INITIAL_SIZE_RATIO));
 
-    const clickX = e.clientX + window.pageXOffset;
-    const clickY = e.clientY + window.pageYOffset;
-    let leftDisplay = clickX - (sizeDisplay / 2);
-    let topDisplay = clickY - (sizeDisplay / 2);
+    const pageX = clientX + window.pageXOffset;
+    const pageY = clientY + window.pageYOffset;
+    let leftDisplay = pageX - (sizeDisplay / 2);
+    let topDisplay = pageY - (sizeDisplay / 2);
 
-    // Clamp so the box stays fully inside the image rect.
     const maxLeft = rect.left + rect.width - sizeDisplay;
     const maxTop = rect.top + rect.height - sizeDisplay;
     leftDisplay = Math.max(rect.left, Math.min(maxLeft, leftDisplay));
@@ -2682,7 +3187,7 @@
     });
     if (!imgState) {
       showToast('⚠️ Image not visible');
-      return;
+      return null;
     }
     const id = createTempNote({
       x: imgState.x,
@@ -2692,16 +3197,235 @@
       text: '',
     });
     setActiveNote(id);
-    // Auto-focus the textarea so the user can type immediately. rAF
-    // lets `.show` flip + layout settle before .focus() runs (pre-flip
-    // the popover is display:none, which would no-op the focus). The
-    // activeNoteId guard handles the unlikely case where the user
-    // dismissed the popover within the same frame.
     requestAnimationFrame(() => {
       if (popoverInputElement && activeNoteId === id) {
         popoverInputElement.focus();
       }
     });
+    return id;
+  }
+
+  /**
+   * Click handler for the post image. In active mode, an empty-area
+   * click spawns a default-sized box centered on the click and activates
+   * it. Idle-mode clicks are no-ops (the body class also makes this a
+   * dead path visually).
+   *
+   * Note: PC mouse paths route through `onImageDragPointer*` instead —
+   * those preventDefault on pointerdown to suppress Danbooru's native
+   * mousedown handler, which also kills the click event chain. So this
+   * handler typically only runs for touch taps and as a safety net for
+   * spurious clicks (e.g., when activeNoteId guard early-returns from
+   * pointerdown without preventDefault, the click then dismisses).
+   * @param {MouseEvent} e
+   */
+  function handleImageClick(e) {
+    if (mode !== 'active') {
+      return;
+    }
+    // Safety net for PC drag-to-create: if a click somehow leaks through
+    // despite our pointerdown preventDefault (Safari quirks etc.), the
+    // suppress flag set in pointerup consumes it.
+    if (suppressNextImageClick) {
+      suppressNextImageClick = false;
+      return;
+    }
+    // Popover-open guard: a click on the image while a box is active
+    // does NOT spawn a second box — it dismisses the active popover
+    // (matching v2.6's "tap empty image cancels" UX). See
+    // `dismissActivePopover` for the fresh-new vs ✔'d/server routing.
+    // The user has to dismiss first, then tap again to create.
+    if (activeNoteId !== null) {
+      dismissActivePopover();
+      return;
+    }
+    spawnDefaultBoxAtClient(e.clientX, e.clientY);
+  }
+
+  /**
+   * Clamps a page coord to a rect. Inline because the call sites only
+   * need it twice (start and current).
+   * @param {number} v
+   * @param {number} lo
+   * @param {number} hi
+   * @return {number}
+   */
+  function clamp(v, lo, hi) {
+    return Math.max(lo, Math.min(hi, v));
+  }
+
+  /**
+   * @return {?{left: number, top: number, width: number, height: number}}
+   *     Drag rect in page coords (clamped to the snapshotted image rect),
+   *     or null if `dragCreate` isn't active.
+   * @param {number} curX
+   * @param {number} curY
+   */
+  function computeDragRect(curX, curY) {
+    if (!dragCreate) {
+      return null;
+    }
+    const r = dragCreate.imageRect;
+    const x1 = clamp(dragCreate.startX, r.left, r.left + r.width);
+    const y1 = clamp(dragCreate.startY, r.top, r.top + r.height);
+    const x2 = clamp(curX, r.left, r.left + r.width);
+    const y2 = clamp(curY, r.top, r.top + r.height);
+    return {
+      left: Math.min(x1, x2),
+      top: Math.min(y1, y2),
+      width: Math.abs(x2 - x1),
+      height: Math.abs(y2 - y1),
+    };
+  }
+
+  /**
+   * pointerdown on the image (PC mouse only). Snapshots the start coord +
+   * current image display rect, then attaches doc-level move/up/cancel
+   * listeners. Touch path falls through unchanged — mobile users keep
+   * tap-to-create via the `click` event chain.
+   *
+   * Critical: `preventDefault()` here suppresses the compatibility mouse
+   * events (mousedown/mousemove/mouseup/click) for the rest of the
+   * gesture. That kills Danbooru's native mousedown handler on
+   * `#image-container` (drag-to-create-note + `.hide-notes` toggle)
+   * regardless of which propagation phase it's bound on — the existing
+   * capture-phase blocker can be bypassed if Danbooru registers in
+   * capture phase too. Suppressing the click chain also means we have
+   * to simulate the tap-to-create path ourselves on pointerup.
+   *
+   * Guards mirror `handleImageClick`: only fires in active mode with no
+   * box currently active. With a box active, we early-return WITHOUT
+   * preventDefault — the trailing click then reaches `handleImageClick`
+   * and runs the dismiss path.
+   * @param {PointerEvent} e
+   */
+  function onImageDragPointerDown(e) {
+    if (e.pointerType !== 'mouse' || e.button !== 0) {
+      return;
+    }
+    if (mode !== 'active' || activeNoteId !== null) {
+      return;
+    }
+    if (!postOriginalWidth || !postOriginalHeight) {
+      return;
+    }
+    const rect = getImageDisplayRect();
+    if (!rect) {
+      return;
+    }
+    e.preventDefault();
+    dragCreate = {
+      startX: e.clientX + window.pageXOffset,
+      startY: e.clientY + window.pageYOffset,
+      imageRect: rect,
+      ghostEl: null,
+      moved: false,
+    };
+    document.addEventListener('pointermove', onImageDragPointerMove);
+    document.addEventListener('pointerup', onImageDragPointerUp);
+    document.addEventListener('pointercancel', onImageDragPointerCancel);
+  }
+
+  /**
+   * pointermove during drag-to-create. Lazily creates the ghost element
+   * once movement crosses DRAG_THRESHOLD_PX, then keeps its rect synced
+   * with the current pointer position (clamped to the image).
+   * @param {PointerEvent} e
+   */
+  function onImageDragPointerMove(e) {
+    if (!dragCreate) {
+      return;
+    }
+    const x = e.clientX + window.pageXOffset;
+    const y = e.clientY + window.pageYOffset;
+    if (!dragCreate.moved) {
+      const dist = Math.hypot(x - dragCreate.startX, y - dragCreate.startY);
+      if (dist < DRAG_THRESHOLD_PX) {
+        return;
+      }
+      dragCreate.moved = true;
+      const ghost = document.createElement('div');
+      ghost.id = 'dmna-drag-ghost';
+      document.body.appendChild(ghost);
+      dragCreate.ghostEl = ghost;
+    }
+    const rect = computeDragRect(x, y);
+    if (rect && dragCreate.ghostEl) {
+      dragCreate.ghostEl.style.left = `${rect.left}px`;
+      dragCreate.ghostEl.style.top = `${rect.top}px`;
+      dragCreate.ghostEl.style.width = `${rect.width}px`;
+      dragCreate.ghostEl.style.height = `${rect.height}px`;
+    }
+  }
+
+  /**
+   * pointerup ending a drag-to-create gesture. Owns BOTH paths because
+   * pointerdown's preventDefault killed the click chain:
+   *   - Drag (moved past threshold AND rect ≥ MIN_BOX_SIZE_DISPLAY) →
+   *     create temp note from drag rect.
+   *   - Tap (no movement) or sub-min drag → spawn a default-sized box
+   *     at the release point, mirroring `handleImageClick`'s tap path.
+   *
+   * `suppressNextImageClick` is set as a safety net in case some browser
+   * quirk leaks the click through despite preventDefault.
+   * @param {PointerEvent} e
+   */
+  function onImageDragPointerUp(e) {
+    if (!dragCreate) {
+      return;
+    }
+    const moved = dragCreate.moved;
+    let finalRect = null;
+    if (moved) {
+      const x = e.clientX + window.pageXOffset;
+      const y = e.clientY + window.pageYOffset;
+      finalRect = computeDragRect(x, y);
+    }
+    cleanupDragCreate();
+    suppressNextImageClick = true;
+
+    const usableDrag = moved && finalRect &&
+        finalRect.width >= MIN_BOX_SIZE_DISPLAY &&
+        finalRect.height >= MIN_BOX_SIZE_DISPLAY;
+    if (usableDrag) {
+      const imgState = screenToImageRect(finalRect);
+      if (!imgState) {
+        return;
+      }
+      const id = createTempNote({
+        x: imgState.x,
+        y: imgState.y,
+        w: imgState.w,
+        h: imgState.h,
+        text: '',
+      });
+      setActiveNote(id);
+      requestAnimationFrame(() => {
+        if (popoverInputElement && activeNoteId === id) {
+          popoverInputElement.focus();
+        }
+      });
+      return;
+    }
+    // Tap / sub-min drag → default-size box at release point (the click
+    // event won't fire because pointerdown was preventDefault'd).
+    spawnDefaultBoxAtClient(e.clientX, e.clientY);
+  }
+
+  /** pointercancel during drag-to-create — drop the in-flight drag. */
+  function onImageDragPointerCancel() {
+    cleanupDragCreate();
+  }
+
+  /** Removes ghost element + listeners + state. Idempotent. */
+  function cleanupDragCreate() {
+    if (dragCreate && dragCreate.ghostEl) {
+      dragCreate.ghostEl.remove();
+    }
+    dragCreate = null;
+    document.removeEventListener('pointermove', onImageDragPointerMove);
+    document.removeEventListener('pointerup', onImageDragPointerUp);
+    document.removeEventListener('pointercancel', onImageDragPointerCancel);
   }
 
   /**
@@ -2729,6 +3453,11 @@
     }
     img.addEventListener('click', handleImageClick);
     img.addEventListener('load', updateAllNoteBoxPositions);
+    // PC drag-to-create: bubble-phase pointerdown — capture-phase
+    // `blockNativeIfActive` below already stopped propagation upward
+    // so Danbooru's notes.js never sees it; our listener on the same
+    // element still fires regardless.
+    img.addEventListener('pointerdown', onImageDragPointerDown);
 
     const blockNativeIfActive = (e) => {
       if (mode !== 'active') {
@@ -2740,6 +3469,995 @@
     img.addEventListener('touchstart', blockNativeIfActive, true);
 
     imageHandlersBound = true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 4 batch send (D10 + D11)
+  //
+  // Sequential per-call HTTP wiring driven by `classifyChanges()` output.
+  // Send order: DELETE → PUT → POST → tag PATCH (D10). Each call is its
+  // own try/catch so a single failure doesn't sink the rest — the
+  // returned result splits successful vs. failed buckets, and Task 4.4
+  // routes from there.
+  //
+  // CSRF: the post-render <meta name="csrf-token"> carries Rails' CSRF
+  // token. Danbooru rejects mutating calls without `X-CSRF-Token`; same
+  // pattern v2.6 used.
+  //
+  // UI lock (D11): `isSending` flag + `body.dmna-sending` CSS class.
+  // The floating button shows ⏳, the menu / popover / box pointer-events
+  // are gated by CSS, and the keyboard shortcut handler bails on
+  // `isSending`. setMode is intentionally not blocked at the function
+  // level — Task 4.4's `setMode('idle')` after success runs while
+  // `isSending` is still true.
+  // --------------------------------------------------------------------------
+
+  /**
+   * @return {string} The CSRF token from the page's <meta> tag, or
+   *     an empty string. Empty fallback lets requests proceed and
+   *     fail with HTTP 422 (which the result object captures), rather
+   *     than masking the real diagnostic with a thrown error here.
+   */
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? (meta.getAttribute('content') || '') : '';
+  }
+
+  /**
+   * Generic fetch wrapper for our mutating calls. JSON body when present,
+   * always includes credentials + CSRF, normalizes empty / non-JSON
+   * responses (DELETE returns 204) to `null`.
+   * @param {'POST' | 'PUT' | 'DELETE'} method
+   * @param {string} url
+   * @param {?Object} body
+   * @return {Promise<?Object>}
+   */
+  async function apiCall(method, url, body) {
+    const headers = {
+      'Accept': 'application/json',
+      'X-CSRF-Token': getCsrfToken(),
+    };
+    /** @type {RequestInit} */
+    const opts = {method, credentials: 'same-origin', headers};
+    if (body !== undefined && body !== null) {
+      headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    const r = await fetch(url, opts);
+    if (!r.ok) {
+      throw new Error(`HTTP ${r.status} ${r.statusText}`.trim());
+    }
+    // Empty / 204 responses are fine; only parse when there's a body.
+    const text = await r.text();
+    return text ? JSON.parse(text) : null;
+  }
+
+  /**
+   * POST /notes.json — creates a new note. Coords/size are stored as
+   * floats locally but the API wants integers, so round at send time.
+   * @param {NoteState} state
+   * @return {Promise<{id: number} & Record<string, unknown>>}
+   */
+  async function apiPostNote(state) {
+    const postId = Number(getPostId());
+    const payload = {
+      note: {
+        post_id: postId,
+        x: Math.round(state.x),
+        y: Math.round(state.y),
+        width: Math.round(state.w),
+        height: Math.round(state.h),
+        body: state.text || '',
+      },
+    };
+    return /** @type {any} */ (await apiCall('POST', '/notes.json', payload));
+  }
+
+  /**
+   * PUT /notes/{id}.json — updates an existing server note.
+   * @param {string} serverId
+   * @param {NoteState} state
+   * @return {Promise<?Object>}
+   */
+  async function apiPutNote(serverId, state) {
+    const payload = {
+      note: {
+        x: Math.round(state.x),
+        y: Math.round(state.y),
+        width: Math.round(state.w),
+        height: Math.round(state.h),
+        body: state.text || '',
+      },
+    };
+    return apiCall('PUT', `/notes/${serverId}.json`, payload);
+  }
+
+  /**
+   * DELETE /notes/{id}.json — soft-deletes server-side.
+   * @param {string} serverId
+   * @return {Promise<?Object>}
+   */
+  async function apiDeleteNote(serverId) {
+    return apiCall('DELETE', `/notes/${serverId}.json`, null);
+  }
+
+  /**
+   * Re-fetches the post's tag_string, applies the user's add/remove
+   * delta, and PUTs the updated tag_string back. Re-fetch (vs. using
+   * the snapshot from the modal) closes the race where a co-editor
+   * changed tags between modal-open and Confirm-submit; the delta is
+   * still meaningful (it only adds tags the user wants ON and removes
+   * tags they wanted OFF, leaving everything else alone).
+   * @param {string[]} tagsToAdd
+   * @param {string[]} tagsToRemove
+   * @return {Promise<?Object>}
+   */
+  async function apiPatchPostTags(tagsToAdd, tagsToRemove) {
+    const current = await fetchPostTagString();
+    const tags = new Set(current.split(/\s+/).filter(Boolean));
+    tagsToAdd.forEach((t) => tags.add(t));
+    tagsToRemove.forEach((t) => tags.delete(t));
+    const newTagString = [...tags].join(' ');
+    return apiCall(
+        'PUT',
+        `/posts/${getPostId()}.json`,
+        {post: {tag_string: newTagString}});
+  }
+
+  /**
+   * Engages the in-flight UI lock: ⏳ icon, body class, menu close.
+   * setMode-driven icon swap is paused for the duration — endSendingUI
+   * restores from the current `mode`.
+   */
+  function startSendingUI() {
+    isSending = true;
+    document.body.classList.add('dmna-sending');
+    if (isMenuOpen) {
+      closeMenu();
+    }
+    const btn = document.getElementById('dmna-float-btn');
+    if (btn) {
+      btn.textContent = '⏳';
+    }
+  }
+
+  /** Reverses startSendingUI. */
+  function endSendingUI() {
+    isSending = false;
+    document.body.classList.remove('dmna-sending');
+    const btn = document.getElementById('dmna-float-btn');
+    if (btn) {
+      btn.textContent = mode === 'active' ? '✏️' : '📝';
+    }
+  }
+
+  /**
+   * @typedef {Object} SendBatchResult
+   * @property {{
+   *   posts: Array<{noteId: string, state: NoteState, serverResponse: ?Object}>,
+   *   puts: Array<{noteId: string, serverId: string, state: NoteState,
+   *                textChanged: boolean}>,
+   *   deletes: Array<{noteId: string, serverId: string}>,
+   * }} successful
+   * @property {{
+   *   posts: Array<{noteId: string, state: NoteState, error: string}>,
+   *   puts: Array<{noteId: string, serverId: string, state: NoteState,
+   *                textChanged: boolean, error: string}>,
+   *   deletes: Array<{noteId: string, serverId: string, error: string}>,
+   *   tagPatch: ?string
+   * }} failed
+   */
+
+  /**
+   * Sends the classified batch in DELETE → PUT → POST → tag PATCH order.
+   * Sequential within each group so a partial failure has a deterministic
+   * "which item broke" answer. Tag PATCH is skipped when the delta is
+   * empty (pure submit-without-changes).
+   *
+   * Always engages and releases the UI lock (try/finally); never throws —
+   * caller reads the result object. Task 4.4 (`handleMenuAction('confirm')`
+   * dispatch) interprets the result.
+   *
+   * @param {ReturnType<typeof classifyChanges>} classified
+   * @param {?{tagsToAdd: string[], tagsToRemove: string[]}} tagDelta
+   * @return {Promise<SendBatchResult>}
+   */
+  async function sendBatch(classified, tagDelta) {
+    /** @type {SendBatchResult} */
+    const result = {
+      successful: {posts: [], puts: [], deletes: []},
+      failed: {posts: [], puts: [], deletes: [], tagPatch: null},
+    };
+    startSendingUI();
+    try {
+      for (const item of classified.deletes) {
+        try {
+          await apiDeleteNote(item.serverId);
+          result.successful.deletes.push(item);
+        } catch (err) {
+          result.failed.deletes.push({...item, error: String(err.message || err)});
+        }
+      }
+      for (const item of classified.puts) {
+        try {
+          await apiPutNote(item.serverId, item.state);
+          result.successful.puts.push(item);
+        } catch (err) {
+          result.failed.puts.push({...item, error: String(err.message || err)});
+        }
+      }
+      for (const item of classified.posts) {
+        try {
+          const serverResponse = await apiPostNote(item.state);
+          result.successful.posts.push({...item, serverResponse});
+        } catch (err) {
+          result.failed.posts.push({...item, error: String(err.message || err)});
+        }
+      }
+      if (tagDelta &&
+          (tagDelta.tagsToAdd.length > 0 || tagDelta.tagsToRemove.length > 0)) {
+        try {
+          await apiPatchPostTags(tagDelta.tagsToAdd, tagDelta.tagsToRemove);
+        } catch (err) {
+          result.failed.tagPatch = String(err.message || err);
+        }
+      }
+    } finally {
+      endSendingUI();
+    }
+    return result;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 4 result handling (D12 + D13)
+  //
+  // sendBatch() returns; this layer interprets the result:
+  //
+  //   - Apply locally what server-confirmed: temp notes that POSTed
+  //     get re-keyed under their server id and reborn as server notes;
+  //     PUT'd server notes drop their accumulated dirty/log state;
+  //     DELETE'd notes leave the local Map. This is the "no double
+  //     send" guarantee — a Retry from the error modal re-runs
+  //     classifyChanges and the already-confirmed items are now in
+  //     the appropriate "skip" buckets.
+  //
+  //   - Full success → clear actionLog, toast, brief delay, reload.
+  //     The reload is deliberate: Danbooru's native note overlays
+  //     come from server data, and a fresh page is the cheapest way
+  //     to put them in sync with our just-committed changes.
+  //
+  //   - Any failure → error modal. User picks Retry (re-classify and
+  //     re-send) or Cancel (stay in active mode with the partial
+  //     state, which now reflects the server's truth).
+  // --------------------------------------------------------------------------
+
+  /**
+   * Reflects sendBatch's successful results onto the local notes Map +
+   * actionLog. Failed items are left untouched (their actionLog entries
+   * are preserved so per-note ↶ keeps working until the user gives up
+   * via Cancel).
+   * @param {SendBatchResult} result
+   */
+  function applyServerStateToLocal(result) {
+    // POST: temp note becomes a server note. Replace in-place rather
+    // than mutate the existing entry, because the noteId itself is
+    // changing (temp- → server numeric id) and the closures inside
+    // the rendered DOM/handlers were captured against the old id.
+    // Cheaper to re-render than to surgery the closures.
+    for (const item of result.successful.posts) {
+      const sr = item.serverResponse;
+      const serverId = sr && sr.id != null ? String(sr.id) : '';
+      if (!serverId) {
+        continue;
+      }
+      // Drop the temp side first (DOM gone, Map gone, actionLog
+      // entries gone). Then add the fresh server-note entry under
+      // the new id and render it.
+      hardDeleteNote(item.noteId);
+      /** @type {Note} */
+      const newNote = {
+        current: {...item.state},
+        initialState: {...item.state},
+        confirmedState: {...item.state},
+        isDeleted: false,
+        isServerNote: true,
+        everConfirmed: true,
+        domElement: null,
+      };
+      notes.set(serverId, newNote);
+      renderNoteBox(serverId);
+    }
+    // PUT: the just-sent state is now the server's truth. Reset
+    // initialState so the next isDirty/classifyChanges sees a clean
+    // baseline. Strip any actionLog history for this note (it can
+    // no longer be undone — it's persisted).
+    for (const item of result.successful.puts) {
+      const note = notes.get(item.noteId);
+      if (!note) {
+        continue;
+      }
+      note.initialState = {...note.current};
+      note.confirmedState = {...note.current};
+      for (let i = actionLog.length - 1; i >= 0; i--) {
+        if (actionLog[i].noteId === item.noteId) {
+          actionLog.splice(i, 1);
+        }
+      }
+      updateNoteVisuals(item.noteId);
+    }
+    // DELETE: nuke locally too.
+    for (const item of result.successful.deletes) {
+      hardDeleteNote(item.noteId);
+    }
+  }
+
+  /**
+   * Builds the human-readable failure list for the error modal.
+   * Each line: `<METHOD> <id-or-target>: <error>`. Ordered to match
+   * sendBatch's send order (deletes → puts → posts → tagPatch).
+   * @param {SendBatchResult} result
+   * @return {string[]}
+   */
+  function buildFailureLines(result) {
+    const lines = [];
+    for (const f of result.failed.deletes) {
+      lines.push(`DELETE note ${f.serverId}: ${f.error}`);
+    }
+    for (const f of result.failed.puts) {
+      lines.push(`PUT note ${f.serverId}: ${f.error}`);
+    }
+    for (const f of result.failed.posts) {
+      lines.push(`POST new note: ${f.error}`);
+    }
+    if (result.failed.tagPatch) {
+      lines.push(`Tag PATCH: ${result.failed.tagPatch}`);
+    }
+    return lines;
+  }
+
+  /**
+   * Counts successes + failures across all groups for the modal's
+   * summary line.
+   * @param {SendBatchResult} result
+   * @return {{successCount: number, failureCount: number}}
+   */
+  function countSendResult(result) {
+    const s = result.successful;
+    const f = result.failed;
+    const successCount =
+        s.posts.length + s.puts.length + s.deletes.length;
+    const failureCount =
+        f.posts.length + f.puts.length + f.deletes.length +
+        (f.tagPatch ? 1 : 0);
+    return {successCount, failureCount};
+  }
+
+  /**
+   * Builds the error modal DOM (idempotent). Body content (failure
+   * list) is filled in per-open by `openErrorModal`.
+   */
+  function createErrorModal() {
+    if (errorModalElement) {
+      return;
+    }
+    errorModalBackdropElement = document.createElement('div');
+    errorModalBackdropElement.id = 'dmna-error-modal-backdrop';
+    errorModalBackdropElement.addEventListener('click', () => {
+      submitErrorModal('cancel');
+    });
+
+    errorModalElement = document.createElement('div');
+    errorModalElement.id = 'dmna-error-modal';
+    errorModalElement.addEventListener('click', (e) => e.stopPropagation());
+
+    const header = document.createElement('div');
+    header.className = 'dmna-error-modal-header';
+    header.textContent = 'Confirm — partial failure';
+    errorModalElement.appendChild(header);
+
+    const summary = document.createElement('div');
+    summary.className = 'dmna-error-modal-summary';
+    summary.id = 'dmna-error-modal-summary';
+    errorModalElement.appendChild(summary);
+
+    const list = document.createElement('div');
+    list.className = 'dmna-error-modal-list';
+    list.id = 'dmna-error-modal-list';
+    errorModalElement.appendChild(list);
+
+    const buttons = document.createElement('div');
+    buttons.id = 'dmna-error-modal-buttons';
+
+    const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
+    retryBtn.className = 'dmna-error-modal-btn';
+    retryBtn.dataset.action = 'retry';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => submitErrorModal('retry'));
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'dmna-error-modal-btn';
+    cancelBtn.dataset.action = 'cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => submitErrorModal('cancel'));
+
+    buttons.appendChild(retryBtn);
+    buttons.appendChild(cancelBtn);
+    errorModalElement.appendChild(buttons);
+
+    document.body.appendChild(errorModalBackdropElement);
+    document.body.appendChild(errorModalElement);
+  }
+
+  /**
+   * Reveals the error modal with the given result's failure list.
+   * @param {SendBatchResult} result
+   */
+  function openErrorModal(result) {
+    createErrorModal();
+    const {successCount, failureCount} = countSendResult(result);
+    const total = successCount + failureCount;
+    const summaryEl = errorModalElement.querySelector(
+        '#dmna-error-modal-summary');
+    if (summaryEl) {
+      summaryEl.textContent =
+          `${successCount} of ${total} operation(s) succeeded; ` +
+          `${failureCount} failed.`;
+    }
+    const listEl = errorModalElement.querySelector(
+        '#dmna-error-modal-list');
+    if (listEl) {
+      listEl.textContent = '';
+      buildFailureLines(result).forEach((line) => {
+        const div = document.createElement('div');
+        div.className = 'dmna-error-modal-list-item';
+        div.textContent = line;
+        listEl.appendChild(div);
+      });
+    }
+    document.body.classList.add('dmna-error-modal-open');
+    errorModalBackdropElement.classList.add('show');
+    errorModalElement.classList.add('show');
+    document.addEventListener('keydown', errorModalKeyHandler, true);
+  }
+
+  /** Hides the error modal without destroying it. */
+  function closeErrorModal() {
+    document.body.classList.remove('dmna-error-modal-open');
+    if (errorModalBackdropElement) {
+      errorModalBackdropElement.classList.remove('show');
+    }
+    if (errorModalElement) {
+      errorModalElement.classList.remove('show');
+    }
+    document.removeEventListener('keydown', errorModalKeyHandler, true);
+  }
+
+  /**
+   * Resolves the in-flight `showErrorModal()` promise.
+   * @param {'retry' | 'cancel'} choice
+   */
+  function submitErrorModal(choice) {
+    const resolver = pendingErrorModalResolver;
+    if (!resolver) {
+      return;
+    }
+    pendingErrorModalResolver = null;
+    closeErrorModal();
+    resolver(choice);
+  }
+
+  /**
+   * PC keyboard shortcuts inside the error modal: Esc = Cancel,
+   * Ctrl/Cmd+Enter = Retry. Capture-phase + stopPropagation to
+   * preempt any other Esc handler that might still be live.
+   * @param {KeyboardEvent} e
+   */
+  function errorModalKeyHandler(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      submitErrorModal('cancel');
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      submitErrorModal('retry');
+    }
+  }
+
+  /**
+   * Opens the error modal and waits for the user's choice.
+   * @param {SendBatchResult} result
+   * @return {Promise<'retry' | 'cancel'>}
+   */
+  function showErrorModal(result) {
+    return new Promise((resolve) => {
+      if (pendingErrorModalResolver) {
+        const stale = pendingErrorModalResolver;
+        pendingErrorModalResolver = null;
+        stale('cancel');
+      }
+      pendingErrorModalResolver = resolve;
+      openErrorModal(result);
+    });
+  }
+
+  /**
+   * Post-sendBatch orchestration. Updates local state to mirror what
+   * the server confirmed, then either:
+   *   - All clear: clears actionLog, toasts, reloads after 1s.
+   *   - Any failure: shows the error modal. On Retry, re-classifies
+   *     (the just-applied successes are now skip-bucket entries) and
+   *     re-sends, recursing through this same handler. On Cancel,
+   *     the user is left in active mode with the local state already
+   *     mirroring the server's partial-success truth.
+   *
+   * The retry path passes `tagDelta` along only when the previous
+   * attempt's tag PATCH actually failed — if it had succeeded (or
+   * wasn't needed), we skip it on retry rather than re-PATCHing
+   * a no-op delta.
+   *
+   * @param {SendBatchResult} result
+   * @param {?{tagsToAdd: string[], tagsToRemove: string[]}} tagDelta
+   */
+  async function handleSendResult(result, tagDelta) {
+    applyServerStateToLocal(result);
+
+    const hasFailures =
+        result.failed.posts.length > 0 ||
+        result.failed.puts.length > 0 ||
+        result.failed.deletes.length > 0 ||
+        result.failed.tagPatch !== null;
+
+    if (!hasFailures) {
+      // Defensive: applyServerStateToLocal stripped per-note entries
+      // for committed items, but unchangedServer notes / drift could
+      // theoretically still leave entries. Clear the rest — the
+      // session is done.
+      actionLog.length = 0;
+      showToast('Confirm complete');
+      // Brief pause so the user sees the success toast before the
+      // page swaps. setMode('idle') is overkill (reload nukes
+      // everything anyway) but keeps state consistent if reload
+      // races against something unexpected.
+      setTimeout(() => {
+        setMode('idle');
+        window.location.reload();
+      }, 1000);
+      return;
+    }
+
+    const choice = await showErrorModal(result);
+    if (choice !== 'retry') {
+      return;
+    }
+
+    const newClassified = classifyChanges();
+    const retryTagDelta = result.failed.tagPatch ? tagDelta : null;
+    if (!newClassified.hasChanges && !retryTagDelta) {
+      // Nothing left to retry — this is rare (would mean failures
+      // self-resolved between modal and click), but bail cleanly
+      // rather than spin sendBatch on an empty payload.
+      showToast('Nothing left to retry');
+      return;
+    }
+    const retryResult = await sendBatch(newClassified, retryTagDelta);
+    return handleSendResult(retryResult, retryTagDelta);
+  }
+
+  /**
+   * Phase 4 entrypoint — orchestrates classify → tag-popover →
+   * sendBatch → handleSendResult. Called from `handleMenuAction('confirm')`
+   * (the arc menu's ✅ item). Async but the caller doesn't await; the
+   * flow runs to completion in its own task.
+   *
+   * Re-entrancy: the `isSending` guard at the top covers the rare race
+   * where a second Confirm click slips through (the floating button is
+   * pointer-events:none during send, but defensive). Modal-open phases
+   * are guarded by their own backdrops covering the floating button.
+   */
+  async function runConfirmFlow() {
+    if (isSending) {
+      return;
+    }
+    // Close any open popover before showing modals or starting sends —
+    // the popover is positioned above boxes but below modals; leaving
+    // it open would visually layer awkwardly behind a tag modal, and
+    // its textarea stays editable until sendBatch's CSS lock kicks in.
+    setActiveNote(null);
+
+    const classified = classifyChanges();
+    if (!classified.hasChanges) {
+      showToast('No changes to confirm');
+      return;
+    }
+
+    /** @type {?{tagsToAdd: string[], tagsToRemove: string[]}} */
+    let tagDelta = null;
+    if (needsTagPopover(classified)) {
+      tagDelta = await showTagPopover();
+      if (tagDelta === null) {
+        // User canceled the tag modal — abort the entire Confirm
+        // flow. State unchanged, user back in active mode.
+        return;
+      }
+    }
+
+    const result = await sendBatch(classified, tagDelta);
+    await handleSendResult(result, tagDelta);
+  }
+
+  // --------------------------------------------------------------------------
+  // Tag Popover (v3.0 Phase 4 D9)
+  //
+  // Anchored to the LEFT of the floating button (arrow points right),
+  // surfaced before sendBatch when the classification triggers it (any
+  // create / any delete / any text edit — D9 / `needsTagPopover`). The
+  // anchor was moved off the Confirm arc-menu item because the floating
+  // button sits near the right viewport edge by default, which made the
+  // popover overflow horizontally. Counter-scaled by visualViewport so
+  // its visual size stays constant across pinch zoom, like the active-
+  // note popover.
+  //
+  // Toggle interaction rules (per user spec, restored from v2.6):
+  //   1. translated ON → all others OFF
+  //   2. any non-translated tag ON → translated OFF
+  //   3. check_translation OR partially_translated ON → translation_request ON
+  //      (and the t_r toggle locks while either of those two is ON)
+  //   4. translation_request can be ON independently (rule 3 is one-way)
+  //
+  // PC ergonomics: Esc = Cancel, Ctrl/Cmd+Enter = Submit. While the
+  // popover is open, `body.dmna-tag-popover-open` makes handleGlobalHotkeys
+  // bail out so its Esc / Shift+N don't double-fire.
+  // --------------------------------------------------------------------------
+
+  /**
+   * Applies the four toggle interaction rules and returns the resulting
+   * state. Stateless helper — caller owns `tagPopoverState`.
+   * @param {Object<string, boolean>} state
+   * @param {string} changedTag
+   * @param {boolean} newValue
+   * @return {Object<string, boolean>}
+   */
+  function applyTagConstraints(state, changedTag, newValue) {
+    const next = {...state};
+    next[changedTag] = newValue;
+    if (newValue) {
+      // Turning ON.
+      if (changedTag === 'translated') {
+        // Rule 1: translated is exclusive — all others OFF.
+        next.translation_request = false;
+        next.check_translation = false;
+        next.partially_translated = false;
+      } else {
+        // Rule 2: any non-translated tag ON → translated OFF.
+        next.translated = false;
+        // Rule 3: c_t / p_t turning ON forces t_r ON.
+        if (changedTag === 'check_translation' ||
+            changedTag === 'partially_translated') {
+          next.translation_request = true;
+        }
+      }
+    } else {
+      // Turning OFF.
+      if (changedTag === 'translation_request' &&
+          (next.check_translation || next.partially_translated)) {
+        // Rule 3 lock: t_r can't go OFF while c_t or p_t is ON.
+        next.translation_request = true;
+      }
+      // Other tags: just turn off, no implications. Rule 4 — turning
+      // c_t/p_t off doesn't force t_r off (it stays ON unless the user
+      // explicitly turns it off later).
+    }
+    return next;
+  }
+
+  /**
+   * Whether a toggle should be `disabled` (visually + non-interactive).
+   * Currently only translation_request locks (rule 3); the other three
+   * are always toggleable.
+   * @param {Object<string, boolean>} state
+   * @param {string} tag
+   * @return {boolean}
+   */
+  function isTagToggleDisabled(state, tag) {
+    if (tag === 'translation_request') {
+      return state.check_translation || state.partially_translated;
+    }
+    return false;
+  }
+
+  /**
+   * Re-applies `tagPopoverState` to each toggle's class + disabled
+   * attribute. Called after every click and on initial open.
+   */
+  function renderTagToggles() {
+    if (!tagPopoverElement || !tagPopoverState) {
+      return;
+    }
+    TAG_OPTIONS.forEach((tag) => {
+      const btn = tagPopoverElement.querySelector(
+          `button.dmna-tag-toggle[data-tag="${tag}"]`);
+      if (!(btn instanceof HTMLButtonElement)) {
+        return;
+      }
+      btn.classList.toggle('is-on', !!tagPopoverState[tag]);
+      btn.disabled = isTagToggleDisabled(tagPopoverState, tag);
+    });
+  }
+
+  /**
+   * Builds the tag popover DOM (idempotent). Toggle click handlers run
+   * `applyTagConstraints` and re-render. Submit/Cancel call
+   * `submitTagPopover`.
+   */
+  function createTagPopover() {
+    if (tagPopoverElement) {
+      return;
+    }
+    tagPopoverElement = document.createElement('div');
+    tagPopoverElement.id = 'dmna-tag-popover';
+    // Stop click bubbling so a tap inside the popover doesn't reach
+    // the document-level outside-click handlers (defensive — none of
+    // ours fire in this state, but the active-note popover's pattern
+    // is the same).
+    tagPopoverElement.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    const arrow = document.createElement('div');
+    arrow.id = 'dmna-tag-popover-arrow';
+    tagPopoverElement.appendChild(arrow);
+
+    const header = document.createElement('div');
+    header.className = 'dmna-tag-popover-header';
+    header.textContent = 'Translation tags';
+    tagPopoverElement.appendChild(header);
+
+    const list = document.createElement('div');
+    list.id = 'dmna-tag-popover-toggles';
+    TAG_OPTIONS.forEach((tag) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'dmna-tag-toggle';
+      btn.dataset.tag = tag;
+
+      const label = document.createElement('span');
+      label.className = 'dmna-tag-label';
+      label.textContent = TAG_LABELS[tag];
+      btn.appendChild(label);
+
+      const sw = document.createElement('span');
+      sw.className = 'dmna-tag-switch';
+      const thumb = document.createElement('span');
+      thumb.className = 'dmna-tag-switch-thumb';
+      sw.appendChild(thumb);
+      btn.appendChild(sw);
+
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (btn.disabled || !tagPopoverState) {
+          return;
+        }
+        const currentlyOn = !!tagPopoverState[tag];
+        tagPopoverState = applyTagConstraints(
+            tagPopoverState, tag, !currentlyOn);
+        renderTagToggles();
+      });
+      list.appendChild(btn);
+    });
+    tagPopoverElement.appendChild(list);
+
+    const buttons = document.createElement('div');
+    buttons.id = 'dmna-tag-popover-buttons';
+    // Danbooru convention: primary action (Submit) before Cancel
+    // (`reference_danbooru_dialog_button_order`).
+    const submitBtn = document.createElement('button');
+    submitBtn.type = 'button';
+    submitBtn.className = 'dmna-tag-popover-btn';
+    submitBtn.dataset.action = 'submit';
+    submitBtn.textContent = 'Submit';
+    submitBtn.addEventListener('click', () => submitTagPopover(false));
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'dmna-tag-popover-btn';
+    cancelBtn.dataset.action = 'cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => submitTagPopover(true));
+
+    buttons.appendChild(submitBtn);
+    buttons.appendChild(cancelBtn);
+    tagPopoverElement.appendChild(buttons);
+
+    document.body.appendChild(tagPopoverElement);
+  }
+
+  /**
+   * Reveals the tag popover with the given initial-on tags. Pre-positions
+   * with `visibility: hidden` so the user never sees a one-frame flash
+   * at the popover's stale transform (same trick the active-note popover
+   * uses on first show).
+   * @param {Set<string>} initialTags
+   */
+  function openTagPopover(initialTags) {
+    createTagPopover();
+    tagPopoverInitialTags = initialTags;
+    /** @type {Object<string, boolean>} */
+    const initState = {};
+    TAG_OPTIONS.forEach((t) => {
+      initState[t] = initialTags.has(t);
+    });
+    // Self-heal a rule-3 violation in the loaded state: if c_t or p_t
+    // is ON but t_r is OFF (e.g., another editor stripped t_r), pull
+    // t_r back ON. The user sees it locked-on; submitting then adds
+    // t_r to the server tag_string.
+    if (initState.check_translation || initState.partially_translated) {
+      initState.translation_request = true;
+    }
+    tagPopoverState = initState;
+    renderTagToggles();
+    document.body.classList.add('dmna-tag-popover-open');
+    // Pre-position trick: render hidden, measure, position, then reveal.
+    tagPopoverElement.style.visibility = 'hidden';
+    tagPopoverElement.classList.add('show');
+    updateTagPopoverPosition();
+    tagPopoverElement.style.visibility = '';
+    document.addEventListener('keydown', tagPopoverKeyHandler, true);
+  }
+
+  /**
+   * Hides the tag popover without destroying it. Keeps the singleton
+   * for the next Confirm.
+   */
+  function closeTagPopover() {
+    document.body.classList.remove('dmna-tag-popover-open');
+    if (tagPopoverElement) {
+      tagPopoverElement.classList.remove('show');
+    }
+    document.removeEventListener('keydown', tagPopoverKeyHandler, true);
+    tagPopoverInitialTags = null;
+    tagPopoverState = null;
+  }
+
+  /**
+   * Re-projects the tag popover to the LEFT of the floating button,
+   * with its bottom edge aligned to the button's bottom edge so the
+   * popover extends UPWARD. The arrow (CSS-positioned at popover's
+   * bottom-right with bottom:12px) lines up with the button's vertical
+   * center. Called on open and every visualViewport change so the
+   * popover follows the floating button under pinch zoom / scroll.
+   *
+   * Bottom-anchoring (vs. vertical-centering on the button) is what
+   * keeps the popover's Submit/Cancel row visible: with the floating
+   * button typically near the bottom of the viewport, a centered
+   * popover overflows below the fold.
+   */
+  function updateTagPopoverPosition() {
+    if (!tagPopoverElement) {
+      return;
+    }
+    const vv = window.visualViewport;
+    const scale = vv ? vv.scale : 1;
+    const invScale = 1 / scale;
+    const vvWidth = vv ? vv.width : window.innerWidth;
+    const vvHeight = vv ? vv.height : window.innerHeight;
+    const vvPageLeft = vv ? vv.pageLeft : window.pageXOffset;
+    const vvPageTop = vv ? vv.pageTop : window.pageYOffset;
+
+    // Floating button center in viewport CSS pixels (counter-scaled).
+    const btnCenterX = vvWidth -
+        (userBtnMarginX + (BTN_SIZE / 2)) * invScale;
+    const btnCenterY = vvHeight -
+        (userBtnMarginY + (BTN_SIZE / 2)) * invScale;
+
+    // Horizontal: arrow tip sits TAG_POPOVER_GAP visual pixels left of
+    // the floating button's left edge. Popover extends left from there.
+    // Vertical: popover bottom = button bottom; popover extends up.
+    const btnVisualHalf = (BTN_SIZE / 2) * invScale;
+    const arrowW = 8;        // CSS px (intrinsic, scaled by invScale visually)
+    const popW = TAG_POPOVER_WIDTH;
+    const popH = tagPopoverElement.offsetHeight;
+    const arrowTipX = btnCenterX - btnVisualHalf - TAG_POPOVER_GAP * invScale;
+    const popoverRightX = arrowTipX - arrowW * invScale;
+    const popoverLeftX = popoverRightX - popW * invScale;
+    const popoverBottomY = btnCenterY + btnVisualHalf;
+    const popoverTopY = popoverBottomY - popH * invScale;
+
+    // transform-origin is 0 0; convert viewport coords to page coords.
+    const tx = vvPageLeft + popoverLeftX;
+    const ty = vvPageTop + popoverTopY;
+    tagPopoverElement.style.transform =
+        `translate(${tx}px, ${ty}px) scale(${invScale})`;
+  }
+
+  /**
+   * Resolves the in-flight `showTagPopover()` promise:
+   *   - canceled=true  → null (caller aborts the Confirm flow)
+   *   - canceled=false → {tagsToAdd, tagsToRemove} delta.
+   * @param {boolean} canceled
+   */
+  function submitTagPopover(canceled) {
+    const resolver = pendingTagPopoverResolver;
+    if (!resolver) {
+      return;
+    }
+    if (canceled) {
+      pendingTagPopoverResolver = null;
+      closeTagPopover();
+      resolver(null);
+      return;
+    }
+    const initial = tagPopoverInitialTags || new Set();
+    const state = tagPopoverState || {};
+    const tagsToAdd = [];
+    const tagsToRemove = [];
+    TAG_OPTIONS.forEach((tag) => {
+      const wasOn = initial.has(tag);
+      const isOn = !!state[tag];
+      if (isOn && !wasOn) {
+        tagsToAdd.push(tag);
+      } else if (!isOn && wasOn) {
+        tagsToRemove.push(tag);
+      }
+    });
+    pendingTagPopoverResolver = null;
+    closeTagPopover();
+    resolver({tagsToAdd, tagsToRemove});
+  }
+
+  /**
+   * PC keyboard shortcuts inside the tag popover. Capture-phase so it
+   * preempts any other Esc handler.
+   * @param {KeyboardEvent} e
+   */
+  function tagPopoverKeyHandler(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      submitTagPopover(true);
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      submitTagPopover(false);
+    }
+  }
+
+  /**
+   * Phase 4 D9 entry point: fetches the post's current tag_string,
+   * opens the popover with toggles pre-set per existing tags, waits
+   * for the user. Resolves with the add/remove delta on Submit or
+   * `null` on Cancel.
+   *
+   * Tag-string fetch failures are non-fatal — the popover opens with
+   * all toggles OFF after a toast. tagsToRemove will be empty in that
+   * case (initialTags is empty), so submit can't accidentally strip
+   * tags we couldn't see.
+   *
+   * @return {Promise<?{tagsToAdd: string[], tagsToRemove: string[]}>}
+   */
+  async function showTagPopover() {
+    let tagString = '';
+    try {
+      tagString = await fetchPostTagString();
+    } catch (_err) {
+      showToast('⚠️ Failed to load post tags');
+    }
+    const initialTags = new Set(
+        tagString.split(/\s+/).filter((t) => TAG_OPTIONS.includes(t)));
+    return new Promise((resolve) => {
+      // Defensive: if a previous popover somehow stayed open, cancel
+      // it before opening a new one.
+      if (pendingTagPopoverResolver) {
+        const stale = pendingTagPopoverResolver;
+        pendingTagPopoverResolver = null;
+        stale(null);
+      }
+      pendingTagPopoverResolver = resolve;
+      openTagPopover(initialTags);
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -2826,6 +4544,66 @@
     /** @return {boolean} */
     hasPending() {
       return hasPendingChanges();
+    },
+
+    /** @return {ReturnType<typeof classifyChanges>} Phase 4 D8 buckets. */
+    classify() {
+      return classifyChanges();
+    },
+
+    /** @param {ReturnType<typeof classifyChanges>} c */
+    needsTagPopover(c) {
+      return needsTagPopover(c);
+    },
+
+    /** Opens the Phase 4 D9 tag modal directly. Resolves with the
+     *  add/remove delta on Submit, or null on Cancel. */
+    showTagPopover() {
+      return showTagPopover();
+    },
+
+    /** Phase 4 D10 + D11: runs the batch send for the current
+     *  classification with no tag delta. Useful for direct console
+     *  testing without going through Confirm's UI flow. */
+    sendBatch(classified, tagDelta) {
+      return sendBatch(
+          classified || classifyChanges(),
+          tagDelta || null);
+    },
+
+    /** @return {boolean} */
+    isSending() {
+      return isSending;
+    },
+
+    /** Phase 4 D12: shows the error modal with a synthetic result.
+     *  Useful for styling / interaction testing without forcing real
+     *  failures. Resolves with 'retry' or 'cancel'.
+     *  @param {SendBatchResult} [result]
+     */
+    showErrorModal(result) {
+      const synthetic = result || {
+        successful: {posts: [], puts: [], deletes: []},
+        failed: {
+          posts: [{noteId: 'temp-fake', state: {}, error: 'HTTP 500'}],
+          puts: [],
+          deletes: [],
+          tagPatch: 'HTTP 503',
+        },
+      };
+      return showErrorModal(synthetic);
+    },
+
+    /** Phase 4: applies a sendBatch result locally (POST→server,
+     *  PUT→reset baseline, DELETE→remove). For testing the
+     *  re-keying logic in isolation. */
+    applyServerStateToLocal(result) {
+      applyServerStateToLocal(result);
+    },
+
+    /** Phase 4 entrypoint — same flow the arc menu's ✅ runs. */
+    runConfirmFlow() {
+      return runConfirmFlow();
     },
 
     /** Clears all notes from the collection (DOM + Map + log). */
