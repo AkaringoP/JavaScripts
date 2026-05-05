@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.5] - 2026-05-05
+
+### Changed
+- **SE corner triangle now caps at 16 CSS px.** v3.1.4 made the triangle proportional to box display size (`min(width, height) / 6`) without a cap, so on a 500-CSS-px box the triangle ballooned to ~83 CSS px and dominated the visual. Capped at 16 CSS px: cap kicks in at box ≥ 96 CSS px, below that the proportional shrink applies. At vv=1 the on-screen triangle is at most 16 device px — a visible affordance, smaller than the 32-device-px handle. v3.0/3.1.1 baseline of 8 device px is matched at MIN_BOX_SIZE_DISPLAY=48.
+
 ## [3.1.4] - 2026-05-05
 
 ### Changed
