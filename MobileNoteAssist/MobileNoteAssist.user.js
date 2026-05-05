@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      3.0.0
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -15,6 +15,17 @@
   // --------------------------------------------------------------------------
   // Constants & Configuration
   // --------------------------------------------------------------------------
+
+  /** @const {string} Display name shown in the popover footer credit line. */
+  const SCRIPT_NAME = 'MobileNoteAssist';
+
+  /**
+   * @const {string} Version string shown in the popover footer. **Must mirror
+   * the @version line in the UserScript header above** — Tampermonkey reads
+   * @version for auto-update detection, while this constant is only for the
+   * footer credit. Bump both together on any release.
+   */
+  const SCRIPT_VERSION = '3.0.0';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -259,8 +270,15 @@
   /** @type {Map<string, Note>} */
   const notes = new Map();
 
-  /** @type {ActionLogEntry[]} */
-  const actionLog = [];
+  /**
+   * Per-note action history. Each entry array is a stack: latest action
+   * is at the end, `pop()` is the undo target. Wave 3.5 dropped global
+   * Undo so all reads are per-note now — Map<noteId, stack[]> makes
+   * popoverUndo / hardDeleteNote O(1) instead of an array reverse-scan
+   * that grew with total session activity (Phase 6 audit).
+   * @type {Map<string, ActionLogEntry[]>}
+   */
+  const actionLog = new Map();
 
   /** @type {?string} */
   let activeNoteId = null;
@@ -559,10 +577,18 @@
       position: absolute;
       width: 32px; height: 32px;
       box-sizing: border-box;
-      background: transparent;
+      background-color: transparent;
+      border: 1px dashed transparent;
       pointer-events: auto;
       z-index: 1;
       touch-action: none;
+      /* Fade-in/out for the debug-zone overlay (v2.6 carry-over pattern).
+         Baseline is fully transparent so toggling the debug-zones body
+         class only flips colors — transition then animates the swap.
+         The 1px dashed border is reserved at baseline (transparent) so
+         border-color can transition smoothly; switching border-style
+         mid-animation would snap instead of fade. */
+      transition: background-color 0.3s ease, border-color 0.3s ease;
     }
     .dmna-note-box.is-active .dmna-handle { display: block; }
     .dmna-handle-nw { top: -32px; left: -32px; cursor: nwse-resize; }
@@ -571,7 +597,10 @@
     .dmna-handle-sw { bottom: -16px; left: -32px; cursor: move; }
 
     /* SE corner triangle: visual resize affordance on active box. Color
-       tracks the active border (orange). */
+       tracks the active border (orange). Fades out during drag/resize
+       (.is-interacting set in onInteractionMove) so the user's view of
+       the underlying art isn't obscured by chrome they're not aiming at —
+       v2.6 carry-over pattern. */
     .dmna-note-box.is-active::after {
       content: '';
       position: absolute;
@@ -581,18 +610,24 @@
       border-width: 0 0 8px 8px;
       border-color: transparent transparent #ff9800 transparent;
       pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.2s ease;
+    }
+    .dmna-note-box.is-active.is-interacting::after {
+      opacity: 0;
     }
 
     /* Touch-zone debug overlay: while the user holds the popover's 👁
        button, paint each (otherwise invisible) corner handle in red so
        they can see exactly where the touch zones extend past the visible
        border. Only renders for the active box's handles since those are
-       the only ones that actually receive input. */
-    body.dmna-show-debug-zones .dmna-note-box.is-active .dmna-handle {
-      background: rgba(229, 57, 53, 0.30);
-      border: 1px dashed rgba(255, 120, 120, 0.95);
-    }
-    body.dmna-show-debug-zones .dmna-note-box.is-active .dmna-handle::before {
+       the only ones that actually receive input.
+
+       The icon pseudo-element is always present (so its color can fade
+       smoothly via transition); it just stays transparent until the
+       debug-zones class flips on. The .dmna-handle baseline above
+       handles the background/border fade. */
+    .dmna-note-box.is-active .dmna-handle::before {
       content: attr(data-icon);
       position: absolute;
       inset: 0;
@@ -600,6 +635,16 @@
       align-items: center;
       justify-content: center;
       font-size: 14px;
+      color: transparent;
+      text-shadow: none;
+      pointer-events: none;
+      transition: color 0.3s ease, text-shadow 0.3s ease;
+    }
+    body.dmna-show-debug-zones .dmna-note-box.is-active .dmna-handle {
+      background-color: rgba(229, 57, 53, 0.30);
+      border-color: rgba(255, 120, 120, 0.95);
+    }
+    body.dmna-show-debug-zones .dmna-note-box.is-active .dmna-handle::before {
       color: white;
       text-shadow: 0 0 3px black;
     }
@@ -737,6 +782,21 @@
        as a system emoji with its own colors. */
     .dmna-popover-btn[data-action="confirm"],
     .dmna-popover-btn[data-action="cancel"] { color: #f0f0f0; }
+
+    /* Footer credit line — script identity at popover bottom. 10px is
+       intentionally below typical body-text minimums; this is glance-
+       only "what is this?" info, not something we expect users to read
+       during their typing flow. Right-aligned + muted so it sits out
+       of the way of the action buttons just above. */
+    .dmna-popover-credit {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.4);
+      text-align: right;
+      margin-top: 6px;
+      line-height: 1;
+      user-select: none;
+      pointer-events: none;
+    }
     .dmna-popover-btn[data-action="delete"] { color: #ff8b8b; }
 
     /* Phase 4 (D11): Confirm in-flight UI lock. Pointer events off on
@@ -998,8 +1058,22 @@
       transition: opacity 0.4s ease-in-out, visibility 0.4s ease-in-out;
       pointer-events: none; transform-origin: 0 0;
       will-change: transform, opacity;
+      border-left: 4px solid transparent;
     }
     #dmna-toast.show { visibility: visible; opacity: 1; }
+    /* Type accents — color-coded left border so users can scan severity
+       even without reading the text. Background tints stay subtle so the
+       toast reads as the same UI element across types. */
+    #dmna-toast.dmna-toast-success {
+      border-left-color: rgba(46, 204, 113, 0.9);
+    }
+    #dmna-toast.dmna-toast-warning {
+      border-left-color: rgba(240, 180, 50, 0.9);
+    }
+    #dmna-toast.dmna-toast-error {
+      border-left-color: rgba(220, 70, 70, 0.95);
+      background-color: rgba(60, 28, 28, 0.96);
+    }
   `;
 
   const styleElement = document.createElement('style');
@@ -1011,10 +1085,39 @@
   // --------------------------------------------------------------------------
 
   /**
-   * Displays a toast message to the user.
-   * @param {string} msg The message text to display.
+   * @typedef {'info' | 'success' | 'warning' | 'error'} ToastType
    */
-  function showToast(msg) {
+
+  /** @const {Object<string, {className: string, duration: number}>}
+   *  Per-type toast presets. `error` lingers longer so actionable
+   *  messages have time to be read; `success` is brief (the user
+   *  already knows their action succeeded — the toast just confirms).
+   *  `info` stays at the v2.6 baseline for consistency. */
+  const TOAST_PRESETS = {
+    info: {className: '', duration: 2500},
+    success: {className: 'dmna-toast-success', duration: 1800},
+    warning: {className: 'dmna-toast-warning', duration: 3000},
+    error: {className: 'dmna-toast-error', duration: 4500},
+  };
+
+  /**
+   * Displays a toast message. Type drives both the accent color
+   * (CSS `.dmna-toast-{type}` class) and the auto-dismiss duration.
+   * Stacks: a new call cancels the previous timer and replaces the
+   * text + class — no queueing.
+   *
+   * Error/warning toasts also log to the browser console (with the
+   * optional `err` object passed to preserve the stack trace) so the
+   * user can diagnose issues after the toast auto-dismisses. Info /
+   * success toasts don't log — they'd just spam the console with
+   * noise the user already saw on screen.
+   * @param {string} msg
+   * @param {ToastType=} type Defaults to 'info'.
+   * @param {*=} err Optional error object/value for console diagnostics.
+   *     Only consulted when type is 'error' or 'warning'.
+   */
+  function showToast(msg, type, err) {
+    const preset = TOAST_PRESETS[type || 'info'] || TOAST_PRESETS.info;
     if (!toastElement) {
       toastElement = document.createElement('div');
       toastElement.id = 'dmna-toast';
@@ -1023,13 +1126,23 @@
     updateVisualViewportPositions();
     toastElement.textContent = msg;
     void toastElement.offsetWidth; // Trigger reflow
-    toastElement.className = 'show';
+    toastElement.className = `show ${preset.className}`.trim();
     if (toastTimer) {
       clearTimeout(toastTimer);
     }
     toastTimer = setTimeout(() => {
       toastElement.className = '';
-    }, 2500);
+    }, preset.duration);
+
+    if (type === 'error' || type === 'warning') {
+      const logFn = type === 'error' ? console.error : console.warn;
+      const tag = `[${SCRIPT_NAME}]`;
+      if (err !== undefined) {
+        logFn(tag, msg, err);
+      } else {
+        logFn(tag, msg);
+      }
+    }
   }
 
   /**
@@ -1234,7 +1347,7 @@
           if (navigator.vibrate) {
             navigator.vibrate(50);
           }
-          showToast('✥ Reposition Mode');
+          showToast('✥ Drag to reposition', 'info');
         }
       }, LONG_PRESS_DURATION);
     };
@@ -1320,11 +1433,7 @@
               closeMenu();
             }
             lastBtnTapTime = 0;
-            if (mode === 'active') {
-              tryDeactivate();
-            } else {
-              setMode('active');
-            }
+            toggleEditMode();
           } else {
             lastBtnTapTime = now;
             toggleMenu();
@@ -1516,6 +1625,13 @@
    * while the user is typing. `e.code === 'KeyN'` keeps the binding
    * stable across keyboard layouts and Caps Lock; the modifier guard
    * avoids hijacking browser shortcuts (Ctrl/Cmd/Alt + Shift+N).
+   *
+   * Shift+Enter — fire arc-menu Confirm (`runConfirmFlow`, the batch
+   * send) when in active mode. Same gate as Shift+N: no popover, no
+   * text-input focus. Critically NOT consumed inside the textarea —
+   * Shift+Enter is the standard "insert newline" affordance there
+   * (translation lines often span multiple lines), so the input-focus
+   * guard preserves it.
    * @param {KeyboardEvent} e
    */
   function handleGlobalHotkeys(e) {
@@ -1546,11 +1662,18 @@
       !isTextInputElement(document.activeElement)
     ) {
       e.preventDefault();
-      if (mode === 'active') {
-        tryDeactivate();
-      } else {
-        setMode('active');
-      }
+      toggleEditMode();
+      return;
+    }
+    if (
+      e.shiftKey && e.key === 'Enter' &&
+      !e.ctrlKey && !e.metaKey && !e.altKey &&
+      mode === 'active' &&
+      activeNoteId === null &&
+      !isTextInputElement(document.activeElement)
+    ) {
+      e.preventDefault();
+      runConfirmFlow();
     }
   }
 
@@ -1603,15 +1726,19 @@
   }
 
   /**
-   * Appends an action to the chronological log. The popover ↶ button
-   * (per-note undo) reads from this — it finds the latest entry whose
-   * `noteId` matches the active note and reverses it.
+   * Pushes an action onto this note's per-note undo stack. Lazily
+   * creates the stack on first push.
    * @param {string} noteId
    * @param {'create' | 'edit' | 'delete' | 'transform'} type
    * @param {?NoteState} prevState
    */
   function pushAction(noteId, type, prevState) {
-    actionLog.push({noteId, type, prevState});
+    let stack = actionLog.get(noteId);
+    if (!stack) {
+      stack = [];
+      actionLog.set(noteId, stack);
+    }
+    stack.push({noteId, type, prevState});
   }
 
   /**
@@ -1648,7 +1775,7 @@
    * server-note load before `<img>` finishes loading.
    * @param {string} noteId
    */
-  function renderNoteBox(noteId) {
+  function renderNoteBox(noteId, cachedRect) {
     const note = notes.get(noteId);
     if (!note) {
       return;
@@ -1701,7 +1828,7 @@
       document.body.appendChild(el);
       note.domElement = el;
     }
-    const screen = imageToScreenRect(note.current);
+    const screen = imageToScreenRect(note.current, cachedRect);
     if (screen) {
       note.domElement.style.display = '';
       note.domElement.style.left = `${screen.left}px`;
@@ -1720,10 +1847,17 @@
    * Re-projects every box's image-space rect to display space. Call after
    * anything that could change the rendered image rect: window resize,
    * image load, orientation change.
+   *
+   * Reads the image rect once and passes it to each `renderNoteBox` —
+   * without this batch path, N notes meant N `getBoundingClientRect()`
+   * reads on the image interleaved with N style writes, which forces
+   * N forced reflows under orientation change at large note counts
+   * (Phase 6 audit P2).
    */
   function updateAllNoteBoxPositions() {
+    const rect = getImageDisplayRect();
     for (const id of notes.keys()) {
-      renderNoteBox(id);
+      renderNoteBox(id, rect);
     }
   }
 
@@ -1898,7 +2032,7 @@
       removeNoteBoxDOM(id);
     }
     notes.clear();
-    actionLog.length = 0;
+    actionLog.clear();
     setActiveNote(null);
   }
 
@@ -1963,7 +2097,7 @@
       if (gen !== activeModeGen) {
         return;
       }
-      showToast('⚠️ Failed to load image dimensions');
+      showToast('⚠️ Failed to load image info', 'error', err);
       return;
     }
     if (gen !== activeModeGen || mode !== 'active') {
@@ -1977,7 +2111,7 @@
       if (gen !== activeModeGen) {
         return;
       }
-      showToast('⚠️ Failed to load existing notes');
+      showToast('⚠️ Failed to load existing notes', 'error', err);
       return;
     }
     if (gen !== activeModeGen || mode !== 'active') {
@@ -2006,6 +2140,26 @@
    *   2. Re-tap of the Edit menu item while already in active mode.
    * The third path (post-Confirm reload) is Phase 4.
    */
+  /**
+   * Single entry point for the three Edit-mode toggle paths (arc-menu
+   * ✏️, floating-button double-tap, Shift+N hotkey). Decides direction
+   * from the current mode, dispatches to `tryDeactivate` / `setMode`,
+   * and emits the matching toast — only after `tryDeactivate` actually
+   * succeeded (the dirty-confirm prompt can decline and leave us in
+   * active mode, in which case no toast).
+   */
+  function toggleEditMode() {
+    if (mode === 'active') {
+      tryDeactivate();
+      if (mode === 'idle') {
+        showToast('Edit mode off', 'info');
+      }
+    } else {
+      setMode('active');
+      showToast('Edit mode on', 'info');
+    }
+  }
+
   function tryDeactivate() {
     if (hasPendingChanges()) {
       // window.confirm is a deliberately simple Phase 3 choice (the v3.1
@@ -2031,12 +2185,10 @@
   function handleMenuAction(action) {
     switch (action) {
       case 'edit':
-        if (mode === 'active') {
-          // Re-tap while active — Z11 path #2 off-attempt.
-          tryDeactivate();
-        } else {
-          setMode('active');
-        }
+        // Z11 path #2: re-tap while active routes through tryDeactivate
+        // (dirty-confirm prompt). Common entry-point shared with the
+        // double-tap and Shift+N paths.
+        toggleEditMode();
         break;
       case 'confirm':
         // Fire-and-forget — runConfirmFlow is async but the menu click
@@ -2220,6 +2372,14 @@
     });
     popoverElement.appendChild(buttons);
 
+    // Footer credit line — small muted "{NAME} v{VERSION}" at the
+    // bottom-right. Out of the typing/action flow but visible enough
+    // for "which version is this?" troubleshooting.
+    const credit = document.createElement('div');
+    credit.className = 'dmna-popover-credit';
+    credit.textContent = `${SCRIPT_NAME} v${SCRIPT_VERSION}`;
+    popoverElement.appendChild(credit);
+
     document.body.appendChild(popoverElement);
   }
 
@@ -2390,68 +2550,68 @@
    * @param {string} noteId
    */
   function popoverUndo(noteId) {
-    for (let i = actionLog.length - 1; i >= 0; i--) {
-      const entry = actionLog[i];
-      if (entry.noteId !== noteId) {
-        continue;
-      }
-      actionLog.splice(i, 1);
-      if (entry.type === 'create') {
-        // hardDeleteNote also strips remaining log entries for this id,
-        // which is fine — there shouldn't be any after the create entry
-        // was the last thing left for this note (we just removed it).
-        hardDeleteNote(noteId);
-        return;
-      }
-      const note = notes.get(noteId);
-      if (!note) {
-        return;
-      }
-      if (entry.type === 'edit') {
-        note.current = {...entry.prevState};
-        note.confirmedState = {...entry.prevState};
-        if (popoverInputElement &&
-            popoverInputElement.dataset.boundNoteId === noteId) {
-          popoverInputElement.value = entry.prevState.text || '';
-        }
-        renderNoteBox(noteId);
-        updateNoteVisuals(noteId);
-        updatePopoverPosition();
-      } else if (entry.type === 'delete') {
-        note.isDeleted = false;
-        // Restore current to the state at delete-time. Defensive: with
-        // drag/resize disabled on soft-deleted boxes (and the popover's
-        // editing controls all disabled), current shouldn't have drifted
-        // — but if a future change ever lets it, this keeps undo
-        // deterministic.
-        note.current = {...entry.prevState};
-        if (popoverInputElement &&
-            popoverInputElement.dataset.boundNoteId === noteId) {
-          popoverInputElement.value = entry.prevState.text || '';
-        }
-        renderNoteBox(noteId);
-        updateNoteVisuals(noteId);
-        // The popover may currently be open and bound to this note (the
-        // user re-tapped the red-dashed box, then pressed ↶). Flip its
-        // disabled/highlighted state back to "live" since the note is
-        // no longer deleted.
-        updatePopoverForActiveNote();
-        updatePopoverPosition();
-      } else if (entry.type === 'transform') {
-        // Geometry-only revert: restoring text or confirmedState here
-        // would also undo unrelated typing / clobber a prior ✔ that
-        // happened before the drag.
-        note.current.x = entry.prevState.x;
-        note.current.y = entry.prevState.y;
-        note.current.w = entry.prevState.w;
-        note.current.h = entry.prevState.h;
-        renderNoteBox(noteId);
-        updateNoteVisuals(noteId);
-        updatePopoverPosition();
-      }
+    const stack = actionLog.get(noteId);
+    if (!stack || stack.length === 0) {
+      showToast('Nothing to undo for this note', 'info');
       return;
     }
-    showToast('Nothing to undo');
+    const entry = stack.pop();
+    if (stack.length === 0) {
+      actionLog.delete(noteId);
+    }
+    if (entry.type === 'create') {
+      // hardDeleteNote also wipes this note's stack via actionLog.delete,
+      // which is a no-op now that the create entry was popped + the empty
+      // stack was cleaned above. Either way, idempotent.
+      hardDeleteNote(noteId);
+      return;
+    }
+    const note = notes.get(noteId);
+    if (!note) {
+      return;
+    }
+    if (entry.type === 'edit') {
+      note.current = {...entry.prevState};
+      note.confirmedState = {...entry.prevState};
+      if (popoverInputElement &&
+          popoverInputElement.dataset.boundNoteId === noteId) {
+        popoverInputElement.value = entry.prevState.text || '';
+      }
+      renderNoteBox(noteId);
+      updateNoteVisuals(noteId);
+      updatePopoverPosition();
+    } else if (entry.type === 'delete') {
+      note.isDeleted = false;
+      // Restore current to the state at delete-time. Defensive: with
+      // drag/resize disabled on soft-deleted boxes (and the popover's
+      // editing controls all disabled), current shouldn't have drifted
+      // — but if a future change ever lets it, this keeps undo
+      // deterministic.
+      note.current = {...entry.prevState};
+      if (popoverInputElement &&
+          popoverInputElement.dataset.boundNoteId === noteId) {
+        popoverInputElement.value = entry.prevState.text || '';
+      }
+      renderNoteBox(noteId);
+      updateNoteVisuals(noteId);
+      // The popover may currently be open and bound to this note (the
+      // user re-tapped the red-dashed box, then pressed ↶). Flip its
+      // disabled/highlighted state back to "live" since the note is
+      // no longer deleted.
+      updatePopoverForActiveNote();
+      updatePopoverPosition();
+    } else if (entry.type === 'transform') {
+      // Geometry-only revert: restoring text or confirmedState here
+      // would also undo unrelated typing / clobber a prior ✔ that
+      // happened before the drag.
+      note.current.x = entry.prevState.x;
+      note.current.y = entry.prevState.y;
+      note.current.w = entry.prevState.w;
+      note.current.h = entry.prevState.h;
+      renderNoteBox(noteId);
+      updateNoteVisuals(noteId);
+      updatePopoverPosition();
+    }
   }
 
   /**
@@ -2547,11 +2707,7 @@
     }
     removeNoteBoxDOM(id);
     notes.delete(id);
-    for (let i = actionLog.length - 1; i >= 0; i--) {
-      if (actionLog[i].noteId === id) {
-        actionLog.splice(i, 1);
-      }
-    }
+    actionLog.delete(id);
   }
 
   /**
@@ -2737,6 +2893,13 @@
       if (popoverElement) {
         popoverElement.style.opacity = '0.25';
       }
+      // Hide the SE corner triangle for the same reason — the resize
+      // affordance is irrelevant once the gesture is in progress and
+      // would otherwise sit on top of the art the user is repositioning
+      // the box against.
+      if (note.domElement) {
+        note.domElement.classList.add('is-interacting');
+      }
     }
 
     // Convert display-space delta to image-space.
@@ -2831,6 +2994,12 @@
       if (popoverElement) {
         popoverElement.style.opacity = '';
       }
+      // Restore the SE corner triangle (set in onInteractionMove's
+      // first-movement branch).
+      const note = notes.get(dragState.noteId);
+      if (note && note.domElement) {
+        note.domElement.classList.remove('is-interacting');
+      }
       suppressNextBoxClick = true;
       // Auto-release after the click event window so a swallowed click
       // can't permanently sink the next legitimate tap (matches the
@@ -2916,11 +3085,18 @@
    * debug surface usable when poking values via `__dmna3.addNote` before
    * any active-mode entry.
    *
+   * Optional `cachedRect` lets the caller pass a pre-computed image
+   * display rect (e.g., from a per-frame snapshot in
+   * `updateAllNoteBoxPositions`) so a batch render of N notes does
+   * one `getBoundingClientRect()` instead of N — avoids layout thrash
+   * when style writes interleave with layout reads (Phase 6 audit).
+   *
    * @param {NoteState} state
+   * @param {{left: number, top: number, width: number, height: number}=} cachedRect
    * @return {?{left: number, top: number, width: number, height: number}}
    */
-  function imageToScreenRect(state) {
-    const rect = getImageDisplayRect();
+  function imageToScreenRect(state, cachedRect) {
+    const rect = cachedRect || getImageDisplayRect();
     if (!rect) {
       return null;
     }
@@ -3142,9 +3318,16 @@
    * Spawns a default-sized box centered at the given client coords.
    * Shared by `handleImageClick` (browser click event) and
    * `onImageDragPointerUp` (synthesized tap when pointerdown was
-   * preventDefault'd, suppressing the click chain). Returns the new
-   * note id, or null if the spawn was a no-op (image not visible /
-   * dimensions unknown).
+   * preventDefault'd, suppressing the click chain). Resolves to the
+   * new note id, or null if the spawn was a no-op (image not visible
+   * / dimensions unavailable / cancelled while waiting on metadata).
+   *
+   * Async because of the C1 race fix: when fired during the
+   * setMode('active') → enterActiveMode metadata-fetch window, the
+   * function awaits `postMetaPromise` rather than dropping the user's
+   * tap with an "Image dimensions unknown" toast. Callers fire-and-
+   * forget; the return value isn't used in production, only the
+   * `__dmna3` debug surface inspects it.
    *
    * The textarea autofocus uses requestAnimationFrame so the popover's
    * `.show` flip + layout settles before `.focus()` runs (pre-flip the
@@ -3153,16 +3336,37 @@
    * user dismissed the popover within the same frame.
    * @param {number} clientX
    * @param {number} clientY
-   * @return {?string}
+   * @return {Promise<?string>}
    */
-  function spawnDefaultBoxAtClient(clientX, clientY) {
+  async function spawnDefaultBoxAtClient(clientX, clientY) {
     if (!postOriginalWidth || !postOriginalHeight) {
-      showToast('⚠️ Image dimensions unknown');
-      return null;
+      // Race window: setMode('active') flips the mode + body class
+      // synchronously, but enterActiveMode's metadata fetch is async.
+      // A click in the gap (1–3s on slow cellular) used to surface
+      // "Image dimensions unknown" — instead, wait for the in-flight
+      // promise so the user's intent isn't dropped (Phase 6 audit C1).
+      if (postMetaPromise) {
+        try {
+          await postMetaPromise;
+        } catch (err) {
+          showToast('⚠️ Failed to load image info', 'error', err);
+          return null;
+        }
+        // While we awaited, the user could have left active mode or
+        // selected another box. Silently bail in those cases — they're
+        // not "errors," they're cancelled intent.
+        if (mode !== 'active' || activeNoteId !== null) {
+          return null;
+        }
+      }
+      if (!postOriginalWidth || !postOriginalHeight) {
+        showToast('⚠️ Image info unavailable — refresh the page', 'error');
+        return null;
+      }
     }
     const rect = getImageDisplayRect();
     if (!rect) {
-      showToast('⚠️ Image not visible');
+      showToast('⚠️ Image not on screen', 'warning');
       return null;
     }
     const shortSide = Math.min(rect.width, rect.height);
@@ -3186,7 +3390,7 @@
       height: sizeDisplay,
     });
     if (!imgState) {
-      showToast('⚠️ Image not visible');
+      showToast('⚠️ Image not on screen', 'warning');
       return null;
     }
     const id = createTempNote({
@@ -3525,7 +3729,30 @@
     }
     const r = await fetch(url, opts);
     if (!r.ok) {
-      throw new Error(`HTTP ${r.status} ${r.statusText}`.trim());
+      // Surface Danbooru's error body when present — 422s typically carry
+      // actionable messages (e.g., "Box overlaps existing note", "tag_string
+      // can't be blank") that "HTTP 422" alone hides. Best-effort: ignore
+      // body-read or JSON-parse failures and fall back to the bare status.
+      let detail = '';
+      try {
+        const errText = await r.text();
+        if (errText) {
+          try {
+            const errJson = JSON.parse(errText);
+            detail = errJson.message || errJson.error ||
+                (errJson.errors ? JSON.stringify(errJson.errors) : '') ||
+                errText;
+          } catch (_parseErr) {
+            detail = errText;
+          }
+        }
+      } catch (_readErr) {
+        // r.text() can throw on aborted/network errors; leave detail empty.
+      }
+      const head = `HTTP ${r.status} ${r.statusText}`.trim();
+      const truncated = detail.length > 200 ?
+          detail.slice(0, 197) + '...' : detail;
+      throw new Error(truncated ? `${head} — ${truncated}` : head);
     }
     // Empty / 204 responses are fine; only parse when there's a body.
     const text = await r.text();
@@ -3675,6 +3902,13 @@
           await apiDeleteNote(item.serverId);
           result.successful.deletes.push(item);
         } catch (err) {
+          // The error modal shows result.failed[...].error (a compact
+          // string). Log the full Error here so its stack trace is
+          // available in the console for cross-referencing — useful
+          // when triaging "what actually went wrong" across multiple
+          // partial failures in one batch.
+          console.error(
+              `[${SCRIPT_NAME}] DELETE note ${item.serverId} failed`, err);
           result.failed.deletes.push({...item, error: String(err.message || err)});
         }
       }
@@ -3683,6 +3917,8 @@
           await apiPutNote(item.serverId, item.state);
           result.successful.puts.push(item);
         } catch (err) {
+          console.error(
+              `[${SCRIPT_NAME}] PUT note ${item.serverId} failed`, err);
           result.failed.puts.push({...item, error: String(err.message || err)});
         }
       }
@@ -3691,6 +3927,8 @@
           const serverResponse = await apiPostNote(item.state);
           result.successful.posts.push({...item, serverResponse});
         } catch (err) {
+          console.error(
+              `[${SCRIPT_NAME}] POST temp ${item.noteId} failed`, err);
           result.failed.posts.push({...item, error: String(err.message || err)});
         }
       }
@@ -3699,6 +3937,7 @@
         try {
           await apiPatchPostTags(tagDelta.tagsToAdd, tagDelta.tagsToRemove);
         } catch (err) {
+          console.error(`[${SCRIPT_NAME}] tag PATCH failed`, err);
           result.failed.tagPatch = String(err.message || err);
         }
       }
@@ -3750,15 +3989,32 @@
       if (!serverId) {
         continue;
       }
+      // Use the server's normalized values (post-clamp / post-round)
+      // as the new local baseline rather than the locally-rounded copy
+      // we sent. Otherwise a Retry path that follows a sibling failure
+      // can mis-classify this note as "dirty" because our sent rect
+      // and the server's stored rect differ by a pixel (Phase 6 audit
+      // C3). Falls back to item.state for any field the server didn't
+      // echo, which keeps the path safe across API shape changes.
+      /** @type {NoteState} */
+      const baselineState = {
+        x: typeof sr.x === 'number' ? sr.x : Math.round(item.state.x),
+        y: typeof sr.y === 'number' ? sr.y : Math.round(item.state.y),
+        w: typeof sr.width === 'number' ?
+            sr.width : Math.round(item.state.w),
+        h: typeof sr.height === 'number' ?
+            sr.height : Math.round(item.state.h),
+        text: typeof sr.body === 'string' ? sr.body : (item.state.text || ''),
+      };
       // Drop the temp side first (DOM gone, Map gone, actionLog
       // entries gone). Then add the fresh server-note entry under
       // the new id and render it.
       hardDeleteNote(item.noteId);
       /** @type {Note} */
       const newNote = {
-        current: {...item.state},
-        initialState: {...item.state},
-        confirmedState: {...item.state},
+        current: {...baselineState},
+        initialState: {...baselineState},
+        confirmedState: {...baselineState},
         isDeleted: false,
         isServerNote: true,
         everConfirmed: true,
@@ -3778,11 +4034,7 @@
       }
       note.initialState = {...note.current};
       note.confirmedState = {...note.current};
-      for (let i = actionLog.length - 1; i >= 0; i--) {
-        if (actionLog[i].noteId === item.noteId) {
-          actionLog.splice(i, 1);
-        }
-      }
+      actionLog.delete(item.noteId);
       updateNoteVisuals(item.noteId);
     }
     // DELETE: nuke locally too.
@@ -4015,8 +4267,8 @@
       // for committed items, but unchangedServer notes / drift could
       // theoretically still leave entries. Clear the rest — the
       // session is done.
-      actionLog.length = 0;
-      showToast('Confirm complete');
+      actionLog.clear();
+      showToast('✓ Saved', 'success');
       // Brief pause so the user sees the success toast before the
       // page swaps. setMode('idle') is overkill (reload nukes
       // everything anyway) but keeps state consistent if reload
@@ -4039,7 +4291,7 @@
       // Nothing left to retry — this is rare (would mean failures
       // self-resolved between modal and click), but bail cleanly
       // rather than spin sendBatch on an empty payload.
-      showToast('Nothing left to retry');
+      showToast('Nothing left to retry', 'info');
       return;
     }
     const retryResult = await sendBatch(newClassified, retryTagDelta);
@@ -4069,7 +4321,7 @@
 
     const classified = classifyChanges();
     if (!classified.hasChanges) {
-      showToast('No changes to confirm');
+      showToast('No changes to confirm', 'info');
       return;
     }
 
@@ -4442,8 +4694,8 @@
     let tagString = '';
     try {
       tagString = await fetchPostTagString();
-    } catch (_err) {
-      showToast('⚠️ Failed to load post tags');
+    } catch (err) {
+      showToast('⚠️ Failed to load post tags', 'error', err);
     }
     const initialTags = new Set(
         tagString.split(/\s+/).filter((t) => TAG_OPTIONS.includes(t)));
