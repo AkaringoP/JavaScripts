@@ -5,6 +5,14 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-05-05
+
+### Changed
+- **Floating button hides while a note popover is open.** The button used to remain visible at the bottom-right while a per-note popover was up, which on mobile sits in the same screen region as the popover's ✔/✖/🗑 row. An accidental thumb-tap on the button could open the arc menu and let the user fire ✓ Confirm prematurely. Now `body.dmna-note-popover-open` is toggled in `showPopover` / `hidePopover` and a CSS rule fades the floating button out (`opacity: 0; visibility: hidden; pointer-events: none`) for the duration of the popover. Reuses the existing 0.2s opacity transition.
+
+### Fixed
+- **Toasts now flash on every `showToast` call, not just the first.** Previously, calling `showToast` while a previous toast was still on screen replaced the text but left the `.show` class unchanged — same className meant CSS transitions never re-fired. Pressing Shift+Enter for "No changes to confirm" right after another toast (e.g., Shift+N's "Edit mode on") looked like the second event did nothing, because the only visible cue was the silently-replaced text. Fixed by clearing the className + forcing a reflow before re-adding it, so each call runs the opacity / visibility transitions fresh.
+
 ## [3.0.0] - 2026-05-05
 
 ### Changed (BREAKING)
@@ -105,6 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The last release before PC drag support. Touch tap-to-create was the sole creation gesture; the click-to-toggle invariant was simple and unbroken. v2.5 restores this invariant on top of v2.4's structural cleanups.
 
+[3.0.1]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [3.0.0]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [2.6]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [2.5]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist

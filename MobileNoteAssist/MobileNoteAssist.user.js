@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.0.0
+// @version      3.0.1
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.0.0';
+  const SCRIPT_VERSION = '3.0.1';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -809,6 +809,17 @@
       pointer-events: none !important;
     }
 
+    /* Hide the floating button while a note popover is open so an
+       accidental tap on the button (which on mobile sits at the same
+       bottom-right region as the popover's lower-right buttons) can't
+       open the arc menu and let the user fire ✓ Confirm prematurely.
+       Reuses the existing opacity/visibility transition on the button. */
+    body.dmna-note-popover-open #dmna-float-btn {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
     /* Phase 4 (D9): tag popover — anchored to the LEFT of the floating
        button with a rightward-pointing arrow. The earlier "above Confirm"
        anchor overflowed the right edge of the viewport when the floating
@@ -1125,7 +1136,14 @@
     }
     updateVisualViewportPositions();
     toastElement.textContent = msg;
-    void toastElement.offsetWidth; // Trigger reflow
+    // Restart the fade-in transition. Without this reset, calling
+    // showToast while a previous toast is still on screen would just
+    // replace the text with no visual change — the user can't tell a
+    // new event fired. Clearing the class first + forcing a reflow
+    // makes the next class assignment re-trigger the opacity / visibility
+    // transitions, so every showToast call produces a visible "flash."
+    toastElement.className = '';
+    void toastElement.offsetWidth;
     toastElement.className = `show ${preset.className}`.trim();
     if (toastTimer) {
       clearTimeout(toastTimer);
@@ -2409,6 +2427,10 @@
     // the time the show class flips display to block.
     updatePopoverPosition();
     popoverElement.classList.add('show');
+    // Hide the floating button while the popover is up so it can't be
+    // tapped open and trigger ✓ Confirm prematurely. CSS in STYLES
+    // does the actual hide.
+    document.body.classList.add('dmna-note-popover-open');
   }
 
   /**
@@ -2448,6 +2470,7 @@
       popoverElement.classList.remove('show');
       delete popoverInputElement.dataset.boundNoteId;
     }
+    document.body.classList.remove('dmna-note-popover-open');
   }
 
   /**
