@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.8] - 2026-05-05
+
+### Changed
+- **Popover side-stack (👁 + ↶) halved in width; textarea absorbs the freed space.** v3.1.7 sized the side stack to a full bottom-row button column (1/3 of the popover width), but that ate too much textarea space. Now the side stack is `(100% - 16px) / 6` — half a bottom-row button column — and the textarea grows by ~47 CSS px. The side stack is right-aligned with the delete button's right edge by design (both end at the popover's right padding), so the visual right-edge gridline still holds even though the column widths differ.
+
 ## [3.1.7] - 2026-05-05
 
 ### Changed

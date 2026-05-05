@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.7
+// @version      3.1.8
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.7';
+  const SCRIPT_VERSION = '3.1.8';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -743,22 +743,27 @@
       border-color: transparent transparent rgba(30, 30, 30, 0.96) transparent;
       pointer-events: none;
     }
-    /* Input row + button row both use a 3-column grid with the same
-       gap so the side-stack column lines up exactly with the delete
-       button column below. Pre-3.1.7 the input row was flex with a
-       fixed 44px side stack (~half the ~95px delete button width
-       below), which made the side-stack feel cramped + the grid
-       broken. Now: textarea spans columns 1-2 (matching confirm +
-       cancel + their gap), side-stack occupies column 3 (matching
-       delete). */
+    /* Input row layout: 2-column grid where the side stack (👁 + ↶)
+       occupies HALF of one bottom-row button column (= 1/6 of the
+       grid track width), and the textarea takes everything else.
+       v3.1.7 had the side stack take a full button column (1/3),
+       which was clean alignment-wise but ate too much textarea
+       width. Per user request the side-stack column is halved and
+       the textarea grows by the freed space (+ ~47 CSS px). The
+       side-stack is right-aligned with the delete button's right
+       edge — both end at the popover's right padding edge — by
+       design (the 2nd grid column ends at 100% just like the
+       3rd column of the bottom row).
+       The calc((100% - 16px) / 6) width matches half a bottom-row
+       button: bottom is 3 buttons + 2*8px gap = 100%, so each
+       button is (100% - 16px) / 3, and half is (100% - 16px) / 6. */
     #dmna-popover-input-row {
       display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-columns: 1fr calc((100% - 16px) / 6);
       gap: 8px;
       align-items: stretch;
     }
     #dmna-popover-input {
-      grid-column: 1 / span 2;
       min-width: 0;
       padding: 8px 10px;
       border-radius: 6px;
@@ -774,7 +779,6 @@
     }
     #dmna-popover-input:focus { border-color: #0073ff; }
     #dmna-popover-side-stack {
-      grid-column: 3;
       display: flex;
       flex-direction: column;
       gap: 6px;
