@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-05-05
+
+### Changed
+- **`MIN_BOX_SIZE_DISPLAY` 24 → 48 device px** (1.5× the handle's device-px size). v3.1.2's 24 satisfied the no-overlap collision threshold (16 device px) plus a small buffer, but on a high-DPR phone (~1.5mm physical) the box still looked like a sliver squeezed between the four 32-device-px handles. 48 makes the box visually dominant. Image-space floor at vv=3, scale=0.4 is now 40 image px (was 20) — small glyphs ~40+ image px still markable, smallest details require more pinch zoom.
+
 ## [3.1.2] - 2026-05-05
 
 ### Fixed

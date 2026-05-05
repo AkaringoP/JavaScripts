@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.2
+// @version      3.1.3
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
@@ -25,7 +25,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.2';
+  const SCRIPT_VERSION = '3.1.3';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
@@ -87,22 +87,27 @@
    *  `updateActiveHandleScales`, the top and bottom touch zones meet
    *  at box.height_device = 16 device px (top handle's bottom edge
    *  vs SE/SW handle's top edge, which sits 16/vv.scale CSS px above
-   *  the box's bottom = 16 device px regardless of pinch). Below 16
-   *  the touch zones literally overlap and the box "looks like a dot"
-   *  visually. We set the floor to 24 = 16 + 8 device px buffer, which
-   *  also matches v3.0's CSS-px baseline at vv.scale=1.
+   *  the box's bottom = 16 device px regardless of pinch). 16 is just
+   *  the no-overlap floor; visually the box still looks like a sliver
+   *  between the 32-device-px handles. We set the floor to 48 = 1.5×
+   *  the handle's device-px size, so the box is the visually dominant
+   *  element of the active-box assembly rather than a thin strip
+   *  squeezed between the four handles. v3.1.2 used 24 (= collision
+   *  threshold + 8 px buffer + matched v3.0's CSS-px baseline at
+   *  vv.scale=1) but user feedback was that 24 device px on a high-
+   *  DPR phone (~1.5mm) was still dot-like.
    *
    *  Pre-3.1.0: 24 CSS px (which became 24 device px at vv=1 but grew
    *  to 72 device px at vv=3 — preventing small-feature marking even
    *  with pinch zoom). v3.1 introduces device-px semantics: on-screen
    *  size stays consistent, but IMAGE-space floor shrinks with pinch
    *  (e.g., display:image scale 0.4 → at vv=3, image floor is
-   *  24/3/0.4 = 20 image px instead of 60 at vv=1). This is the small-
-   *  feature-marking workflow: pinch in over a small glyph → resize
-   *  handles → pinch out, box stays small in image space.
+   *  48/3/0.4 = 40 image px instead of 120 at vv=1). This is the
+   *  small-feature-marking workflow: pinch in over a small glyph →
+   *  resize handles → pinch out, box stays small in image space.
    *
    *  `MIN_BOX_SIZE_IMG` is the absolute safety floor in image space. */
-  const MIN_BOX_SIZE_DISPLAY = 24;
+  const MIN_BOX_SIZE_DISPLAY = 48;
 
   /** @const {number} PC-only drag-to-create threshold in CSS pixels.
    *  Distinguishes a deliberate drag-rect from an accidental tiny mouse
