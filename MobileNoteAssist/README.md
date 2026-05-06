@@ -54,15 +54,7 @@ The single-tap-opens-menu / double-tap-toggles design means the menu shows up in
 
 Tap the floating button once to open a 2-item arc:
 
-```
-        ✓ Confirm
-            \
-             \
-              ✏️ Edit
-              /
-             /
-        📝 (floating button)
-```
+<img width="392" height="383" alt="Image" src="https://github.com/user-attachments/assets/35170024-f938-4db1-99c6-8331f50e304b" />
 
 - **✏️ Edit** — toggle Edit mode on/off (same as double-tapping the floating button).
 - **✓ Confirm** — send all your local changes to the server (covered in [Sending your work to the server](#sending-your-work-to-the-server)).
@@ -96,19 +88,7 @@ The default box size is 10% of the image's shorter dimension, clamped to 30–15
 
 ### The per-note popover
 
-```
-     ┌──────────────────────────────────────┐
-     │ ┌────────────────────────────┐ ┌───┐ │
-     │ │ Enter note...              │ │ 👁 │ │
-     │ │                            │ ├───┤ │
-     │ │                            │ │ ↶ │ │
-     │ └────────────────────────────┘ └───┘ │
-     │                                      │
-     │           [ ✔ ]  [ ✖ ]  [ 🗑 ]       │
-     └──────────────────────────────────────┘
-                       ▲
-                  (anchored under box)
-```
+<img width="822" height="619" alt="Image" src="https://github.com/user-attachments/assets/ae957558-ac0d-497d-9f16-07d50749f0f9" />
 
 | Button | What it does |
 |---|---|
@@ -125,13 +105,7 @@ The default box size is 10% of the image's shorter dimension, clamped to 30–15
 
 Each box has four invisible handle zones at its corners with generous touch padding:
 
-```
-   ↖ ─────────────── ✥
-   │                 │
-   │   note box      │
-   │                 │
-   ✥ ─────────────── ↘
-```
+<img width="598" height="473" alt="Image" src="https://github.com/user-attachments/assets/d737e8ff-fb29-4e2c-8d1d-afcaf4a61bbc" />
 
 - **↖ / ↘ (top-left and bottom-right)** — Resize. ↖ grows up-left, ↘ grows down-right. Both stay clamped inside the image.
 - **✥ (top-right and bottom-left)** — Move. Drag from either corner to translate the whole box.
@@ -143,13 +117,7 @@ If you can't tell where the touch zones are on a small box, **hold 👁** in the
 
 ### Box colors at a glance
 
-```
-┌─────────────┐  ┌─────────────┐  ┌╴╴╴╴╴╴╴╴╴╴╴╴╴┐  ┌─────────────┐
-│   Default   │  │    Dirty    │  ╵   Deleted   ╵  │    Active   │
-│  (saved)    │  │  (changed)  │  ╵  (soft del) ╵  │ (popover    │
-│   blue      │  │    green    │  ╵     red     ╵  │   open)     │
-└─────────────┘  └─────────────┘  └╴╴╴╴╴╴╴╴╴╴╴╴╴┘  └─orange──────┘
-```
+<img width="1080" height="758" alt="Image" src="https://github.com/user-attachments/assets/d91334a6-0529-4d2e-8070-9db21b66521e" />
 
 | State | Color | Meaning |
 |---|---|---|
