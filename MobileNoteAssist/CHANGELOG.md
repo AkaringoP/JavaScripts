@@ -5,75 +5,18 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.1.11] - 2026-05-05
-
-### Changed
-- **Tag toggle row is no longer a `<button>`.** v3.1.9 (`-webkit-tap-highlight-color: transparent` + `outline: none`) and v3.1.10 (`appearance: none`) both failed to suppress the bright-white background some Android browsers paint on the row's tap/focus state — the white "Translated" label vanished against it. v3.1.11 restructures the row: outer is a non-interactive `<div class="dmna-tag-row">`, the click target is now the inner pill switch only (`<button class="dmna-tag-switch-btn">` wrapping the existing pill visual). The row never gets `:focus` / `:active` / tap-highlight, sidestepping the entire class of native-button rendering issues. Hit area shrinks from full-row to ~52×36 around the pill — acceptable trade-off since the tag popover is briefly used during the Confirm flow, not a primary action surface. `is-on` / `is-disabled` classes move to the row div; descendant CSS selectors (e.g. `.dmna-tag-row.is-on .dmna-tag-switch`) update accordingly.
-
-## [3.1.10] - 2026-05-05
-
-### Fixed
-- **Tag toggle row STILL flashed white** after v3.1.9. v3.1.9's `-webkit-tap-highlight-color: transparent` + `outline: none` + explicit `:active` / `:focus` rules weren't enough on the affected Android browser — the white background was actually the native `<button>` element rendering bleeding through and overriding our `background` shorthand. Added `appearance: none` + `-webkit-appearance: none` to strip native button styling so our CSS `background` actually wins.
-
-## [3.1.9] - 2026-05-05
-
-### Fixed
-- **Tag toggle row went bright white after tap, hiding the white label text.** On Android Chrome / Samsung Internet, `<button>` elements have a default `-webkit-tap-highlight-color` (light flash on tap) and a focus indicator that's a light/white background — and tag toggles, unlike the per-note popover's ✓/✗/🗑 buttons, don't close the popover on tap, so the focus state persists indefinitely. The "Translated" row in the user's screenshot showed the failure mode: white background, white "Translated" text invisible against it. Fixed by setting `-webkit-tap-highlight-color: transparent`, `outline: none`, and explicit `:active` / `:focus` background rules that stay within the dark theme.
-
-## [3.1.8] - 2026-05-05
-
-### Changed
-- **Popover side-stack (👁 + ↶) halved in width; textarea absorbs the freed space.** v3.1.7 sized the side stack to a full bottom-row button column (1/3 of the popover width), but that ate too much textarea space. Now the side stack is `(100% - 16px) / 6` — half a bottom-row button column — and the textarea grows by ~47 CSS px. The side stack is right-aligned with the delete button's right edge by design (both end at the popover's right padding), so the visual right-edge gridline still holds even though the column widths differ.
-
-## [3.1.7] - 2026-05-05
-
-### Changed
-- **Popover input row + button row now share a 3-column CSS grid.** Pre-3.1.7 the input row was flex with a fixed 44-CSS-px side stack (👁 / ↶), while the button row had three flex-1 buttons (~95 CSS px each). The eye/undo column ended up half the width of the trash button directly below it — visually cramped + grid misalignment. Now both rows use `grid-template-columns: 1fr 1fr 1fr` with the same 8 CSS px gap; the textarea spans columns 1-2 (matching confirm + cancel + their gap), the side stack occupies column 3 (matching delete). Eye/undo column width now equals trash column width — clean alignment, less cramped.
-
-## [3.1.6] - 2026-05-05
-
-### Changed
-- **SE corner triangle cap lowered 16 → 8 CSS px** to match v3.0 / v3.1.1 baseline visual. Cap now kicks in at box ≥ 48 CSS px (= MIN_BOX_SIZE_DISPLAY at vv=1) — for any normal-size box the triangle is the same 8-device-px affordance as pre-3.1.4. Sub-MIN states (transient at high pinch zoom) still shrink proportionally.
-
-## [3.1.5] - 2026-05-05
-
-### Changed
-- **SE corner triangle now caps at 16 CSS px.** v3.1.4 made the triangle proportional to box display size (`min(width, height) / 6`) without a cap, so on a 500-CSS-px box the triangle ballooned to ~83 CSS px and dominated the visual. Capped at 16 CSS px: cap kicks in at box ≥ 96 CSS px, below that the proportional shrink applies. At vv=1 the on-screen triangle is at most 16 device px — a visible affordance, smaller than the 32-device-px handle. v3.0/3.1.1 baseline of 8 device px is matched at MIN_BOX_SIZE_DISPLAY=48.
-
-## [3.1.4] - 2026-05-05
-
-### Changed
-- **SE corner triangle now scales with box display size, not pinch zoom.** v3.1.1 counter-scaled the triangle by `visualViewport.scale` (constant 8 device px on screen) — same mechanism as the handles — but per user feedback, on small boxes the constant-size triangle felt out of proportion. Now `renderNoteBox` writes a `--dmna-triangle-size` CSS custom property = `min(width, height) / 6` (display CSS px) on the active note element, and the `::after` border-width reads it via `var()`. The visual viewport magnifies both the box and the triangle by the same factor, so the on-screen ratio is constant ~16.7% across pinch zoom levels. At MIN_BOX_SIZE_DISPLAY=48 device px this works out to ~8 device px on screen, matching v3.1.1's default visual; bigger boxes get proportionally bigger triangles.
-
-## [3.1.3] - 2026-05-05
-
-### Changed
-- **`MIN_BOX_SIZE_DISPLAY` 24 → 48 device px** (1.5× the handle's device-px size). v3.1.2's 24 satisfied the no-overlap collision threshold (16 device px) plus a small buffer, but on a high-DPR phone (~1.5mm physical) the box still looked like a sliver squeezed between the four 32-device-px handles. 48 makes the box visually dominant. Image-space floor at vv=3, scale=0.4 is now 40 image px (was 20) — small glyphs ~40+ image px still markable, smallest details require more pinch zoom.
-
-## [3.1.2] - 2026-05-05
-
-### Fixed
-- **Box could shrink to a "dot" with overlapping touch zones.** v3.1.0/3.1.1 set `MIN_BOX_SIZE_DISPLAY = 5`, intending it as a CSS-px floor — but the clamp formula `(MIN / vvScale) / scale` actually produces a **constant device-px** on-screen footprint, not a constant CSS px. So the box could shrink to ~5 device px regardless of pinch zoom, well below the 16 device px threshold where adjacent counter-scaled handle touch zones overlap vertically (top handle's bottom edge meets bottom handle's top edge). User saw the four red debug zones merge into a tiny clump with the box reduced to a single visible dot in the middle.
-- Bumped to **24 device px** (16 collision threshold + 8 buffer; also matches v3.0's CSS-px baseline at vv.scale=1). Documented the formula's actual semantics in the constant's jsdoc and the clamp comment — the v3.1.0 phrasing implied CSS-px floor + claimed a 5 device-px collision threshold, both incorrect. The image-space floor still shrinks with pinch zoom (e.g., display:image scale 0.4 → 60 image px at vv=1, 30 at vv=2, 20 at vv=3), preserving v3.1's small-feature-marking workflow without letting the box become invisible.
-
-## [3.1.1] - 2026-05-05
-
-### Fixed
-- **SE/SW handle transform-origin** was wrong for the counter-scale system shipped in v3.1.0. The plan assumed each handle's anchor was a CSS keyword corner of the handle element (`top left` for SE, `top right` for SW), but those corners don't coincide with the box's actual bottom-right/bottom-left corners — because SE/SW handles are shifted up by half (`bottom: -16px`), the box's bottom edge passes through the **vertical middle** of those handle elements, not their tops. At small box sizes + high pinch zoom the bug placed the SE/SW anchors NORTH-WEST and NORTH-EAST of the box, so SE collapsed onto NW and SW onto NE — the user saw two visible handles at the top of the box instead of four around it. Fixed by setting SE to `transform-origin: 0% 50%` (left center) and SW to `100% 50%` (right center). NW/NE are unchanged (rewritten to the equivalent `100% 100%` / `0% 100%` percentage form for symmetry).
-
-### Changed
-- **SE corner triangle now counter-scales with pinch zoom.** The 8×8 CSS px `::after` resize-affordance was magnified by the visual viewport at high pinch zoom (e.g., 24 device px at vv.scale=3) and could fully cover a small box. Now reads the same `--dmna-handle-scale` CSS variable as the handles, anchored at `100% 100%` (the box's bottom-right corner — which the triangle is drawn FROM via its bottom-left border), so its visual footprint stays a constant ~8 device-px.
-- **Handle counter-scale is driven by a CSS custom property** (`--dmna-handle-scale` on the active note element) instead of per-handle inline `style.transform`. One property write per frame instead of four; pseudo-elements like `::after` couldn't be reached from JS otherwise. CSS rule `transform: scale(var(--dmna-handle-scale, 1))` covers all five elements (4 handles + ::after) with a sensible fallback of 1 if JS hasn't run yet.
-
 ## [3.1.0] - 2026-05-05
 
 ### Added
-- **Pinch-zoom counter-scaled corner handles.** Each of the 4 resize/move handles is now scaled by `1 / visualViewport.scale` per active frame, so the handle's visual footprint stays a constant ~32 device-px regardless of pinch zoom. Per-corner `transform-origin` (NW: bottom right, NE: bottom left, SE: top left, SW: top right) glues each handle's box-touching corner — so as the user pinches in, handles collapse TOWARD the box instead of away from it. Their CSS bounding box (and pointer-event hit region) shrinks proportionally, which is what unlocks the lower `MIN_BOX_SIZE_DISPLAY` below. Driven by `updateActiveHandleScales`, called from the existing RAF batch in `updateVisualViewportPositions` and pre-reveal in `showPopover` (same flicker-avoidance pattern as the popover itself).
+- **Pinch-zoom counter-scaled corner handles.** Each of the 4 resize/move handles is now scaled by `1 / visualViewport.scale` per active frame, so each handle's visual footprint stays a constant ~32 device-px across pinch-zoom levels. Per-corner `transform-origin` anchors each handle's box-touching point to the box's actual corner, so `scale()` collapses the handle TOWARD the box rather than away from it; the CSS bounding box (and pointer-event hit region) shrinks proportionally, which is what unlocks the device-px floor below. NW = `100% 100%`, NE = `0% 100%`, SE = `0% 50%`, SW = `100% 50%` — SE/SW are vertical-center anchors because those handles are shifted up by half (`bottom: -16px`), placing the box's bottom edge at their vertical middle. Driven by `updateActiveHandleScales`, which writes a single `--dmna-handle-scale` CSS custom property on the active note element (one property write per frame instead of four inline transforms) and is read by all four `.dmna-handle` elements. Called from `updateVisualViewportPositions`'s RAF batch and pre-reveal in `showPopover` (same flicker-avoidance pattern as the popover).
 - **`MIN_DRAG_CREATE_SIZE_DISPLAY = 24px`** constant for PC drag-to-create's "this drag was deliberate" threshold. Decoupled from `MIN_BOX_SIZE_DISPLAY` so lowering the runtime resize floor doesn't make accidental tiny mouse jitters spawn boxes.
 
 ### Changed
-- **`MIN_BOX_SIZE_DISPLAY`: 24 → 5 (CSS px at vv.scale=1).** User report: small features like single hiragana glyphs in tight word balloons (e.g. post #11304460's lower-right "ちょ") couldn't be marked because the 24px floor was larger than the glyph itself. The pre-3.1 floor was set by the four 32×32 fixed-size handles colliding below ~24 CSS px; now that handles counter-scale with pinch zoom, the collision constraint lives at the device-px level, and the CSS floor can drop. Intended workflow: pinch in over the small feature → drag handles to shrink past 24 CSS px → pinch back out, box stays small. At vv.scale=1 a 5px box is too small to grab — the workflow assumes pinch-zoom, which the resize clamp now reads on every move.
-- **Resize clamp accounts for `visualViewport.scale`.** `onInteractionMove`'s `minImg` formula is now `Math.max(MIN_BOX_SIZE_IMG, (MIN_BOX_SIZE_DISPLAY / vvScale) / scale)` — the display floor scales with pinch zoom, image-space safety floor (`MIN_BOX_SIZE_IMG = 8`) unchanged. At vv.scale=1 the math reduces to the v3.0 expression, preserving default behavior.
+- **`MIN_BOX_SIZE_DISPLAY` semantics changed: 24 CSS px → 48 device px.** User report: small features like single hiragana glyphs in tight word balloons (e.g. post #11304460's lower-right "ちょ") couldn't be marked because the pre-3.1 24-CSS-px floor grew to 72 device px at vv.scale=3 — pinch-zoom didn't help. The constant is now interpreted as a **device-px** floor (constant on-screen footprint across pinch zoom) via the new clamp expression `(MIN_BOX_SIZE_DISPLAY / vvScale) / scale`; the CSS-px floor and image-space floor both shrink with pinch zoom, so users can pinch in over a tiny feature, resize down, and pinch back out with the box staying small in image space. The chosen 48 device px is 1.5× the handle's device-px size — large enough that the box stays the visually dominant element of the active assembly rather than a sliver between four 32-device-px handles. Image-space floor at vv=3, scale=0.4 is 40 image px (vs 120 pre-3.1).
+- **Resize clamp accounts for `visualViewport.scale`.** `onInteractionMove`'s `minImg` formula is now `Math.max(MIN_BOX_SIZE_IMG, (MIN_BOX_SIZE_DISPLAY / vvScale) / scale)`. The image-space safety floor (`MIN_BOX_SIZE_IMG = 8`) is unchanged.
+- **SE corner triangle now scales with box display size.** The 8×8 CSS px `::after` resize-affordance was magnified by the visual viewport at high pinch zoom (e.g., 24 device px at vv.scale=3) and could fully cover a small box. Now `renderNoteBox` writes a `--dmna-triangle-size` CSS custom property = `min(width, height) / 6` (CSS px) on the active note element, capped at 8 CSS px — so the triangle stays an ~8-device-px affordance for any normal-size box (cap kicks in at box ≥ 48 CSS px = MIN_BOX_SIZE_DISPLAY at vv=1), and shrinks proportionally for sub-MIN states. The visual viewport magnifies both the box and the triangle by the same factor, keeping the on-screen ratio constant across zoom levels.
+- **Popover layout switched from flex to CSS grid** for clean column alignment between the input row (textarea + 👁/↶ side-stack) and the button row (✔/✖/🗑). Button row uses `grid-template-columns: 1fr 1fr 1fr`. Input row uses `1fr calc((100% - 16px) / 6)` — the side-stack column is half a bottom-row button width, right-aligned with the delete button's right edge; the textarea takes the remainder. (Earlier iterations during development tried a full-button-column side-stack but it ate too much textarea width; the half-column layout keeps the visual right-edge gridline while preserving textarea space.)
+- **Tag toggle row restructured to sidestep Android `<button>` rendering issues.** Some Android browsers (Chrome / Samsung Internet) paint a bright-white background on `<button>` tap/focus that overrode our CSS `background` and hid the white "Translated" label text — and unlike the per-note popover's ✓/✗/🗑 row, tag toggles don't close the popover on tap, so the focus state persisted. The row is now a non-interactive `<div class="dmna-tag-row">`; the click target is the inner pill switch only (`<button class="dmna-tag-switch-btn">` wrapping the existing 36×20 pill visual). The row never receives `:focus` / `:active` / tap-highlight. Hit area is ~52×36 around the pill — smaller than the row but acceptable for a popover used briefly during the Confirm flow. `is-on` / `is-disabled` classes moved to the row div; descendant selectors (e.g. `.dmna-tag-row.is-on .dmna-tag-switch`) updated accordingly.
 
 ## [3.0.1] - 2026-05-05
 
@@ -183,6 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The last release before PC drag support. Touch tap-to-create was the sole creation gesture; the click-to-toggle invariant was simple and unbroken. v2.5 restores this invariant on top of v2.4's structural cleanups.
 
+[3.1.0]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [3.0.1]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [3.0.0]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
 [2.6]: https://github.com/AkaringoP/JavaScripts/commits/main/MobileNoteAssist
