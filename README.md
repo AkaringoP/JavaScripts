@@ -15,7 +15,7 @@ A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 | **[Danbooru Insights](https://github.com/AkaringoP/Danbooru-Insights)** *(moved)* | Injects a GitHub-style contribution graph and advanced analytics dashboard into Danbooru profile pages. Now lives in its own dedicated repository. | [Install](https://github.com/AkaringoP/Danbooru-Insights/raw/build/danbooruinsights.user.js) |
 | **[Danbooru Next Random Post](./NextRandomPost)** | Navigates to a random post while preserving search query. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/NextRandomPost/NextRandomPost.user.js) |
 | **[Danbooru Locate in Gallery](./LocateInGallery)** | Finds the gallery page of the current post using O(1) calculation or parallel search. | [Install](https://github.com/AkaringoP/JavaScripts/raw/main/LocateInGallery/LocateInGallery.user.js) |
-| **[Danbooru Mobile Note Assist](./MobileNoteAssist)** | Assist creating notes on mobile with accurate scaling and touch-friendly controls. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/MobileNoteAssist/MobileNoteAssist.user.js) |
+| **[Danbooru Mobile Note Assist](https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist)** *(moved)* | Assist creating notes on mobile with accurate scaling and touch-friendly controls. Now lives in its own dedicated repository. | [Install](https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist/raw/main/MobileNoteAssist.user.js) |
 | **[Danbooru Grouping Tags](./GroupingTags)** | Advanced tag management system featuring visual grouping, character-first sorting, and Gist synchronization. | [Install](https://github.com/AkaringoP/JavaScripts/raw/build/groupingtags.user.js) |
 | **[Danbooru Post Timeline](./PostTimeline)** | Displays the upload timeline of a post — source platform publish date, media asset upload, and post creation — in Danbooru's Information section. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js) |
 | **[Danbooru Bottom-Up Tag Removal](./BottomUpTagRemoval)** | When you remove a tag on submit, offers to also remove its implied parent tags via a confirmation popover. Walks transitive implication chains. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/BottomUpTagRemoval/BottomUpTagRemoval.user.js) |
@@ -42,3 +42,6 @@ The compiled UserScript is output to `dist/*.user.js`.
 
 > **Danbooru Insights** has its own repository with its own build setup.
 > See [AkaringoP/Danbooru-Insights](https://github.com/AkaringoP/Danbooru-Insights) for instructions.
+
+> **Danbooru Mobile Note Assist** has its own repository.
+> See [AkaringoP/Danbooru-Mobile-Note-Assist](https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist).

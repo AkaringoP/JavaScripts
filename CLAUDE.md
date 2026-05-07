@@ -11,7 +11,7 @@ GitHub repository: `AkaringoP/JavaScripts`
 | DanbooruInsights | TS | Vite + vite-plugin-monkey | Contribution graph & analytics dashboard |
 | GroupingTags | TS | Vite + vite-plugin-monkey | Tag grouping |
 | LocateInGallery | JS | None (single file) | Gallery page location finder |
-| MobileNoteAssist | JS | None (single file) | Mobile note assistant |
+| MobileNoteAssist | JS | None (single file) | Mobile note assistant *(moved to AkaringoP/Danbooru-Mobile-Note-Assist — `.user.js` retained as transition stub for legacy install URL)* |
 | NextRandomPost | JS | None (single file) | Random post navigation |
 | PostTimeline | JS | None (single file) | Post timeline (source publish date, asset upload, post creation) |
 
