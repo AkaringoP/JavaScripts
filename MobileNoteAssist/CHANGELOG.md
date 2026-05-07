@@ -5,6 +5,11 @@ All notable changes to **Danbooru Mobile Note Assist** will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-05-07
+
+### Changed
+- **Repository migration.** Development moved to its own dedicated repository at `https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist`. Full git history preserved via `git subtree split`. This release embeds `@updateURL` / `@downloadURL` pointing to the new repository, so existing installations fetched from the legacy `JavaScripts/raw/main/MobileNoteAssist/MobileNoteAssist.user.js` URL will self-migrate to the new endpoint on the next Tampermonkey update check. No functional changes; the file body is byte-for-byte identical to v3.1.0 outside the metadata block + `SCRIPT_VERSION` constant.
+
 ## [3.1.0] - 2026-05-05
 
 ### Added
