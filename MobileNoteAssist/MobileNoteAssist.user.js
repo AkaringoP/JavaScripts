@@ -1,11 +1,14 @@
 // ==UserScript==
 // @name         Danbooru Mobile Note Assist
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.1.1
 // @description  Danbooru mobile note tool.
 // @author       AkaringoP
 // @match        *://danbooru.donmai.us/posts/*
 // @icon         https://danbooru.donmai.us/favicon.ico
+// @homepageURL  https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist
+// @updateURL    https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist/raw/main/MobileNoteAssist.user.js
+// @downloadURL  https://github.com/AkaringoP/Danbooru-Mobile-Note-Assist/raw/main/MobileNoteAssist.user.js
 // @grant        none
 // ==/UserScript==
 
@@ -25,7 +28,7 @@
    * @version for auto-update detection, while this constant is only for the
    * footer credit. Bump both together on any release.
    */
-  const SCRIPT_VERSION = '3.1.0';
+  const SCRIPT_VERSION = '3.1.1';
 
   /** @const {string} Key for local storage button vertical position. */
   const POS_KEY = 'dmna_btn_margin_y';
