@@ -20,7 +20,7 @@ yarn-error.log
 *.swp
 
 # Claude (tool config, not source code)
-CLAUDE.md
+# CLAUDE.md is tracked to share dev environment across devices
 CLAUDE.ko.md
 .claude/
 
