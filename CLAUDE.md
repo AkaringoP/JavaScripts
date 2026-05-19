@@ -14,6 +14,7 @@ GitHub repository: `AkaringoP/JavaScripts`
 | MobileNoteAssist | JS | None (single file) | Mobile note assistant *(moved to AkaringoP/Danbooru-Mobile-Note-Assist — `.user.js` retained as transition stub for legacy install URL)* |
 | NextRandomPost | JS | None (single file) | Random post navigation |
 | PostTimeline | JS | None (single file) | Post timeline (source publish date, asset upload, post creation) |
+| XSearchAndUpload | JS | None (single file) | Runs on x.com / twitter.com; Danbooru-presence bar under tweet images and one-click upload button |
 
 ## Common Environment
 - All scripts are Tampermonkey userscripts
