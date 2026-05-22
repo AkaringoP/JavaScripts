@@ -16,7 +16,7 @@
 // @resource     danbooru_icon https://github.com/danbooru/danbooru/raw/master/public/images/danbooru-logo.png
 // @connect      danbooru.donmai.us
 // @noframes
-// @version      1.0.0
+// @version      1.1.0
 // ==/UserScript==
 
 /* You must be logged into Danbooru for the search to work. */
@@ -25,7 +25,7 @@
 (function() {
   'use strict';
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   console.log(`[XDSU] v${VERSION} loaded`);
 
   // -------------- config --------------
@@ -75,6 +75,8 @@
   const MAX_ATTEMPTS = 5;
   const ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[tabindex="-1"]';
   const STATUS_RE = /\/status(?:es)?\/(\d+)/;
+  const GRID_ANCHOR_SELECTOR = 'a[href*="/status/"][href*="/photo/"]';
+  const PHOTO_INDEX_RE = /\/photo\/(\d+)/;
 
   // -------------- styles --------------
 
@@ -123,6 +125,21 @@
       display: block;
       border: none;
     }
+    button.xdsu-upload-btn {
+      border: none;
+      font: inherit;
+    }
+    .xdsu-grid-anchor { position: relative; }
+    .xdsu-grid-seg {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 6px;
+      border-radius: 0;
+      z-index: 4;
+    }
+    .xdsu-grid-anchor .xdsu-upload-btn { bottom: 10px; }
   `);
 
   // -------------- helpers --------------
@@ -301,7 +318,9 @@
     for (const article of articles) {
       processArticle(article);
     }
-    // Prune disconnected segment refs.
+  }
+
+  function pruneImageRefs() {
     for (let i = imageRefs.length - 1; i >= 0; i--) {
       if (!imageRefs[i].bar.isConnected) {
         imageRefs.splice(i, 1);
@@ -442,13 +461,112 @@
     return true;
   }
 
-  function attachUploadBtn(photoEl, info) {
-    const uploadUrl = buildUploadUrl(info.tweetUrl);
+  // -------------- media-grid scan --------------
 
-    const btn = document.createElement('a');
+  function scanMediaGrid() {
+    const anchors = document.querySelectorAll(GRID_ANCHOR_SELECTOR);
+    for (const anchor of anchors) {
+      processGridAnchor(anchor);
+    }
+  }
+
+  function processGridAnchor(anchor) {
+    // Inline photo carousel inside the tweet-detail article is handled by
+    // scanTweets; quoted-tweet thumbnails and the lightbox should be ignored.
+    if (anchor.closest(ARTICLE_SELECTOR)) {
+      return;
+    }
+    if (anchor.closest('div[role="link"]')) {
+      return;
+    }
+    if (anchor.closest('[aria-modal="true"]')) {
+      return;
+    }
+
+    const href = anchor.getAttribute('href');
+    if (!href) {
+      return;
+    }
+    const sm = href.match(STATUS_RE);
+    if (!sm) {
+      return;
+    }
+    const pm = href.match(PHOTO_INDEX_RE);
+    if (!pm) {
+      return;
+    }
+    const tweetId = sm[1];
+    const photoIndex = parseInt(pm[1], 10);
+    const key = `${tweetId}:${photoIndex}`;
+
+    if (anchor.dataset.xdsuGrid === key) {
+      return;
+    }
+
+    const img = anchor.querySelector('img');
+    if (!img || !img.src) {
+      return;
+    }
+    const imageHash = parseTwitterImageHash(img.src);
+    if (!imageHash) {
+      return;
+    }
+
+    // Recycled cell: same anchor, different tweet/photo. Clear our old DOM
+    // so a fresh segment is added below; stale imageRefs entries will be
+    // dropped by pruneImageRefs() on the next tick.
+    if (anchor.dataset.xdsuGrid && anchor.dataset.xdsuGrid !== key) {
+      anchor.querySelectorAll('.xdsu-grid-seg, .xdsu-upload-btn').forEach((el) => el.remove());
+    }
+
+    let tweetUrl;
+    try {
+      tweetUrl = new URL(href, 'https://x.com').href;
+    } catch {
+      tweetUrl = `https://x.com/i/web/status/${tweetId}`;
+    }
+
+    anchor.classList.add('xdsu-grid-anchor');
+
+    const seg = document.createElement('div');
+    seg.className = 'xdsu-bar-seg xdsu-grid-seg';
+    seg.style.backgroundColor = COLORS.searching;
+    seg.dataset.imageHash = imageHash;
+    seg.dataset.photoIndex = String(photoIndex);
+    anchor.appendChild(seg);
+
+    imageRefs.push({
+      tweetId,
+      imageHash,
+      photoIndex,
+      bar: seg,
+    });
+
+    attachUploadBtn(anchor, {tweetId, tweetUrl}, {asButton: true});
+    enqueueTweetIdSearch(tweetId);
+
+    // Set marker last so a failure earlier in the chain doesn't lock the
+    // cell out of retries on the next polling tick.
+    anchor.dataset.xdsuGrid = key;
+  }
+
+  function attachUploadBtn(photoEl, info, opts) {
+    const uploadUrl = buildUploadUrl(info.tweetUrl);
+    const asButton = !!(opts && opts.asButton);
+
+    let btn;
+    if (asButton) {
+      // Nested <a> inside the grid anchor is invalid HTML and breaks parent
+      // navigation. The click handler below calls GM_openInTab directly,
+      // so anchor semantics aren't needed.
+      btn = document.createElement('button');
+      btn.type = 'button';
+    } else {
+      btn = document.createElement('a');
+      btn.target = '_blank';
+      btn.href = uploadUrl;
+    }
     btn.className = 'xdsu-upload-btn';
-    btn.target = '_blank';
-    btn.href = uploadUrl;
 
     const icon = document.createElement('img');
     icon.title = 'Upload to Danbooru';
@@ -826,6 +944,8 @@
     }
     try {
       scanTweets();
+      scanMediaGrid();
+      pruneImageRefs();
       applyColors();
     } catch (e) {
       console.error('[XDSU] tick error', e);
