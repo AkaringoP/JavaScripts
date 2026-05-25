@@ -11,6 +11,8 @@
 // @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie.list
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      pixiv.net
 // @connect      public.api.bsky.app
 // @connect      fanbox.cc
@@ -76,7 +78,8 @@
   border-radius: 4px; font-size: 12px;
   white-space: nowrap; z-index: 1000; pointer-events: none;
 }
-.pt-tooltip:hover .pt-tip { display: block; }
+.pt-tooltip:hover .pt-tip,
+.pt-tooltip:focus-within .pt-tip { display: block; }
 .pt-tip-delta { margin-left: 0.4em; }
 .pt-tip-delta--red { color: #ff6b6b; }
 .pt-tip-delta--green { color: #51cf66; }
@@ -786,6 +789,52 @@
     }
   }
 
+  /** @const {string} Cache key prefix. v1 suffix allows future schema bumps. */
+  const CACHE_KEY_PREFIX = 'pt_cache_v1_';
+
+  /**
+   * Builds a stable cache key from a source descriptor.
+   * @param {{type: string, [key: string]: string}} source
+   * @return {string}
+   */
+  function buildCacheKey(source) {
+    switch (source.type) {
+      case 'bluesky':
+        return `${CACHE_KEY_PREFIX}bluesky:${source.handle}:${source.rkey}`;
+      case 'deviantart':
+        return `${CACHE_KEY_PREFIX}deviantart:${source.url}`;
+      default:
+        return `${CACHE_KEY_PREFIX}${source.type}:${source.id}`;
+    }
+  }
+
+  /**
+   * Caching wrapper around fetchSourceDate. Skips the network call when a
+   * prior successful result is in GM storage. Twitter is bypassed because
+   * its timestamp comes from a pure bitwise calculation — caching would
+   * waste storage without saving any work.
+   *
+   * Only successful results are cached. loginRequired/null results are NOT
+   * persisted so that logging in (or transient failures recovering) shows
+   * fresh data on the next visit instead of a stale unavailable state.
+   *
+   * No TTL: per-work publication dates on these platforms are immutable.
+   *
+   * @param {{type: string, [key: string]: string}} source
+   * @return {Promise<SourceDateResult>}
+   */
+  async function fetchSourceDateCached(source) {
+    if (source.type === 'twitter') return fetchSourceDate(source);
+
+    const cacheKey = buildCacheKey(source);
+    const cached = GM_getValue(cacheKey, null);
+    if (cached) return {date: cached};
+
+    const result = await fetchSourceDate(source);
+    if (result.date) GM_setValue(cacheKey, result.date);
+    return result;
+  }
+
   // ---------------------------------------------------------------------------
   // DOM
   // ---------------------------------------------------------------------------
@@ -807,6 +856,13 @@
     const wrapper = document.createElement('span');
     wrapper.className = 'pt-tooltip';
     wrapper.style.cursor = CLOCK_CURSOR;
+    // Make the tooltip reachable by keyboard (Tab) and tap (mobile). The
+    // `:focus-within` CSS rule shows the tooltip on focus; tabindex=0 makes
+    // the span focusable. aria-label exposes the absolute time to screen
+    // readers since the visible text is only the relative form.
+    wrapper.setAttribute('tabindex', '0');
+    wrapper.setAttribute('role', 'button');
+    wrapper.setAttribute('aria-label', absTime);
 
     // Visible text as a raw text node so callers can update it via firstChild.
     wrapper.appendChild(document.createTextNode(text));
@@ -1033,7 +1089,7 @@
     // Fetch both dates in parallel.
     const [assetDate, sourceResult] = await Promise.all([
       mediaAssetId ? fetchMediaAssetDate(mediaAssetId) : Promise.resolve(null),
-      fetchSourceDate(source),
+      fetchSourceDateCached(source),
     ]);
     const sourceDate = sourceResult.date;
     const loginOpts = sourceResult.loginRequired
