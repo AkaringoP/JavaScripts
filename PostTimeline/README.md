@@ -1,52 +1,74 @@
 # Danbooru Post Timeline
 
-Tracks the journey from source platform to Danbooru by showing when the artwork was originally published, when the media asset was uploaded, and when the post was created.
+A Tampermonkey userscript that shows the full timeline of a Danbooru post: when the artwork was originally published, when its image first arrived on Danbooru, and when this particular post was created.
 
-Three chronological entries are inserted into the Information section:
+[**Click here to install (v1.3)**](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js) — requires [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
 
-1. **Source platform** — when the artwork was originally published
-2. **Asset** — when the media asset was first uploaded to Danbooru
-3. **Post** — when the Danbooru post was created, replacing the default `Date:` label
+## What you see
 
-All three rows display relative time from now (e.g. `3 years ago`). Hover any entry to see the full absolute datetime and an abbreviated delta to the next stage (e.g. `12y before Asset`).
+The script adds three rows to a post's Information section, in chronological order:
 
-## Supported Platforms
+| Row | Meaning |
+| :--- | :--- |
+| **Source** | When the artwork was first published on its original platform (Pixiv, X, etc.) |
+| **Asset** | When the image file was first uploaded to Danbooru (could be by anyone, in any post) |
+| **Post** | When *this* Danbooru post was created (replaces the default `Date:` row) |
 
-| Platform | Method | Notes |
+Each row shows the time relative to now (`3 years ago`) and refreshes every 60 seconds so the values stay accurate as you read.
+
+Hover, tap, or `Tab` onto any row to reveal a tooltip with the exact timestamp and the gap to the next stage:
+
+```
+Pixiv:  15 years ago      →  2011-03-19 18:30:17 +0900  (12y before Asset)
+Asset:  3 years ago       →  2023-03-19 18:30:17 +0900  (3y before Post)
+Post:   41 minutes ago    →  2026-03-20 14:30:17 +0900
+```
+
+## Tooltip colors
+
+Delta gaps are color-coded to highlight two common scenarios at a glance:
+
+- **Red — sniper upload.** The post hit Danbooru within seconds of going up at the source. By default this triggers when *Source → Asset* is under 60 seconds **and** *Asset → Post* is under 15 seconds.
+- **Green — archive dig.** A much older artwork that finally landed on Danbooru. By default this triggers when *Source → Asset* is at least 30 days.
+- **No color** — anything in between (the normal case).
+
+The three thresholds are tunable — see [Configuration](#configuration) below if the defaults don't match your taste.
+
+## Supported source platforms
+
+| Platform | Login needed? | Notes |
 | :--- | :--- | :--- |
-| Pixiv | `/ajax/illust/{id}` API | R-18 works require Pixiv login |
-| X / Twitter | Snowflake ID bitwise extraction | No network request — pure client-side math |
-| Bluesky | `public.api.bsky.app` public API | Resolves handle → DID, then fetches post thread |
-| Fanbox | `api.fanbox.cc` API | Requires Fanbox login |
-| Fantia | `fantia.jp/api/v1` API | Requires Fantia login |
-| Nico Seiga | HTML scraping | Requires Niconico login |
-| Pawoo | Mastodon public API | No login required |
-| ArtStation | Public JSON API | No login required |
+| Pixiv | Only for R-18 works | |
+| X / Twitter | No | Timestamp is recovered from the tweet ID itself — no network call |
+| Bluesky | No | |
+| Fanbox | **Yes** | |
+| Fantia | **Yes** | |
+| Nico Seiga | **Yes** | |
+| Pawoo | No | |
+| ArtStation | No | |
+| DeviantArt | No | Mature-content works show *unavailable* |
 
-Posts with unsupported or missing source URLs are silently skipped.
+For login-gated platforms, the Source row says *login required* with a clickable link when it can't see your session. On Safari, Violentmonkey, and Greasemonkey — where the script can't read cross-site cookies — it shows *unavailable* instead, because logging in wouldn't help.
 
-## Install
+Posts whose source isn't listed above (or that don't have a source URL at all) are silently skipped — the script changes nothing on the page.
 
-1. Install [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
-2. **[Click here to install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js)**
-3. Confirm the installation in your extension.
+## Configuration
 
-## How It Works
+The defaults are sensible, so most users don't need to touch anything.
 
-- All three rows show relative time (e.g. `3 years ago`) and refresh every 60 seconds.
-- Hover to see a custom tooltip with the absolute datetime and a delta to the next stage (e.g. `2023-03-19 18:30:17 +0900 (12y before Asset)`).
-- Tooltip deltas are color-coded:
-  - **Red** — sniper detected (source → asset < 60s AND asset → post < 15s)
-  - **Green** — archive dig (source → asset ≥ 30 days)
-- Auth-required platforms (Fanbox, Fantia, Nico Seiga) show a "login required" link when not logged in. On browsers/extensions without `GM_cookie` support (Safari, Violentmonkey), these show "unavailable" instead.
+If you want to tweak the color rules, open the Tampermonkey extension menu (the toolbar icon) and click **Edit color thresholds…**. A small dialog lets you set:
 
-## Example
+- **Sniper Source → Asset** (seconds)
+- **Sniper Asset → Post** (seconds)
+- **Archive Source → Asset** (days)
 
-```
-Pixiv:  15 years ago          tooltip: "2011-03-19 18:30:17 +0900 (12y before Asset)"
-Asset:  3 years ago           tooltip: "2023-03-19 18:30:17 +0900 (3y before Post)"
-Post:   41 minutes ago        tooltip: "2026-03-20 14:30:17 +0900"
-```
+Press *Save* and the page reloads with the new thresholds applied. *Reset* fills the form with the built-in defaults but doesn't save until you confirm.
+
+## Performance notes
+
+- Source dates are cached after the first successful lookup, so revisiting a post you've already seen renders the timeline instantly with no network call.
+- Failed and *login required* states are intentionally **not** cached, so logging in (or a service recovering) shows fresh data on the next visit instead of a stale error.
+- In-flight network requests are cancelled when you navigate away mid-fetch, so the script never holds up Danbooru's normal Turbo navigation.
 
 ## License
 
