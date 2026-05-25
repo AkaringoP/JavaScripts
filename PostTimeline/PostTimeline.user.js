@@ -361,6 +361,79 @@
   // ---------------------------------------------------------------------------
 
   /**
+   * @typedef {Object} SourceDateResult
+   * @property {string|null} date - ISO 8601 date string, or null on failure.
+   * @property {boolean} [loginRequired] - True when the platform requires login.
+   * @property {string} [loginUrl] - Login page URL shown to the user.
+   */
+
+  /**
+   * @typedef {Object} GmResponse
+   * @property {boolean} ok - True for 2xx status.
+   * @property {number} status - HTTP status code.
+   * @property {string} text - Response body.
+   * @property {string} finalUrl - Final URL after any redirects.
+   */
+
+  /** @type {Array<{abort: function(): void}>} */
+  let activeRequests = [];
+
+  /**
+   * Promise wrapper for GM_xmlhttpRequest with abort support.
+   * Returns a handle that resolves to a GmResponse on success or null on
+   * network error / timeout. The returned `abort` function cancels the
+   * in-flight request and is registered on `activeRequests` so that
+   * cleanup() can cancel all pending requests on Turbo navigation.
+   *
+   * @param {string} url
+   * @param {{headers?: Object, label?: string}} [opts]
+   * @return {Promise<?GmResponse>}
+   */
+  function gmFetch(url, {headers = {}, label = ''} = {}) {
+    let handle;
+    const promise = new Promise((resolve) => {
+      handle = GM_xmlhttpRequest({
+        method: 'GET',
+        url,
+        headers,
+        timeout: 10000,
+        onload(res) {
+          resolve({
+            ok: res.status >= 200 && res.status < 300,
+            status: res.status,
+            text: res.responseText,
+            finalUrl: res.finalUrl ?? url,
+          });
+        },
+        onerror() {
+          console.warn(`[PostTimeline] ${label} request failed.`);
+          resolve(null);
+        },
+        ontimeout() {
+          console.warn(`[PostTimeline] ${label} request timed out.`);
+          resolve(null);
+        },
+      });
+    });
+    activeRequests.push({abort: () => handle?.abort?.()});
+    return promise;
+  }
+
+  /**
+   * Builds a SourceDateResult representing an auth-required failure.
+   * Returns the user-facing `loginRequired` form when GM_cookie is available
+   * (so a login link can be shown); otherwise returns a plain unavailable
+   * result, matching the existing behavior of each per-platform fetcher.
+   * @param {string} loginUrl
+   * @return {SourceDateResult}
+   */
+  function makeLoginResult(loginUrl) {
+    return HAS_GM_COOKIE
+      ? {date: null, loginRequired: true, loginUrl}
+      : {date: null};
+  }
+
+  /**
    * Fetches the media asset's created_at date from Danbooru's API.
    * @param {string} mediaAssetId
    * @return {Promise<string|null>}
@@ -380,33 +453,22 @@
   /**
    * Fetches the Pixiv illustration's createDate via GM_xmlhttpRequest.
    * @param {string} artworkId
-   * @return {Promise<string|null>}
+   * @return {Promise<SourceDateResult>}
    */
-  function fetchPixivDate(artworkId) {
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://www.pixiv.net/ajax/illust/${artworkId}`,
-        headers: {'Referer': 'https://www.pixiv.net/'},
-        timeout: 10000,
-        onload(res) {
-          try {
-            const data = JSON.parse(res.responseText);
-            resolve(!data.error && data.body ? (data.body.createDate ?? null) : null);
-          } catch {
-            resolve(null);
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] Pixiv API request failed.');
-          resolve(null);
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Pixiv API request timed out.');
-          resolve(null);
-        },
-      });
-    });
+  async function fetchPixivDate(artworkId) {
+    const res = await gmFetch(
+      `https://www.pixiv.net/ajax/illust/${artworkId}`,
+      {headers: {'Referer': 'https://www.pixiv.net/'}, label: 'Pixiv API'},
+    );
+    if (!res) return {date: null};
+    try {
+      const data = JSON.parse(res.text);
+      return {
+        date: !data.error && data.body ? (data.body.createDate ?? null) : null,
+      };
+    } catch {
+      return {date: null};
+    }
   }
 
   /**
@@ -423,70 +485,40 @@
   /**
    * Fetches a Bluesky post's creation date via the public AppView API.
    * Two-step process: resolve handle to DID, then fetch post thread.
+   * Handles that already start with `did:` skip the first step.
    * @param {string} handle - Bluesky handle or DID
    * @param {string} rkey - Post record key
    * @return {Promise<string|null>}
    */
-  function fetchBlueskyDate(handle, rkey) {
-    return new Promise((resolve) => {
-      const fetchPost = (did) => {
-        const uri = `at://${did}/app.bsky.feed.post/${rkey}`;
-        GM_xmlhttpRequest({
-          method: 'GET',
-          url: `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=0&parentHeight=0`,
-          timeout: 10000,
-          onload(res) {
-            try {
-              const data = JSON.parse(res.responseText);
-              resolve(data?.thread?.post?.record?.createdAt ?? null);
-            } catch {
-              resolve(null);
-            }
-          },
-          onerror() {
-            console.warn('[PostTimeline] Bluesky post fetch failed.');
-            resolve(null);
-          },
-          ontimeout() {
-            console.warn('[PostTimeline] Bluesky post fetch timed out.');
-            resolve(null);
-          },
-        });
-      };
-
-      // If handle is already a DID, skip resolution.
-      if (handle.startsWith('did:')) {
-        fetchPost(handle);
-        return;
+  async function fetchBlueskyDate(handle, rkey) {
+    let did = handle;
+    if (!handle.startsWith('did:')) {
+      const handleRes = await gmFetch(
+        `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`,
+        {label: 'Bluesky handle resolution'},
+      );
+      if (!handleRes || !handleRes.ok) return null;
+      try {
+        const data = JSON.parse(handleRes.text);
+        if (!data.did) return null;
+        did = data.did;
+      } catch {
+        return null;
       }
+    }
 
-      // Resolve handle to DID first.
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`,
-        timeout: 10000,
-        onload(res) {
-          try {
-            const data = JSON.parse(res.responseText);
-            if (data.did) {
-              fetchPost(data.did);
-            } else {
-              resolve(null);
-            }
-          } catch {
-            resolve(null);
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] Bluesky handle resolution failed.');
-          resolve(null);
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Bluesky handle resolution timed out.');
-          resolve(null);
-        },
-      });
-    });
+    const uri = `at://${did}/app.bsky.feed.post/${rkey}`;
+    const postRes = await gmFetch(
+      `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=0&parentHeight=0`,
+      {label: 'Bluesky post fetch'},
+    );
+    if (!postRes || !postRes.ok) return null;
+    try {
+      const data = JSON.parse(postRes.text);
+      return data?.thread?.post?.record?.createdAt ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -498,7 +530,7 @@
    * @return {Promise<string>} Cookie header value, or empty string on failure.
    */
   function readCookies(url) {
-    if (typeof GM_cookie === 'undefined' || !GM_cookie.list) {
+    if (!HAS_GM_COOKIE) {
       return Promise.resolve('');
     }
     return new Promise((resolve) => {
@@ -521,52 +553,31 @@
    */
   async function fetchFanboxDate(postId) {
     const cookieStr = await readCookies('https://www.fanbox.cc');
-
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://api.fanbox.cc/post.info?postId=${postId}`,
+    const res = await gmFetch(
+      `https://api.fanbox.cc/post.info?postId=${postId}`,
+      {
         headers: {
           'Origin': 'https://www.fanbox.cc',
           'Referer': 'https://www.fanbox.cc/',
           ...(cookieStr ? {'Cookie': cookieStr} : {}),
         },
-        timeout: 10000,
-        onload(res) {
-          if (res.status === 400 || res.status === 401 || res.status === 403) {
-            if (HAS_GM_COOKIE) {
-              resolve({
-                date: null,
-                loginRequired: true,
-                loginUrl: 'https://www.fanbox.cc/login',
-              });
-            } else {
-              resolve({date: null});
-            }
-            return;
-          }
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] Fanbox API returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          try {
-            const data = JSON.parse(res.responseText);
-            resolve({date: data.body?.publishedDatetime ?? null});
-          } catch {
-            resolve({date: null});
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] Fanbox API request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Fanbox API request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+        label: 'Fanbox API',
+      },
+    );
+    if (!res) return {date: null};
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      return makeLoginResult('https://www.fanbox.cc/login');
+    }
+    if (!res.ok) {
+      console.warn('[PostTimeline] Fanbox API returned status:', res.status);
+      return {date: null};
+    }
+    try {
+      const data = JSON.parse(res.text);
+      return {date: data.body?.publishedDatetime ?? null};
+    } catch {
+      return {date: null};
+    }
   }
 
   /**
@@ -593,64 +604,37 @@
    */
   async function fetchSeigaDate(illustId) {
     const cookieStr = await readCookies('https://seiga.nicovideo.jp');
-
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://seiga.nicovideo.jp/seiga/im${illustId}`,
-        ...(cookieStr ? {headers: {'Cookie': cookieStr}} : {}),
-        timeout: 10000,
-        onload(res) {
-          // Redirect to login page indicates auth required.
-          if (res.status === 401 || res.status === 403 ||
-              (res.finalUrl && res.finalUrl.includes('nicovideo.jp/login'))) {
-            if (HAS_GM_COOKIE) {
-              resolve({
-                date: null,
-                loginRequired: true,
-                loginUrl: 'https://account.nicovideo.jp/login',
-              });
-            } else {
-              resolve({date: null});
-            }
-            return;
-          }
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] Seiga page returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          // Extract date from <span class="created">2024年03月19日 18:30:17</span>
-          const createdMatch = res.responseText.match(
-            /<span[^>]+class="created"[^>]*>([^<]+)<\/span>/
-          );
-          if (!createdMatch) {
-            // Page loaded but no date found — likely redirected to login in body.
-            if (HAS_GM_COOKIE &&
-                (res.responseText.includes('nicovideo.jp/login') ||
-                 res.responseText.includes('account.nicovideo.jp'))) {
-              resolve({
-                date: null,
-                loginRequired: true,
-                loginUrl: 'https://account.nicovideo.jp/login',
-              });
-            } else {
-              resolve({date: null});
-            }
-            return;
-          }
-          resolve({date: parseSeigaDate(createdMatch[1].trim())});
-        },
-        onerror() {
-          console.warn('[PostTimeline] Seiga page request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Seiga page request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+    const res = await gmFetch(
+      `https://seiga.nicovideo.jp/seiga/im${illustId}`,
+      {
+        headers: cookieStr ? {'Cookie': cookieStr} : {},
+        label: 'Seiga page',
+      },
+    );
+    if (!res) return {date: null};
+    const loginUrl = 'https://account.nicovideo.jp/login';
+    // Redirect to login page indicates auth required.
+    if (res.status === 401 || res.status === 403 ||
+        res.finalUrl.includes('nicovideo.jp/login')) {
+      return makeLoginResult(loginUrl);
+    }
+    if (!res.ok) {
+      console.warn('[PostTimeline] Seiga page returned status:', res.status);
+      return {date: null};
+    }
+    // Extract date from <span class="created">2024年03月19日 18:30:17</span>
+    const createdMatch = res.text.match(
+      /<span[^>]+class="created"[^>]*>([^<]+)<\/span>/
+    );
+    if (!createdMatch) {
+      // Page loaded but no date found — likely redirected to login in body.
+      if (res.text.includes('nicovideo.jp/login') ||
+          res.text.includes('account.nicovideo.jp')) {
+        return makeLoginResult(loginUrl);
+      }
+      return {date: null};
+    }
+    return {date: parseSeigaDate(createdMatch[1].trim())};
   }
 
   /**
@@ -659,35 +643,22 @@
    * @param {string} hash - ArtStation project hash (alphanumeric).
    * @return {Promise<SourceDateResult>}
    */
-  function fetchArtStationDate(hash) {
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://www.artstation.com/projects/${hash}.json`,
-        timeout: 10000,
-        onload(res) {
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] ArtStation API returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          try {
-            const data = JSON.parse(res.responseText);
-            resolve({date: data.published_at ?? null});
-          } catch {
-            resolve({date: null});
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] ArtStation API request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] ArtStation API request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+  async function fetchArtStationDate(hash) {
+    const res = await gmFetch(
+      `https://www.artstation.com/projects/${hash}.json`,
+      {label: 'ArtStation API'},
+    );
+    if (!res) return {date: null};
+    if (!res.ok) {
+      console.warn('[PostTimeline] ArtStation API returned status:', res.status);
+      return {date: null};
+    }
+    try {
+      const data = JSON.parse(res.text);
+      return {date: data.published_at ?? null};
+    } catch {
+      return {date: null};
+    }
   }
 
   /**
@@ -698,41 +669,25 @@
    * @param {string} deviationUrl - Full URL of the DeviantArt deviation.
    * @return {Promise<SourceDateResult>}
    */
-  function fetchDeviantArtDate(deviationUrl) {
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://backend.deviantart.com/oembed?url=${encodeURIComponent(deviationUrl)}`,
-        timeout: 10000,
-        onload(res) {
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] DeviantArt oEmbed returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          try {
-            const data = JSON.parse(res.responseText);
-            if (!data.pubdate) {
-              resolve({date: null});
-              return;
-            }
-            // pubdate is RFC 2822 format: "Fri, 19 Mar 2024 18:30:17 GMT"
-            const parsed = new Date(data.pubdate);
-            resolve({date: isNaN(parsed.getTime()) ? null : parsed.toISOString()});
-          } catch {
-            resolve({date: null});
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] DeviantArt oEmbed request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] DeviantArt oEmbed request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+  async function fetchDeviantArtDate(deviationUrl) {
+    const res = await gmFetch(
+      `https://backend.deviantart.com/oembed?url=${encodeURIComponent(deviationUrl)}`,
+      {label: 'DeviantArt oEmbed'},
+    );
+    if (!res) return {date: null};
+    if (!res.ok) {
+      console.warn('[PostTimeline] DeviantArt oEmbed returned status:', res.status);
+      return {date: null};
+    }
+    try {
+      const data = JSON.parse(res.text);
+      if (!data.pubdate) return {date: null};
+      // pubdate is RFC 2822 format: "Fri, 19 Mar 2024 18:30:17 GMT"
+      const parsed = new Date(data.pubdate);
+      return {date: isNaN(parsed.getTime()) ? null : parsed.toISOString()};
+    } catch {
+      return {date: null};
+    }
   }
 
   /**
@@ -741,35 +696,21 @@
    * @param {string} statusId
    * @return {Promise<SourceDateResult>}
    */
-  function fetchPawooDate(statusId) {
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://pawoo.net/api/v1/statuses/${statusId}`,
-        timeout: 10000,
-        onload(res) {
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] Pawoo API returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          try {
-            const data = JSON.parse(res.responseText);
-            resolve({date: data.created_at ?? null});
-          } catch {
-            resolve({date: null});
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] Pawoo API request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Pawoo API request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+  async function fetchPawooDate(statusId) {
+    const res = await gmFetch(
+      `https://pawoo.net/api/v1/statuses/${statusId}`,
+      {label: 'Pawoo API'},
+    );
+    if (!res) return {date: null};
+    if (!res.ok) {
+      console.warn('[PostTimeline] Pawoo API returned status:', res.status);
+      return {date: null};
+    }
+    try {
+      return {date: JSON.parse(res.text).created_at ?? null};
+    } catch {
+      return {date: null};
+    }
   }
 
   /**
@@ -781,67 +722,36 @@
    */
   async function fetchFantiaDate(postId) {
     const cookieStr = await readCookies('https://fantia.jp');
-
-    return new Promise((resolve) => {
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url: `https://fantia.jp/api/v1/posts/${postId}`,
+    const res = await gmFetch(
+      `https://fantia.jp/api/v1/posts/${postId}`,
+      {
         headers: {
           'X-Requested-With': 'XMLHttpRequest',
           ...(cookieStr ? {'Cookie': cookieStr} : {}),
         },
-        timeout: 10000,
-        onload(res) {
-          if (res.status === 401 || res.status === 403) {
-            if (HAS_GM_COOKIE) {
-              resolve({
-                date: null,
-                loginRequired: true,
-                loginUrl: 'https://fantia.jp/sessions/signin',
-              });
-            } else {
-              resolve({date: null});
-            }
-            return;
-          }
-          if (res.status < 200 || res.status >= 300) {
-            console.warn('[PostTimeline] Fantia API returned status:', res.status);
-            resolve({date: null});
-            return;
-          }
-          try {
-            const data = JSON.parse(res.responseText);
-            const postedAt = data.post?.posted_at ?? null;
-            if (!postedAt) {
-              resolve({date: null});
-              return;
-            }
-            // posted_at is RFC 2822-like ("Fri, 20 Mar 2026 18:30:17 +0900").
-            // new Date() can parse this in all modern browsers.
-            const parsed = new Date(postedAt);
-            resolve({date: isNaN(parsed.getTime()) ? null : parsed.toISOString()});
-          } catch {
-            resolve({date: null});
-          }
-        },
-        onerror() {
-          console.warn('[PostTimeline] Fantia API request failed.');
-          resolve({date: null});
-        },
-        ontimeout() {
-          console.warn('[PostTimeline] Fantia API request timed out.');
-          resolve({date: null});
-        },
-      });
-    });
+        label: 'Fantia API',
+      },
+    );
+    if (!res) return {date: null};
+    if (res.status === 401 || res.status === 403) {
+      return makeLoginResult('https://fantia.jp/sessions/signin');
+    }
+    if (!res.ok) {
+      console.warn('[PostTimeline] Fantia API returned status:', res.status);
+      return {date: null};
+    }
+    try {
+      const data = JSON.parse(res.text);
+      const postedAt = data.post?.posted_at ?? null;
+      if (!postedAt) return {date: null};
+      // posted_at is RFC 2822-like ("Fri, 20 Mar 2026 18:30:17 +0900").
+      // new Date() can parse this in all modern browsers.
+      const parsed = new Date(postedAt);
+      return {date: isNaN(parsed.getTime()) ? null : parsed.toISOString()};
+    } catch {
+      return {date: null};
+    }
   }
-
-  /**
-   * @typedef {Object} SourceDateResult
-   * @property {string|null} date - ISO 8601 date string, or null on failure.
-   * @property {boolean} [loginRequired] - True when the platform requires login.
-   * @property {string} [loginUrl] - Login page URL shown to the user.
-   */
 
   /**
    * Dispatches to the appropriate source date fetcher based on source type.
@@ -851,7 +761,7 @@
   async function fetchSourceDate(source) {
     switch (source.type) {
       case 'pixiv':
-        return {date: await fetchPixivDate(source.id)};
+        return fetchPixivDate(source.id);
       case 'twitter':
         return {date: getTwitterTimestamp(source.id)};
       case 'bluesky':
@@ -1072,12 +982,18 @@
   /** @type {number} Generation counter to discard stale async results. */
   let initGeneration = 0;
 
-  /** Clears the periodic refresh interval set by init(). */
+  /**
+   * Clears the periodic refresh interval and cancels any in-flight requests
+   * started by init(). Called on Turbo navigation (turbo:before-visit) and
+   * at the start of each init() to ensure no stale state carries over.
+   */
   function cleanup() {
     if (refreshIntervalId !== null) {
       clearInterval(refreshIntervalId);
       refreshIntervalId = null;
     }
+    for (const req of activeRequests) req.abort();
+    activeRequests = [];
   }
 
   /**
