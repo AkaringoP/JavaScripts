@@ -1,0 +1,41 @@
+name: Update Upload Bounty data
+
+on:
+  schedule:
+    # 12h cron — actual cadence depends on data changes (no-op skip when
+    # UploadBountyMarks/data/bounty.json is byte-identical). See PLAN D9.
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'UploadBountyMarks/scripts/**'
+      - '.github/workflows/update-bounty.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build bounty.json
+        run: node UploadBountyMarks/scripts/build-bounty.mjs UploadBountyMarks/data/bounty.json
+
+      - name: Commit & push if changed
+        run: |
+          if git diff --quiet UploadBountyMarks/data/bounty.json; then
+            echo "no changes — skipping commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add UploadBountyMarks/data/bounty.json
+          git commit -m "data(uploadbountymarks): refresh bounty.json (run #${GITHUB_RUN_ID})"
+          git push
