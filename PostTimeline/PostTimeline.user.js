@@ -13,6 +13,7 @@
 // @grant        GM_cookie.list
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_registerMenuCommand
 // @connect      pixiv.net
 // @connect      public.api.bsky.app
 // @connect      fanbox.cc
@@ -83,6 +84,35 @@
 .pt-tip-delta { margin-left: 0.4em; }
 .pt-tip-delta--red { color: #ff6b6b; }
 .pt-tip-delta--green { color: #51cf66; }
+
+.pt-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10000;
+}
+.pt-popover {
+  background: #fff; color: #222;
+  border-radius: 6px; padding: 16px 20px;
+  min-width: 320px; max-width: 90vw;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  font-family: inherit; font-size: 13px;
+}
+.pt-popover h3 { margin: 0 0 12px; font-size: 15px; }
+.pt-popover-row { display: flex; align-items: center; margin: 8px 0; gap: 8px; }
+.pt-popover-row label { flex: 1; }
+.pt-popover-row input { width: 80px; padding: 3px 6px; box-sizing: border-box; }
+.pt-popover-row .pt-unit { width: 30px; color: #666; }
+.pt-popover-buttons {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 14px; padding-top: 10px;
+  border-top: 1px solid #eee;
+}
+.pt-popover-buttons button { padding: 4px 12px; cursor: pointer; }
+.pt-popover-note {
+  margin: 10px 0 0; padding: 6px 8px;
+  background: #f5f5f5; border-radius: 3px;
+  font-size: 11px; color: #666;
+}
 `;
 
   /**
@@ -155,10 +185,44 @@
   }
 
   /**
+   * Default delta-color thresholds. Users can override via the Tampermonkey
+   * menu ("Edit color thresholds…"), which writes to GM storage. Defaults
+   * are restored when the user clicks Reset in the popover.
+   * @const
+   */
+  const THRESHOLD_DEFAULTS = Object.freeze({
+    sniperSrcToAssetSec: 60,
+    sniperAssetToPostSec: 15,
+    archiveSrcToAssetDays: 30,
+  });
+
+  /** @const */
+  const THRESHOLD_KEYS = Object.freeze({
+    sniperSrcToAssetSec: 'pt_threshold_sniper_src_to_asset_sec',
+    sniperAssetToPostSec: 'pt_threshold_sniper_asset_to_post_sec',
+    archiveSrcToAssetDays: 'pt_threshold_archive_src_to_asset_days',
+  });
+
+  /**
+   * Reads the three delta-color thresholds from GM storage, falling back to
+   * defaults for any missing or invalid (non-positive number) entries.
+   * @return {{sniperSrcToAssetSec: number, sniperAssetToPostSec: number, archiveSrcToAssetDays: number}}
+   */
+  function readThresholds() {
+    const out = {};
+    for (const k of Object.keys(THRESHOLD_DEFAULTS)) {
+      const raw = GM_getValue(THRESHOLD_KEYS[k], THRESHOLD_DEFAULTS[k]);
+      const n = Number(raw);
+      out[k] = Number.isFinite(n) && n > 0 ? n : THRESHOLD_DEFAULTS[k];
+    }
+    return out;
+  }
+
+  /**
    * Determines tooltip delta colors for the Source and Asset rows.
-   * RED rule (combined):  Source→Asset < 60s AND Asset→Post < 15s → both red.
-   * GREEN rule (independent): Source→Asset ≥ 30 days → source green only.
-   * Otherwise no color is applied.
+   * RED rule (combined):  Source→Asset < sniperSrc AND Asset→Post < sniperAsset → both red.
+   * GREEN rule (independent): Source→Asset ≥ archiveSrc → source green only.
+   * Thresholds are read from GM storage with sensible defaults (60s, 15s, 30d).
    * @param {string} sourceDate - ISO 8601 source publication date.
    * @param {string} assetDate  - ISO 8601 media asset creation date.
    * @param {string} postDate   - ISO 8601 Danbooru post creation date.
@@ -170,17 +234,19 @@
     const assetToPostMs =
       new Date(postDate).getTime() - new Date(assetDate).getTime();
 
-    const MS_60S = 60 * 1000;
-    const MS_30D = 30 * 24 * 60 * 60 * 1000;
+    const t = readThresholds();
+    const sniperSrcMs = t.sniperSrcToAssetSec * 1000;
+    const sniperAssetMs = t.sniperAssetToPostSec * 1000;
+    const archiveSrcMs = t.archiveSrcToAssetDays * 24 * 60 * 60 * 1000;
 
     // Negative delta means source > asset or asset > post — treat as bad data, skip color.
     if (srcToAssetMs < 0 || assetToPostMs < 0) {
       return {sourceColor: null, assetColor: null};
     }
-    if (srcToAssetMs < MS_60S && assetToPostMs < 15 * 1000) {
+    if (srcToAssetMs < sniperSrcMs && assetToPostMs < sniperAssetMs) {
       return {sourceColor: 'red', assetColor: 'red'};
     }
-    if (srcToAssetMs >= MS_30D) {
+    if (srcToAssetMs >= archiveSrcMs) {
       return {sourceColor: 'green', assetColor: null};
     }
     return {sourceColor: null, assetColor: null};
@@ -836,6 +902,122 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Opens a modal popover for editing the three delta-color thresholds.
+   * Save persists to GM storage and reloads the page so the new colors
+   * take effect immediately. Cancel discards changes. Reset restores the
+   * built-in defaults (without saving — user must click Save to apply).
+   * Only one popover can be open at a time.
+   */
+  function openThresholdPopover() {
+    if (document.querySelector('.pt-overlay')) return;
+
+    const current = readThresholds();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pt-overlay';
+
+    const popover = document.createElement('div');
+    popover.className = 'pt-popover';
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-label', 'PostTimeline color thresholds');
+
+    const title = document.createElement('h3');
+    title.textContent = 'Edit color thresholds';
+    popover.appendChild(title);
+
+    const fields = [
+      {key: 'sniperSrcToAssetSec', label: 'Sniper Source → Asset',  unit: 'sec'},
+      {key: 'sniperAssetToPostSec', label: 'Sniper Asset → Post',   unit: 'sec'},
+      {key: 'archiveSrcToAssetDays', label: 'Archive Source → Asset', unit: 'day'},
+    ];
+    const inputs = {};
+    for (const f of fields) {
+      const row = document.createElement('div');
+      row.className = 'pt-popover-row';
+
+      const label = document.createElement('label');
+      label.textContent = f.label;
+      label.setAttribute('for', `pt-input-${f.key}`);
+
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.step = 'any';
+      input.id = `pt-input-${f.key}`;
+      input.value = String(current[f.key]);
+
+      const unit = document.createElement('span');
+      unit.className = 'pt-unit';
+      unit.textContent = f.unit;
+
+      row.append(label, input, unit);
+      popover.appendChild(row);
+      inputs[f.key] = input;
+    }
+
+    const note = document.createElement('p');
+    note.className = 'pt-popover-note';
+    note.textContent =
+      'Red: both deltas below the sniper thresholds. Green: Source→Asset at or above the archive threshold. Saving reloads the page.';
+    popover.appendChild(note);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'pt-popover-buttons';
+
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.textContent = 'Reset';
+    resetBtn.addEventListener('click', () => {
+      for (const f of fields) {
+        inputs[f.key].value = String(THRESHOLD_DEFAULTS[f.key]);
+      }
+    });
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => {
+      for (const f of fields) {
+        const n = Number(inputs[f.key].value);
+        if (Number.isFinite(n) && n > 0) {
+          GM_setValue(THRESHOLD_KEYS[f.key], n);
+        }
+      }
+      overlay.remove();
+      location.reload();
+    });
+
+    buttons.append(resetBtn, cancelBtn, saveBtn);
+    popover.appendChild(buttons);
+
+    // Backdrop click closes; clicks inside popover do not propagate.
+    overlay.addEventListener('click', () => overlay.remove());
+    popover.addEventListener('click', (e) => e.stopPropagation());
+
+    // Escape key closes.
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+
+    overlay.appendChild(popover);
+    document.body.appendChild(overlay);
+    inputs[fields[0].key].focus();
+  }
+
+  // ---------------------------------------------------------------------------
   // DOM
   // ---------------------------------------------------------------------------
 
@@ -1162,6 +1344,13 @@
   // Turbo lifecycle: clean up interval on navigation, re-init on load.
   document.addEventListener('turbo:before-visit', cleanup);
   document.addEventListener('turbo:load', init);
+
+  // Register a Tampermonkey menu entry for editing color thresholds.
+  // Guarded because GM_registerMenuCommand is not part of @grant none scripts
+  // and may be undefined in alternative userscript managers.
+  if (typeof GM_registerMenuCommand === 'function') {
+    GM_registerMenuCommand('Edit color thresholds…', openThresholdPopover);
+  }
 
   // Initial execution (direct page load without Turbo).
   init();
