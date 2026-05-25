@@ -85,33 +85,68 @@
 .pt-tip-delta--red { color: #ff6b6b; }
 .pt-tip-delta--green { color: #51cf66; }
 
+/* Threshold popover — light defaults; dark overrides scoped to
+   .pt-overlay[data-pt-theme="dark"] so Danbooru's body attribute toggle
+   only re-styles our own subtree. Dark palette mirrors Danbooru-Insights. */
 .pt-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.5);
   display: flex; align-items: center; justify-content: center;
   z-index: 10000;
 }
 .pt-popover {
-  background: #fff; color: #222;
+  background: #ffffff; color: #222222;
+  border: 1px solid #e1e4e8;
   border-radius: 6px; padding: 16px 20px;
   min-width: 320px; max-width: 90vw;
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
   font-family: inherit; font-size: 13px;
 }
-.pt-popover h3 { margin: 0 0 12px; font-size: 15px; }
+.pt-popover h3 { margin: 0 0 12px; font-size: 15px; color: #444444; }
 .pt-popover-row { display: flex; align-items: center; margin: 8px 0; gap: 8px; }
 .pt-popover-row label { flex: 1; }
-.pt-popover-row input { width: 80px; padding: 3px 6px; box-sizing: border-box; }
-.pt-popover-row .pt-unit { width: 30px; color: #666; }
+.pt-popover-row input {
+  width: 80px; padding: 3px 6px; box-sizing: border-box;
+  background: #ffffff; color: #222222;
+  border: 1px solid #dddddd; border-radius: 3px;
+}
+.pt-popover-row input:focus { outline: none; border-color: #007bff; }
+.pt-popover-row .pt-unit { width: 30px; color: #666666; }
 .pt-popover-buttons {
   display: flex; justify-content: flex-end; gap: 8px;
   margin-top: 14px; padding-top: 10px;
-  border-top: 1px solid #eee;
+  border-top: 1px solid #eeeeee;
 }
-.pt-popover-buttons button { padding: 4px 12px; cursor: pointer; }
+.pt-popover-buttons button {
+  padding: 4px 12px; cursor: pointer;
+  background: #f6f8fa; color: #222222;
+  border: 1px solid #dddddd; border-radius: 3px;
+}
+.pt-popover-buttons button:hover { background: #e9ecef; }
 .pt-popover-note {
   margin: 10px 0 0; padding: 6px 8px;
   background: #f5f5f5; border-radius: 3px;
-  font-size: 11px; color: #666;
+  font-size: 11px; color: #666666;
+}
+
+.pt-overlay[data-pt-theme="dark"] { background: rgba(0,0,0,0.6); }
+.pt-overlay[data-pt-theme="dark"] .pt-popover {
+  background: #1a1a2e; color: #e0e0e0;
+  border-color: #2e2e48;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+.pt-overlay[data-pt-theme="dark"] .pt-popover h3 { color: #d0d0d0; }
+.pt-overlay[data-pt-theme="dark"] .pt-popover-row input {
+  background: #22223a; color: #e0e0e0; border-color: #444466;
+}
+.pt-overlay[data-pt-theme="dark"] .pt-popover-row input:focus { border-color: #58a6ff; }
+.pt-overlay[data-pt-theme="dark"] .pt-popover-row .pt-unit { color: #aaaaaa; }
+.pt-overlay[data-pt-theme="dark"] .pt-popover-buttons { border-top-color: #2e2e48; }
+.pt-overlay[data-pt-theme="dark"] .pt-popover-buttons button {
+  background: #2a2a44; color: #cccccc; border-color: #444466;
+}
+.pt-overlay[data-pt-theme="dark"] .pt-popover-buttons button:hover { background: #3a3a55; }
+.pt-overlay[data-pt-theme="dark"] .pt-popover-note {
+  background: #22223a; color: #aaaaaa;
 }
 `;
 
@@ -919,6 +954,13 @@
 
     const overlay = document.createElement('div');
     overlay.className = 'pt-overlay';
+    // Mirror Danbooru's current theme so the popover blends in. The body
+    // attribute is maintained by Danbooru itself; we just read it once at
+    // open time. (No live-toggle support — closing and reopening picks up
+    // theme changes.)
+    if (document.body.getAttribute('data-current-user-theme') === 'dark') {
+      overlay.setAttribute('data-pt-theme', 'dark');
+    }
 
     const popover = document.createElement('div');
     popover.className = 'pt-popover';
