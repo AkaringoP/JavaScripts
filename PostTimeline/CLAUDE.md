@@ -21,6 +21,7 @@ Shows three chronological entries above the Size row:
 | Nico Seiga | HTML scraping of `<span class="created">` | Session cookie | `GM_cookie.list` for explicit cookie sending |
 | Pawoo | `pawoo.net/api/v1/statuses/{id}` public API | None | Mastodon instance |
 | ArtStation | `artstation.com/projects/{hash}.json` public API | None | Uses `published_at` field |
+| DeviantArt | `backend.deviantart.com/oembed` public oEmbed API | None | Uses `pubdate` field (RFC 2822); mature content shows "unavailable" |
 
 Unsupported source URLs cause the script to exit silently.
 

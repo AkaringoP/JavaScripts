@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Danbooru Post Timeline
 // @namespace    https://github.com/AkaringoP
-// @version      1.2
-// @description  Shows when an illustration was published on its source platform (Pixiv, X/Twitter, Bluesky, Fanbox, Fantia, Nico Seiga, Pawoo, ArtStation) and when it was first uploaded to Danbooru as a media asset.
+// @version      1.3
+// @description  Shows when an illustration was published on its source platform (Pixiv, X/Twitter, Bluesky, Fanbox, Fantia, Nico Seiga, Pawoo, ArtStation, DeviantArt) and when it was first uploaded to Danbooru as a media asset.
 // @author       AkaringoP
 // @license      MIT
 // @match        *://danbooru.donmai.us/posts/*
@@ -18,6 +18,7 @@
 // @connect      nicovideo.jp
 // @connect      pawoo.net
 // @connect      www.artstation.com
+// @connect      backend.deviantart.com
 // @run-at       document-end
 // ==/UserScript==
 
@@ -166,6 +167,10 @@
     const MS_60S = 60 * 1000;
     const MS_30D = 30 * 24 * 60 * 60 * 1000;
 
+    // Negative delta means source > asset or asset > post — treat as bad data, skip color.
+    if (srcToAssetMs < 0 || assetToPostMs < 0) {
+      return {sourceColor: null, assetColor: null};
+    }
     if (srcToAssetMs < MS_60S && assetToPostMs < 15 * 1000) {
       return {sourceColor: 'red', assetColor: 'red'};
     }
@@ -304,6 +309,14 @@
     );
     if (artStationMatch) {
       return {type: 'artstation', label: 'ArtStation', id: artStationMatch[1]};
+    }
+
+    // DeviantArt
+    // Pattern 1: www.deviantart.com/{user}/art/{slug}
+    // Pattern 2: fav.me/{code}  (short URL)
+    // Pattern 3: sta.sh/{code}  (Stash)
+    if (/\/\/(?:www\.)?deviantart\.com\/[^/]+\/art\/[^/?#]+|\/\/fav\.me\/[a-z0-9]+|\/\/sta\.sh\/[a-z0-9]+/i.test(sourceUrl)) {
+      return {type: 'deviantart', label: 'DeviantArt', url: sourceUrl};
     }
 
     // Pawoo (Mastodon instance)
@@ -678,6 +691,51 @@
   }
 
   /**
+   * Fetches a DeviantArt deviation's publication date via the public oEmbed API.
+   * No authentication required for public deviations.
+   * Mature-content deviations that require login are returned as unavailable
+   * (DeviantArt has no GM_cookie.list-based auth support).
+   * @param {string} deviationUrl - Full URL of the DeviantArt deviation.
+   * @return {Promise<SourceDateResult>}
+   */
+  function fetchDeviantArtDate(deviationUrl) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `https://backend.deviantart.com/oembed?url=${encodeURIComponent(deviationUrl)}`,
+        timeout: 10000,
+        onload(res) {
+          if (res.status < 200 || res.status >= 300) {
+            console.warn('[PostTimeline] DeviantArt oEmbed returned status:', res.status);
+            resolve({date: null});
+            return;
+          }
+          try {
+            const data = JSON.parse(res.responseText);
+            if (!data.pubdate) {
+              resolve({date: null});
+              return;
+            }
+            // pubdate is RFC 2822 format: "Fri, 19 Mar 2024 18:30:17 GMT"
+            const parsed = new Date(data.pubdate);
+            resolve({date: isNaN(parsed.getTime()) ? null : parsed.toISOString()});
+          } catch {
+            resolve({date: null});
+          }
+        },
+        onerror() {
+          console.warn('[PostTimeline] DeviantArt oEmbed request failed.');
+          resolve({date: null});
+        },
+        ontimeout() {
+          console.warn('[PostTimeline] DeviantArt oEmbed request timed out.');
+          resolve({date: null});
+        },
+      });
+    });
+  }
+
+  /**
    * Fetches a Pawoo (Mastodon) status's creation date via the public API.
    * No authentication required for public posts.
    * @param {string} statusId
@@ -808,6 +866,8 @@
         return fetchPawooDate(source.id);
       case 'artstation':
         return fetchArtStationDate(source.id);
+      case 'deviantart':
+        return fetchDeviantArtDate(source.url);
       default:
         return {date: null};
     }
@@ -1077,12 +1137,18 @@
     const assetTooltipOpts = {deltaText: null, color: null};
 
     if (sourceDate && assetDate) {
+      const srcToAssetMs =
+        new Date(assetDate).getTime() - new Date(sourceDate).getTime();
+      const srcDir = srcToAssetMs >= 0 ? 'before' : 'after';
       sourceTooltipOpts.deltaText =
-        `${formatDeltaAbbrev(sourceDate, assetDate)} before Asset`;
+        `${formatDeltaAbbrev(sourceDate, assetDate)} ${srcDir} Asset`;
     }
     if (assetDate && postDate) {
+      const assetToPostMs =
+        new Date(postDate).getTime() - new Date(assetDate).getTime();
+      const assetDir = assetToPostMs >= 0 ? 'before' : 'after';
       assetTooltipOpts.deltaText =
-        `${formatDeltaAbbrev(assetDate, postDate)} before Post`;
+        `${formatDeltaAbbrev(assetDate, postDate)} ${assetDir} Post`;
     }
     if (sourceDate && assetDate && postDate) {
       const colors = determineDeltaColors(sourceDate, assetDate, postDate);
