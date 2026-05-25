@@ -117,6 +117,9 @@
     if (diffHour < 24) return `about ${diffHour} hour${diffHour !== 1 ? 's' : ''} ago`;
     if (diffDay < 30) return `${diffDay} day${diffDay !== 1 ? 's' : ''} ago`;
     if (diffMonth < 12) return `about ${diffMonth} month${diffMonth !== 1 ? 's' : ''} ago`;
+    // diffMonth는 /30, diffYear는 /365 기준이라 두 단위가 일치하지 않는 구간
+    // (360–364일) 이 존재한다. 이 구간에서 "12 months" 가 표시되는 것을 막기 위해
+    // diffMonth >= 12 이지만 diffYear < 1 인 경우에도 month 단위로 fallback.
     if (diffYear < 1) return `about ${diffMonth} month${diffMonth !== 1 ? 's' : ''} ago`;
     return `about ${diffYear} year${diffYear !== 1 ? 's' : ''} ago`;
   }
@@ -966,7 +969,6 @@
       null,  // no delta (Post is the reference point)
       null
     );
-    wrapper.style.cursor = 'pointer';
     postTimeEl.after(wrapper);
 
     return wrapper;
