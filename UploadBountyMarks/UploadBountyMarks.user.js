@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UploadBountyMarks
 // @namespace    AkaringoP/JavaScripts
-// @version      0.1.0
+// @version      0.1.1
 // @description  Mark bounty artists (forum_topics/24186) on the Danbooru upload page
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -259,6 +259,36 @@
   }
 
   // --- Lifecycle (PostTimeline / BUTR D5 pattern) ----------------------------
+  // The tag-list is rendered behind Alpine.js `x-show`, which may not be
+  // mounted by the time `turbo:load` fires. We try once now, then keep a
+  // short-lived MutationObserver to retry on each DOM mutation until either
+  // the label lands or a safety timeout cuts us off.
+  const OBSERVER_TIMEOUT_MS = 5000;
+  let activeObserver = null;
+  let observerTimeoutId = null;
+
+  function tryInsertLabel(data) {
+    const match = lookupArtist(data);
+    if (!match) return false;
+    const label = buildLabel(match.tag, match.entry);
+    if (insertLabel(label)) {
+      console.info(LOG_PREFIX, 'label inserted', { tag: match.tag });
+      return true;
+    }
+    return false;
+  }
+
+  function stopObserver() {
+    if (activeObserver) {
+      activeObserver.disconnect();
+      activeObserver = null;
+    }
+    if (observerTimeoutId !== null) {
+      clearTimeout(observerTimeoutId);
+      observerTimeoutId = null;
+    }
+  }
+
   async function init() {
     injectStyles();
     const data = await getBountyData();
@@ -267,16 +297,19 @@
       console.info(LOG_PREFIX, 'bounty data has no artists yet');
       return;
     }
-    const match = lookupArtist(data);
-    if (!match) return;
-    const label = buildLabel(match.tag, match.entry);
-    if (insertLabel(label)) {
-      console.info(LOG_PREFIX, 'label inserted', { tag: match.tag });
-    }
+    if (tryInsertLabel(data)) return;
+
+    stopObserver();
+    activeObserver = new MutationObserver(() => {
+      if (tryInsertLabel(data)) stopObserver();
+    });
+    activeObserver.observe(document.body, { childList: true, subtree: true });
+    observerTimeoutId = setTimeout(stopObserver, OBSERVER_TIMEOUT_MS);
   }
 
   function cleanup() {
     removeLabel();
+    stopObserver();
   }
 
   document.addEventListener('turbo:load', init);
