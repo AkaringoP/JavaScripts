@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         UploadBountyMarks
+// @name         Danbooru Upload Bounty Marks
 // @namespace    AkaringoP/JavaScripts
-// @version      0.1.2
+// @version      0.1.3
 // @description  Mark bounty artists (forum_topics/24186) on the Danbooru upload page
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -51,6 +51,8 @@
   const LABEL_BOUNTY_CLASS = 'ubm-label-bounty';
   const LABEL_DISABLED_CLASS = 'ubm-disabled';
   const LABEL_STATE_DUP_CLASS = 'ubm-state-dup';
+  const LABEL_PENDING_CLASS = 'ubm-pending';
+  const LABEL_COMMIT_DELAY_MS = 200;
   const BUBBLE_BASE_CLASS = 'ubm-bubble';
   const TOAST_DUP_CLASS = 'ubm-bubble-dup';
   const CALLOUT_PPD_CLASS = 'ubm-bubble-ppd';
@@ -106,6 +108,19 @@
       color: var(--ubm-bounty-fg);
       cursor: default;
       opacity: 0.7;
+    }
+    /* New labels start in pending state to avoid a brief green-to-amber
+       color flicker. We commit (remove the class) after a short window
+       once dup/PPD state is settled. */
+    .ubm-label.ubm-pending {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .ubm-label-bounty {
+      /* Only opacity transitions. Background changes (green to amber when
+         dup is detected) must be instant so the user never sees a flash of
+         the wrong colour. */
+      transition: opacity 0.15s ease-out;
     }
     /* When the upload page already shows a Duplicate badge, the label tones
        down to amber so the user reads it as "bounty, but proceed with care"
@@ -341,12 +356,21 @@
   function buildLabel(tag, entry) {
     const postIds = entry.post_ids || [];
     const approvers = entry.approvers || [];
+    // Only the first label of a page visit needs the pending fade-in. Once
+    // we've committed, mid-cycle re-renders should be visible immediately.
+    const pendingClass = labelsCommitted ? '' : LABEL_PENDING_CLASS;
+    // Pre-apply the dup-state class so the first paint is already in the
+    // right colour. Without this the label briefly paints green and a later
+    // syncBountyDupState() flips it to amber via background transition,
+    // which the user sees as a flicker.
+    const dupClass = detectDuplicate() ? LABEL_STATE_DUP_CLASS : '';
     if (postIds.length === 0) {
       console.warn(LOG_PREFIX, 'entry has empty post_ids, link disabled', { tag });
       const span = document.createElement('span');
       span.className = [
-        LABEL_BASE_CLASS, LABEL_BOUNTY_CLASS, LABEL_DISABLED_CLASS, 'button-xs',
-      ].join(' ');
+        LABEL_BASE_CLASS, LABEL_BOUNTY_CLASS, LABEL_DISABLED_CLASS,
+        pendingClass, dupClass, 'button-xs',
+      ].filter(Boolean).join(' ');
       span.textContent = LABEL_TEXT;
       span.title = 'Bounty (no forum link available)';
       return span;
@@ -354,8 +378,8 @@
     const latestPostId = Math.max(...postIds);
     const anchor = document.createElement('a');
     anchor.className = [
-      LABEL_BASE_CLASS, LABEL_BOUNTY_CLASS, 'button-xs',
-    ].join(' ');
+      LABEL_BASE_CLASS, LABEL_BOUNTY_CLASS, pendingClass, dupClass, 'button-xs',
+    ].filter(Boolean).join(' ');
     anchor.href = `${FORUM_POST_BASE}/${latestPostId}`;
     anchor.target = '_blank';
     anchor.rel = 'noopener noreferrer';
@@ -384,21 +408,37 @@
   // --- Duplicate / PPD detection (PLAN D10 / D11, v0.1.2) --------------------
 
   /**
-   * Return the Duplicate badge anchor if Danbooru's upload form is warning
-   * about a non-pixel-perfect duplicate, else null.
-   * @return {?HTMLAnchorElement}
+   * Visibility test that catches `display:none`, zero-size, and detached
+   * elements. Danbooru sometimes keeps warning badges in the DOM but hidden
+   * (e.g. when a higher-priority badge supersedes them), and our naive
+   * querySelector would otherwise treat those as "present".
+   * @param {?Element} el
+   * @return {boolean}
    */
-  function detectDuplicate() {
-    return document.querySelector(DUP_BADGE_SELECTOR);
+  function isVisible(el) {
+    if (!el) return false;
+    if (typeof el.checkVisibility === 'function') return el.checkVisibility();
+    return el.offsetParent !== null;
   }
 
   /**
-   * Return the Pixel-Perfect Duplicate badge anchor if present, else null.
-   * Its href is the existing post's `/posts/<id>` permalink.
+   * Return the Duplicate badge anchor if Danbooru's upload form is warning
+   * about a non-pixel-perfect duplicate AND it's actually visible, else null.
+   * @return {?HTMLAnchorElement}
+   */
+  function detectDuplicate() {
+    const el = document.querySelector(DUP_BADGE_SELECTOR);
+    return isVisible(el) ? el : null;
+  }
+
+  /**
+   * Return the Pixel-Perfect Duplicate badge anchor if present and visible,
+   * else null. Its href is the existing post's `/posts/<id>` permalink.
    * @return {?HTMLAnchorElement}
    */
   function detectPpd() {
-    return document.querySelector(PPD_BADGE_SELECTOR);
+    const el = document.querySelector(PPD_BADGE_SELECTOR);
+    return isVisible(el) ? el : null;
   }
 
   /**
@@ -536,6 +576,11 @@
   const OBSERVER_TIMEOUT_MS = 5000;
   let activeObserver = null;
   let observerTimeoutId = null;
+  let commitTimeoutId = null;
+  // Sticky across mutations within a single page visit; reset in cleanup.
+  // Labels inserted after the first commit skip pending so a re-render
+  // mid-cycle doesn't make the label disappear again.
+  let labelsCommitted = false;
 
   function tryInsertLabel(data) {
     const match = lookupArtist(data);
@@ -556,6 +601,33 @@
     if (observerTimeoutId !== null) {
       clearTimeout(observerTimeoutId);
       observerTimeoutId = null;
+    }
+  }
+
+  /**
+   * Remove the `pending` class from every label, making them visible. Called
+   * once per init() after Alpine.js has had a chance to mount dup/PPD badges
+   * so the label fades in with its final colour rather than green-then-amber.
+   */
+  function commitLabel() {
+    labelsCommitted = true;
+    document
+        .querySelectorAll(`.${LABEL_PENDING_CLASS}`)
+        .forEach(el => el.classList.remove(LABEL_PENDING_CLASS));
+  }
+
+  function scheduleCommit() {
+    if (commitTimeoutId !== null) return;
+    commitTimeoutId = setTimeout(() => {
+      commitTimeoutId = null;
+      commitLabel();
+    }, LABEL_COMMIT_DELAY_MS);
+  }
+
+  function cancelScheduledCommit() {
+    if (commitTimeoutId !== null) {
+      clearTimeout(commitTimeoutId);
+      commitTimeoutId = null;
     }
   }
 
@@ -582,32 +654,53 @@
   function runOnce(data) {
     const ppd = detectPpd();
     if (ppd) {
-      // PPD has top priority: block uploads, hide bounty, suppress dup toast.
+      // PPD is terminal: block uploads, hide bounty, suppress dup toast.
+      // Once PPD is decided the page can't un-PPD itself, so we can stop.
       removeLabel();
       removeDuplicateToast();
       blockPpdUpload(ppd);
       return true;
     }
 
-    const bountyDone = !!data && tryInsertLabel(data);
-    if (detectDuplicate()) showDuplicateBubble();
+    if (data) tryInsertLabel(data);
+    // Duplicate bubble fires only on bounty pages — the value is "try a
+    // different image from the same bounty artist." On non-bounty pages
+    // Danbooru's own Duplicate badge is sufficient and our bubble would be
+    // redundant noise.
+    const hasBountyLabel = !!document.querySelector(`.${LABEL_BOUNTY_CLASS}`);
+    const dupActive = detectDuplicate();
+    if (hasBountyLabel && dupActive) {
+      showDuplicateBubble();
+    } else {
+      removeDuplicateToast();
+    }
     syncBountyDupState();
-    // Terminal only when bounty label has landed; dup toast is idempotent
-    // and PPD is handled above.
-    return bountyDone;
+    // Fast-commit: once a positive dup signal arrives we know the colour
+    // is settled, so reveal the label immediately instead of waiting for
+    // the 200ms safety timer. The negative case (no dup detected yet)
+    // still waits for the timer because we can't tell whether dup is
+    // truly absent or just hasn't mounted yet.
+    if (dupActive && !labelsCommitted) {
+      cancelScheduledCommit();
+      commitLabel();
+    }
+    // Don't short-circuit on bounty alone — bounty label often mounts before
+    // the Duplicate badge does. Returning true here would stop the observer
+    // and any later-mounting dup badge would never be detected. Always let
+    // the safety timeout end the observer.
+    return false;
   }
 
   async function init() {
     injectStyles();
 
-    // Early synchronous pass — start blocking PPD or showing dup toast
-    // before bounty.json fetch completes (it may be slow or fail).
+    // Early synchronous pass — start blocking PPD before bounty.json fetch
+    // completes (it may be slow or fail). Duplicate bubble is deferred to
+    // runOnce because it depends on whether a bounty label will exist.
     const earlyPpd = detectPpd();
     if (earlyPpd) {
       removeLabel();
       blockPpdUpload(earlyPpd);
-    } else if (detectDuplicate()) {
-      showDuplicateBubble();
     }
 
     const data = await getBountyData();
@@ -615,7 +708,14 @@
       console.info(LOG_PREFIX, 'bounty data has no artists yet');
     }
 
-    if (runOnce(data)) return;
+    if (runOnce(data)) {
+      // PPD path — no label to commit.
+      return;
+    }
+
+    // Schedule the label visibility commit after the Alpine.js mount window
+    // so the user doesn't see a brief green-to-amber flip.
+    scheduleCommit();
 
     // Alpine.js may mount badges/tag-list after turbo:load — observe and
     // retry per mutation. PPD/dup detection also benefits from this.
@@ -633,6 +733,8 @@
     clearPpdBlock();
     unwrapAllBadges();
     stopObserver();
+    cancelScheduledCommit();
+    labelsCommitted = false;
   }
 
   document.addEventListener('turbo:load', init);
