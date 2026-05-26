@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         UploadBountyMarks
 // @namespace    AkaringoP/JavaScripts
-// @version      0.1.1
+// @version      0.1.2
 // @description  Mark bounty artists (forum_topics/24186) on the Danbooru upload page
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
+// @icon         https://danbooru.donmai.us/favicon.ico
 // @grant        none
 // @run-at       document-end
 // @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyMarks/UploadBountyMarks.user.js
@@ -30,6 +31,15 @@
       'ul.tag-list li.selected a.tag-type-1[data-tag-name]';
   const SOURCE_INPUT_SELECTOR = 'input#post_source';
 
+  // v0.1.2 — Duplicate / PPD detection (PLAN D10 / D11).
+  const DUP_BADGE_SELECTOR =
+      'div.upload-warning-badges a.upload-duplicate-warning';
+  const PPD_BADGE_SELECTOR =
+      'div.upload-warning-badges a.upload-pixel-perfect-duplicate-warning';
+  const POST_BUTTON_PRIMARY_SELECTOR =
+      'form[action^="/uploads"] button[type="submit"]';
+  const POST_BUTTON_TEXT = 'Post';
+
   // Fallback URL extraction (mirrors cron-side regex; same semantics).
   const PIXIV_USER_RE = /pixiv\.net\/(?:en\/)?users\/(\d+)/i;
   const X_HANDLE_RE =
@@ -40,6 +50,19 @@
   const LABEL_BASE_CLASS = 'ubm-label';
   const LABEL_BOUNTY_CLASS = 'ubm-label-bounty';
   const LABEL_DISABLED_CLASS = 'ubm-disabled';
+  const LABEL_STATE_DUP_CLASS = 'ubm-state-dup';
+  const BUBBLE_BASE_CLASS = 'ubm-bubble';
+  const TOAST_DUP_CLASS = 'ubm-bubble-dup';
+  const CALLOUT_PPD_CLASS = 'ubm-bubble-ppd';
+  const PPD_BUTTON_MARK_ATTR = 'data-ubm-ppd-disabled';
+  const TOAST_DUP_MS = 5000;
+  const TOAST_DUP_MESSAGE =
+      "A post with this image already exists.\n" +
+      "Check the 'Similar' tab before uploading.";
+  const CALLOUT_PPD_MESSAGE =
+      'An identical post already exists.\n' +
+      'Upload is blocked.';
+  const BADGE_WRAP_CLASS = 'ubm-badge-wrap';
   const STYLE_TAG_ID = 'ubm-styles';
   const LOG_PREFIX = '[UBM]';
 
@@ -83,6 +106,106 @@
       color: var(--ubm-bounty-fg);
       cursor: default;
       opacity: 0.7;
+    }
+    /* When the upload page already shows a Duplicate badge, the label tones
+       down to amber so the user reads it as "bounty, but proceed with care"
+       rather than a clean "go" signal. CSS-variable override propagates to
+       hover/focus automatically. */
+    .ubm-label-bounty.ubm-state-dup {
+      --ubm-bounty-bg: #f59e0b;
+      --ubm-bounty-bg-hover: #d97706;
+      --ubm-focus-outline: #f59e0b;
+    }
+    body[data-current-user-theme="dark"] .ubm-label-bounty.ubm-state-dup {
+      --ubm-bounty-bg: #d97706;
+      --ubm-bounty-bg-hover: #b45309;
+      --ubm-focus-outline: #fbbf24;
+    }
+
+    /* v0.1.2 — Wrapper around the warning badge so the bubble can sit
+       absolutely above it without disturbing the badge's own layout. */
+    .ubm-badge-wrap {
+      position: relative;
+      display: inline-block;
+    }
+    .ubm-badge-wrap .ubm-bubble {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 0;
+      width: max-content;
+      max-width: 280px;
+      margin: 0;
+      z-index: 10;
+    }
+
+    /* v0.1.2 — Shared bubble shell (D10 toast + D11 callout) */
+    .ubm-bubble {
+      --ubm-bubble-bg: #f59e0b;
+      --ubm-bubble-fg: #ffffff;
+      position: relative;
+      display: block;
+      padding: 6px 22px 6px 10px;
+      background: var(--ubm-bubble-bg);
+      color: var(--ubm-bubble-fg);
+      border-radius: 5px;
+      font-size: 11.5px;
+      font-weight: 500;
+      line-height: 1.4;
+      white-space: pre-line;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    }
+    .ubm-bubble::after {
+      content: '';
+      position: absolute;
+      bottom: -6px;
+      left: 14px;
+      border: 6px solid transparent;
+      border-top-color: var(--ubm-bubble-bg);
+    }
+    .ubm-bubble-close {
+      position: absolute;
+      top: 2px;
+      right: 6px;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.85;
+    }
+    .ubm-bubble-close:hover { opacity: 1; }
+
+    /* Duplicate — amber, transient */
+    .ubm-bubble-dup {
+      --ubm-bubble-bg: #f59e0b;
+      animation: ubm-bubble-in 0.25s ease-out;
+    }
+    body[data-current-user-theme="dark"] .ubm-bubble-dup {
+      --ubm-bubble-bg: #d97706;
+    }
+    .ubm-bubble-dup.ubm-bubble-out {
+      animation: ubm-bubble-out 0.25s ease-in forwards;
+    }
+    @keyframes ubm-bubble-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes ubm-bubble-out {
+      from { opacity: 1; transform: translateY(0); }
+      to   { opacity: 0; transform: translateY(-6px); }
+    }
+
+    /* PPD — red, persistent */
+    .ubm-bubble-ppd {
+      --ubm-bubble-bg: #dc2626;
+    }
+    body[data-current-user-theme="dark"] .ubm-bubble-ppd {
+      --ubm-bubble-bg: #b91c1c;
+    }
+
+    /* Disabled Post button when PPD detected */
+    [${PPD_BUTTON_MARK_ATTR}] {
+      opacity: 0.5;
+      cursor: not-allowed !important;
+      pointer-events: none;
     }
   `;
 
@@ -258,6 +381,153 @@
         .forEach(el => el.remove());
   }
 
+  // --- Duplicate / PPD detection (PLAN D10 / D11, v0.1.2) --------------------
+
+  /**
+   * Return the Duplicate badge anchor if Danbooru's upload form is warning
+   * about a non-pixel-perfect duplicate, else null.
+   * @return {?HTMLAnchorElement}
+   */
+  function detectDuplicate() {
+    return document.querySelector(DUP_BADGE_SELECTOR);
+  }
+
+  /**
+   * Return the Pixel-Perfect Duplicate badge anchor if present, else null.
+   * Its href is the existing post's `/posts/<id>` permalink.
+   * @return {?HTMLAnchorElement}
+   */
+  function detectPpd() {
+    return document.querySelector(PPD_BADGE_SELECTOR);
+  }
+
+  /**
+   * Find the upload form's submit button. Try several structural selectors
+   * before falling back to text matching, so a future class rename does not
+   * break PPD blocking.
+   * @return {?HTMLButtonElement}
+   */
+  function findPostButton() {
+    const candidates = [
+      POST_BUTTON_PRIMARY_SELECTOR,
+      'form button[type="submit"]',
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ];
+    for (const sel of candidates) {
+      for (const btn of document.querySelectorAll(sel)) {
+        const label = (btn.textContent || btn.value || '').trim();
+        if (label === POST_BUTTON_TEXT) return btn;
+      }
+    }
+    // Last resort: any submit if there is only one.
+    const submits = document.querySelectorAll(
+        'form button[type="submit"], form input[type="submit"]');
+    return submits.length === 1 ? submits[0] : null;
+  }
+
+  /**
+   * Wrap a badge in a positioning anchor so a bubble can sit above it. The
+   * wrap is idempotent — re-wrapping just returns the existing wrap. We
+   * unwrap during cleanup() to leave the DOM as we found it.
+   * @param {!Element} badge
+   * @return {!HTMLElement}
+   */
+  function wrapBadgeForBubble(badge) {
+    const existing = badge.parentElement;
+    if (existing && existing.classList.contains(BADGE_WRAP_CLASS)) {
+      return existing;
+    }
+    const wrap = document.createElement('span');
+    wrap.className = BADGE_WRAP_CLASS;
+    existing.insertBefore(wrap, badge);
+    wrap.appendChild(badge);
+    return wrap;
+  }
+
+  function unwrapAllBadges() {
+    document.querySelectorAll(`.${BADGE_WRAP_CLASS}`).forEach(wrap => {
+      const badge = wrap.querySelector(
+          `${DUP_BADGE_SELECTOR}, ${PPD_BADGE_SELECTOR}`);
+      if (badge && wrap.parentElement) {
+        wrap.parentElement.insertBefore(badge, wrap);
+      }
+      wrap.remove();
+    });
+  }
+
+  function showDuplicateBubble() {
+    if (document.querySelector(`.${TOAST_DUP_CLASS}`)) return;
+    const badge = detectDuplicate();
+    if (!badge) return;
+    const wrap = wrapBadgeForBubble(badge);
+
+    const bubble = document.createElement('div');
+    bubble.className = `${BUBBLE_BASE_CLASS} ${TOAST_DUP_CLASS}`;
+    bubble.setAttribute('role', 'status');
+    bubble.setAttribute('aria-live', 'polite');
+    bubble.textContent = TOAST_DUP_MESSAGE;
+    const close = document.createElement('span');
+    close.className = 'ubm-bubble-close';
+    close.textContent = '×';
+    close.setAttribute('aria-hidden', 'true');
+    bubble.appendChild(close);
+
+    function dismiss() {
+      if (!bubble.isConnected) return;
+      bubble.classList.add('ubm-bubble-out');
+      setTimeout(() => bubble.remove(), 300);
+    }
+    bubble.addEventListener('click', dismiss);
+    setTimeout(dismiss, TOAST_DUP_MS);
+    wrap.appendChild(bubble);
+    console.info(LOG_PREFIX, 'duplicate bubble shown');
+  }
+
+  function removeDuplicateToast() {
+    document
+        .querySelectorAll(`.${TOAST_DUP_CLASS}`)
+        .forEach(el => el.remove());
+  }
+
+  /**
+   * Block uploads when a Pixel-Perfect Duplicate is detected.
+   * (a) disable the Post button, (b) place a persistent callout above the
+   * PPD badge itself (the badge already links to the existing post, so the
+   * callout doesn't repeat that link), (c) leave bounty hide to the init
+   * flow.
+   * @param {!HTMLAnchorElement} ppdBadge
+   */
+  function blockPpdUpload(ppdBadge) {
+    const button = findPostButton();
+    if (button && !button.hasAttribute(PPD_BUTTON_MARK_ATTR)) {
+      button.setAttribute(PPD_BUTTON_MARK_ATTR, '');
+      button.disabled = true;
+    } else if (!button) {
+      console.warn(LOG_PREFIX, 'PPD: post button not found, callout only');
+    }
+
+    if (document.querySelector(`.${CALLOUT_PPD_CLASS}`)) return;
+
+    const wrap = wrapBadgeForBubble(ppdBadge);
+    const callout = document.createElement('div');
+    callout.className = `${BUBBLE_BASE_CLASS} ${CALLOUT_PPD_CLASS}`;
+    callout.setAttribute('role', 'alert');
+    callout.textContent = CALLOUT_PPD_MESSAGE;
+    wrap.appendChild(callout);
+    console.info(LOG_PREFIX, 'PPD block applied');
+  }
+
+  function clearPpdBlock() {
+    document.querySelectorAll(`[${PPD_BUTTON_MARK_ATTR}]`).forEach(btn => {
+      btn.removeAttribute(PPD_BUTTON_MARK_ATTR);
+      btn.disabled = false;
+    });
+    document
+        .querySelectorAll(`.${CALLOUT_PPD_CLASS}`)
+        .forEach(el => el.remove());
+  }
+
   // --- Lifecycle (PostTimeline / BUTR D5 pattern) ----------------------------
   // The tag-list is rendered behind Alpine.js `x-show`, which may not be
   // mounted by the time `turbo:load` fires. We try once now, then keep a
@@ -289,19 +559,69 @@
     }
   }
 
+  /**
+   * Per-tick orchestrator. Returns true once at least one terminal action has
+   * happened (PPD block, or bounty+dup decisions made), so the observer can
+   * stop. PPD is the highest-priority signal: if present, bounty is hidden
+   * and dup toast is suppressed (PPD already states the strongest case).
+   * @param {?Object} data
+   * @return {boolean}
+   */
+  /**
+   * Sync the Bounty label's `ubm-state-dup` modifier to whether the page
+   * currently shows a Duplicate badge. The modifier overrides the green
+   * CSS-variable palette with amber so the user reads bounty + dup as
+   * "proceed with care" instead of a clean "go".
+   */
+  function syncBountyDupState() {
+    const label = document.querySelector(`.${LABEL_BOUNTY_CLASS}`);
+    if (!label) return;
+    label.classList.toggle(LABEL_STATE_DUP_CLASS, !!detectDuplicate());
+  }
+
+  function runOnce(data) {
+    const ppd = detectPpd();
+    if (ppd) {
+      // PPD has top priority: block uploads, hide bounty, suppress dup toast.
+      removeLabel();
+      removeDuplicateToast();
+      blockPpdUpload(ppd);
+      return true;
+    }
+
+    const bountyDone = !!data && tryInsertLabel(data);
+    if (detectDuplicate()) showDuplicateBubble();
+    syncBountyDupState();
+    // Terminal only when bounty label has landed; dup toast is idempotent
+    // and PPD is handled above.
+    return bountyDone;
+  }
+
   async function init() {
     injectStyles();
-    const data = await getBountyData();
-    if (!data) return;
-    if (!data.artists || Object.keys(data.artists).length === 0) {
-      console.info(LOG_PREFIX, 'bounty data has no artists yet');
-      return;
-    }
-    if (tryInsertLabel(data)) return;
 
+    // Early synchronous pass — start blocking PPD or showing dup toast
+    // before bounty.json fetch completes (it may be slow or fail).
+    const earlyPpd = detectPpd();
+    if (earlyPpd) {
+      removeLabel();
+      blockPpdUpload(earlyPpd);
+    } else if (detectDuplicate()) {
+      showDuplicateBubble();
+    }
+
+    const data = await getBountyData();
+    if (data && (!data.artists || Object.keys(data.artists).length === 0)) {
+      console.info(LOG_PREFIX, 'bounty data has no artists yet');
+    }
+
+    if (runOnce(data)) return;
+
+    // Alpine.js may mount badges/tag-list after turbo:load — observe and
+    // retry per mutation. PPD/dup detection also benefits from this.
     stopObserver();
     activeObserver = new MutationObserver(() => {
-      if (tryInsertLabel(data)) stopObserver();
+      if (runOnce(data)) stopObserver();
     });
     activeObserver.observe(document.body, { childList: true, subtree: true });
     observerTimeoutId = setTimeout(stopObserver, OBSERVER_TIMEOUT_MS);
@@ -309,6 +629,9 @@
 
   function cleanup() {
     removeLabel();
+    removeDuplicateToast();
+    clearPpdBlock();
+    unwrapAllBadges();
     stopObserver();
   }
 
