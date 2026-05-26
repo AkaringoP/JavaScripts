@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Upload Bounty Marks
 // @namespace    AkaringoP/JavaScripts
-// @version      0.1.3
+// @version      0.1.4
 // @description  Mark bounty artists (forum_topics/24186) on the Danbooru upload page
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -67,6 +67,17 @@
   const BADGE_WRAP_CLASS = 'ubm-badge-wrap';
   const STYLE_TAG_ID = 'ubm-styles';
   const LOG_PREFIX = '[UBM]';
+
+  // Temporary debug logging for the colour-flicker investigation (v0.1.4).
+  // Toggle to false to silence. Remove the helper entirely once the issue
+  // is resolved.
+  const DEBUG_FLICKER = true;
+  let debugT0 = 0;
+  function dlog(stage, meta = {}) {
+    if (!DEBUG_FLICKER) return;
+    const t = Math.round(performance.now() - debugT0);
+    console.log(`[UBM debug] T+${t}ms`, stage, meta);
+  }
 
   const GLOBAL_CSS = `
     .ubm-label {
@@ -363,7 +374,15 @@
     // right colour. Without this the label briefly paints green and a later
     // syncBountyDupState() flips it to amber via background transition,
     // which the user sees as a flicker.
-    const dupClass = detectDuplicate() ? LABEL_STATE_DUP_CLASS : '';
+    const dupBadge = detectDuplicate();
+    const dupClass = dupBadge ? LABEL_STATE_DUP_CLASS : '';
+    dlog('buildLabel', {
+      tag,
+      labelsCommitted,
+      dupActive: !!dupBadge,
+      willHavePending: !!pendingClass,
+      willHaveDup: !!dupClass,
+    });
     if (postIds.length === 0) {
       console.warn(LOG_PREFIX, 'entry has empty post_ids, link disabled', { tag });
       const span = document.createElement('span');
@@ -392,10 +411,15 @@
     const anchor = document.querySelector(ANCHOR_SELECTOR);
     if (!anchor) {
       console.warn(LOG_PREFIX, 'anchor container not found', ANCHOR_SELECTOR);
+      dlog('insertLabel:no-anchor');
       return false;
     }
-    if (anchor.querySelector(`.${LABEL_BOUNTY_CLASS}`)) return false;
+    if (anchor.querySelector(`.${LABEL_BOUNTY_CLASS}`)) {
+      dlog('insertLabel:already-present');
+      return false;
+    }
     anchor.appendChild(labelEl);
+    dlog('insertLabel:appended', { className: labelEl.className });
     return true;
   }
 
@@ -610,6 +634,8 @@
    * so the label fades in with its final colour rather than green-then-amber.
    */
   function commitLabel() {
+    const pendingCount = document.querySelectorAll(`.${LABEL_PENDING_CLASS}`).length;
+    dlog('commitLabel', { pendingCount, alreadyCommitted: labelsCommitted });
     labelsCommitted = true;
     document
         .querySelectorAll(`.${LABEL_PENDING_CLASS}`)
@@ -647,11 +673,26 @@
    */
   function syncBountyDupState() {
     const label = document.querySelector(`.${LABEL_BOUNTY_CLASS}`);
-    if (!label) return;
-    label.classList.toggle(LABEL_STATE_DUP_CLASS, !!detectDuplicate());
+    if (!label) {
+      dlog('syncDup:no-label');
+      return;
+    }
+    const dupActive = !!detectDuplicate();
+    const hadAmber = label.classList.contains(LABEL_STATE_DUP_CLASS);
+    label.classList.toggle(LABEL_STATE_DUP_CLASS, dupActive);
+    if (hadAmber !== dupActive) {
+      dlog('syncDup:toggled', { from: hadAmber, to: dupActive });
+    }
   }
 
   function runOnce(data) {
+    const dupAtEntry = !!detectDuplicate();
+    const labelAtEntry = !!document.querySelector(`.${LABEL_BOUNTY_CLASS}`);
+    dlog('runOnce:entry', {
+      dupAtEntry,
+      labelAtEntry,
+      labelsCommitted,
+    });
     const ppd = detectPpd();
     if (ppd) {
       // PPD is terminal: block uploads, hide bounty, suppress dup toast.
@@ -659,6 +700,7 @@
       removeLabel();
       removeDuplicateToast();
       blockPpdUpload(ppd);
+      dlog('runOnce:ppd-terminal');
       return true;
     }
 
@@ -681,6 +723,7 @@
     // still waits for the timer because we can't tell whether dup is
     // truly absent or just hasn't mounted yet.
     if (dupActive && !labelsCommitted) {
+      dlog('runOnce:fast-commit');
       cancelScheduledCommit();
       commitLabel();
     }
@@ -692,6 +735,8 @@
   }
 
   async function init() {
+    debugT0 = performance.now();
+    dlog('init:start', { url: location.pathname });
     injectStyles();
 
     // Early synchronous pass — start blocking PPD before bounty.json fetch
@@ -721,10 +766,14 @@
     // retry per mutation. PPD/dup detection also benefits from this.
     stopObserver();
     activeObserver = new MutationObserver(() => {
+      dlog('mutation:observed');
       if (runOnce(data)) stopObserver();
     });
     activeObserver.observe(document.body, { childList: true, subtree: true });
-    observerTimeoutId = setTimeout(stopObserver, OBSERVER_TIMEOUT_MS);
+    observerTimeoutId = setTimeout(() => {
+      dlog('observer:timeout');
+      stopObserver();
+    }, OBSERVER_TIMEOUT_MS);
   }
 
   function cleanup() {
