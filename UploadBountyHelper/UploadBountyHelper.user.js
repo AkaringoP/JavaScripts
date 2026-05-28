@@ -13,8 +13,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
 // @run-at       document-end
-// @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/UploadBountyHelper.user.js
-// @downloadURL  https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/UploadBountyHelper.user.js
+// @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/main/UploadBountyHelper/UploadBountyHelper.user.js
+// @downloadURL  https://raw.githubusercontent.com/AkaringoP/JavaScripts/main/UploadBountyHelper/UploadBountyHelper.user.js
 // ==/UserScript==
 
 (function() {
@@ -27,9 +27,11 @@
   // modules (PLAN D13).
 
   // --- Shared constants -----------------------------------------------------
-  // v0.1 BOUNTY_DATA_URL points at the feature branch (Resolved 22). Switch to
-  // `main` in Phase v2.5.1 alongside the @updateURL/@downloadURL above.
-  const BOUNTY_DATA_URL = 'https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/data/bounty.json';
+  // BOUNTY_DATA_URL points at main. The GitHub Actions workflow at
+  // .github/workflows/update-bounty.yml runs `build-bounty.mjs` every 8h and
+  // auto-commits a refreshed bounty.json to main (Resolved 22; switched from
+  // the feature branch to main in v1.0.0 release / Phase v2.5.1).
+  const BOUNTY_DATA_URL = 'https://raw.githubusercontent.com/AkaringoP/JavaScripts/main/UploadBountyHelper/data/bounty.json';
   const FORUM_POST_BASE = 'https://danbooru.donmai.us/forum_posts';
   const SCHEMA_VERSION = 1;
   // Bumped at v0.3 — v1 caches predate Resolved 36's strikethrough split and
