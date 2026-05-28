@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" role="img" aria-label="Danbooru upload bounty">
+  <title>Danbooru Upload Bounty</title>
+  <path fill="#4ade80" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M12 2 L21 7 L12 12 L3 7 Z"/>
+  <path fill="#22c55e" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M3 7 L3 17 L12 22 L12 12 Z"/>
+  <path fill="#16a34a" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M21 7 L21 17 L12 22 L12 12 Z"/>
+  <path fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M7 12.7 L10.5 16.2 L17 9.2"/>
+</svg>

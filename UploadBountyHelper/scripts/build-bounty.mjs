@@ -1,0 +1,708 @@
+#!/usr/bin/env node
+// UploadBountyHelper — bounty.json builder
+// Node 20+, ES module, zero npm dependencies (uses built-in fetch).
+// Usage: node build-bounty.mjs <output_path>
+// See PLAN.md D1 pipeline (5 steps) and Resolved Decisions 14–19.
+
+import { writeFile, readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+
+const TOPIC_ID = 24186;
+const APPROVER_LEVEL_THRESHOLD = 37;
+const FORUM_LIMIT = 1000;
+const USERS_LIMIT = 1000;
+const ALIAS_LIMIT = 1000;
+const ARTISTS_LIMIT = 1000;
+const TAGS_LIMIT = 1000;
+const ALIAS_CHUNK_SIZE = 100;
+const TAGS_CHUNK_SIZE = 100;
+const SCHEMA_VERSION = 1;
+// Recent-activity window for `post_count_30d_delta` (Resolved 45). Rolling
+// 30 days from build time — meaning drifts slightly per cron slot, accepted
+// trade-off for "active in the last month" signal precision.
+const POSTS_COUNT_WINDOW_DAYS = 30;
+const POSTS_COUNT_CONCURRENCY = 5;
+const ARTISTS_FETCH_CONCURRENCY = 5;
+// v0.3.6 input-safety caps. Danbooru tag names are spec-limited to ~100 chars
+// and usernames to ~20; the buffers below let normal entries through while
+// rejecting adversarial wikilink targets or malformed API responses that
+// could otherwise bloat bounty.json. Mismatched values are silently dropped
+// (logged once) rather than crashing the build.
+const MAX_TAG_NAME_LENGTH = 170;
+const MAX_USER_NAME_LENGTH = 50;
+const SOURCE_URL = `https://danbooru.donmai.us/forum_topics/${TOPIC_ID}`;
+const API_BASE = 'https://danbooru.donmai.us';
+const USER_AGENT = 'UploadBountyHelper-build/0.4 (github.com/AkaringoP/JavaScripts)';
+
+const PIXIV_USER_RE = /pixiv\.net\/(?:en\/)?users\/(\d+)/i;
+const PIXIV_USER_RE_G = /pixiv\.net\/(?:en\/)?users\/(\d+)/gi;
+// Match `x.com/<handle>` / `twitter.com/<handle>` but not subdomains. The
+// boundary `[^.\w]` excludes letters and dots (avoids `hellox.com` and
+// `sub.x.com`) while allowing `/` and `:` (the typical scheme separators).
+const X_HANDLE_RE = /(?:^|[^.\w])(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})(?:[/?#]|$)/i;
+const X_HANDLE_RE_G = /(?:^|[^.\w])(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})(?:[/?#]|$)/gi;
+// `x.com/i/user/<numeric>` is an internal redirect form, not a real handle.
+const X_INTERNAL_HANDLE = 'i';
+const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g;
+const QUOTE_BLOCK_RE = /\[quote\][\s\S]*?\[\/quote\]/gi;
+// Capture group used by `preprocessBody` to harvest strikethrough inner text
+// into the `completed` bucket (Resolved 36). Plain `.replace(re, '')` still
+// works because the replacement string ignores capture groups.
+const STRIKE_BLOCK_RE = /\[s\]([\s\S]*?)\[\/s\]/gi;
+
+/**
+ * Emit a structured single-line JSON log record to stderr.
+ * @param {string} level
+ * @param {string} msg
+ * @param {Object} [meta]
+ */
+function log(level, msg, meta = {}) {
+  process.stderr.write(JSON.stringify({ level, msg, ...meta }) + '\n');
+}
+
+/**
+ * Single-shot HTTPS GET via system `curl`. Node's built-in fetch (undici) and
+ * node:https both get rejected by Danbooru's Cloudflare edge on long query
+ * strings (~500+ chars), likely a TLS fingerprint heuristic. curl avoids this
+ * and is guaranteed on both `ubuntu-latest` runners and macOS.
+ * @param {string} url
+ * @return {Promise<{status: number, body: string}>}
+ */
+function curlGetOnce(url) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      '-sS',
+      '-A', USER_AGENT,
+      '-H', 'Accept: application/json',
+      '-w', '\n%{http_code}',
+      '--max-time', '30',
+      url,
+    ];
+    const proc = spawn('curl', args);
+    const stdout = [];
+    const stderr = [];
+    proc.stdout.on('data', c => stdout.push(c));
+    proc.stderr.on('data', c => stderr.push(c));
+    proc.on('error', reject);
+    proc.on('close', code => {
+      const err = Buffer.concat(stderr).toString('utf8').trim();
+      if (code !== 0) {
+        reject(new Error(`curl exit ${code}: ${err || '(no stderr)'}`));
+        return;
+      }
+      const out = Buffer.concat(stdout).toString('utf8');
+      const lastNl = out.lastIndexOf('\n');
+      const body = lastNl >= 0 ? out.slice(0, lastNl) : '';
+      const status = parseInt(lastNl >= 0 ? out.slice(lastNl + 1) : out, 10);
+      resolve({ status, body });
+    });
+  });
+}
+
+/**
+ * Fetch a JSON resource with 1s/2s/4s exponential backoff on 5xx/429/network
+ * errors. 4xx (other than 429) fails fast.
+ * @param {string} url
+ * @param {{attempt?: number}} [opts]
+ * @return {Promise<*>}
+ */
+async function fetchJson(url, { attempt = 0 } = {}) {
+  const MAX_ATTEMPTS = 3;
+  const BACKOFF_MS = [1000, 2000, 4000];
+  try {
+    const { status, body } = await curlGetOnce(url);
+    if (status >= 200 && status < 300) return JSON.parse(body);
+    if (status >= 400 && status < 500 && status !== 429) {
+      throw new Error(`HTTP ${status} (fail-fast) for ${url}`);
+    }
+    throw new Error(`HTTP ${status} for ${url}`);
+  } catch (err) {
+    if (attempt >= MAX_ATTEMPTS - 1 || err.message.includes('fail-fast')) {
+      throw err;
+    }
+    const wait = BACKOFF_MS[attempt];
+    log('warn', 'retry', {
+      url,
+      attempt: attempt + 1,
+      wait_ms: wait,
+      error: err.message,
+    });
+    await new Promise(r => setTimeout(r, wait));
+    return fetchJson(url, { attempt: attempt + 1 });
+  }
+}
+
+/**
+ * Step 1 — Paginate `forum_posts.json` for `topicId`. Stops when a page is
+ * empty or shorter than `FORUM_LIMIT`.
+ * @param {number} topicId
+ * @return {Promise<!Array<!Object>>}
+ */
+async function fetchForumPosts(topicId) {
+  const posts = [];
+  for (let page = 1; ; page += 1) {
+    const url = `${API_BASE}/forum_posts.json?search%5Btopic_id%5D=${topicId}` +
+        `&limit=${FORUM_LIMIT}&page=${page}`;
+    const batch = await fetchJson(url);
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    posts.push(...batch);
+    if (batch.length < FORUM_LIMIT) break;
+  }
+  return posts;
+}
+
+/**
+ * Step 2 helper — batch lookup users by id (comma-separated, exact match).
+ * Drops records whose shape disagrees with Danbooru's documented response or
+ * whose `name` exceeds MAX_USER_NAME_LENGTH (defensive guard against API
+ * regression or maliciously crafted display names — v0.3.6 S5/S6).
+ * @param {!Array<number>} ids
+ * @return {Promise<!Map<number, !Object>>}
+ */
+async function fetchUsers(ids) {
+  if (ids.length === 0) return new Map();
+  const url = `${API_BASE}/users.json?search%5Bid%5D=${ids.join(',')}` +
+      `&only=id,name,level&limit=${USERS_LIMIT}`;
+  const users = await fetchJson(url);
+  if (!Array.isArray(users)) {
+    log('warn', 'users.json returned non-array; ignoring', { type: typeof users });
+    return new Map();
+  }
+  let dropped = 0;
+  const map = new Map();
+  for (const u of users) {
+    if (!u || typeof u.id !== 'number' ||
+        typeof u.name !== 'string' || u.name.length === 0 ||
+        u.name.length > MAX_USER_NAME_LENGTH ||
+        typeof u.level !== 'number') {
+      dropped += 1;
+      continue;
+    }
+    map.set(u.id, u);
+  }
+  if (dropped > 0) log('warn', 'users.json shape rejects', { dropped });
+  return map;
+}
+
+/**
+ * Step 2 — Keep posts whose creator level >= threshold (Approver+, see
+ * Resolved 14).
+ * @param {!Array<!Object>} posts
+ * @param {!Map<number, !Object>} userMap
+ * @param {number} threshold
+ * @return {!Array<!Object>}
+ */
+function filterApproverPlus(posts, userMap, threshold) {
+  return posts.filter(p => {
+    const u = userMap.get(p.creator_id);
+    return u && u.level >= threshold;
+  });
+}
+
+/** Normalize a wikilink target to Danbooru tag form. */
+function normalizeName(raw) {
+  return raw.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+/**
+ * Strip `[quote]` blocks, then split remaining text into active (outside any
+ * `[s]...[/s]`) and completed (inner of each strike block) buckets — Resolved
+ * 36 supersedes Resolved 15 (which dropped strike content entirely). Quote
+ * inner content is always discarded.
+ * @param {string|null|undefined} body
+ * @return {{active: string, completed: string}}
+ */
+function preprocessBody(body) {
+  if (!body) return { active: '', completed: '' };
+  const dequoted = body.replace(QUOTE_BLOCK_RE, '');
+  const strikeChunks = [];
+  const active = dequoted.replace(STRIKE_BLOCK_RE, (_, inner) => {
+    strikeChunks.push(inner);
+    return '';
+  });
+  return { active, completed: strikeChunks.join('\n') };
+}
+
+/**
+ * Step 3 (extract) — Return normalized wikilink targets in source order.
+ * Targets longer than MAX_TAG_NAME_LENGTH are silently dropped — Danbooru's
+ * own tag spec caps names well below that threshold, and accepting longer
+ * strings would let adversarial forum posts inflate bounty.json (S4).
+ * @param {string} cleanedBody
+ * @return {!Array<string>}
+ */
+function extractWikilinks(cleanedBody) {
+  const out = [];
+  for (const m of cleanedBody.matchAll(WIKILINK_RE)) {
+    const name = normalizeName(m[1]);
+    if (name && name.length <= MAX_TAG_NAME_LENGTH) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Step 3 fallback — Return canonical-form ext URLs (Pixiv user, X handle)
+ * mentioned in plain text. Internal `x.com/i/user/<id>` redirects are
+ * skipped (they have no usable handle).
+ * @param {string} cleanedBody
+ * @return {!Array<string>}
+ */
+function extractExtUrls(cleanedBody) {
+  const urls = new Set();
+  for (const m of cleanedBody.matchAll(PIXIV_USER_RE_G)) {
+    urls.add(`https://www.pixiv.net/users/${m[1]}`);
+  }
+  for (const m of cleanedBody.matchAll(X_HANDLE_RE_G)) {
+    const handle = m[1].toLowerCase();
+    if (handle !== X_INTERNAL_HANDLE) urls.add(`https://x.com/${handle}`);
+  }
+  return [...urls];
+}
+
+/**
+ * Step 3 fallback (cont.) — Reverse-lookup an artist by Pixiv/X URL.
+ * Used only for Approver+ posts that have no wikilinks at all (~7% of
+ * sampled posts). Returns normalized canonical names, possibly empty.
+ * @param {string} url
+ * @return {Promise<!Array<string>>}
+ */
+async function lookupArtistsByUrl(url) {
+  const apiUrl = `${API_BASE}/artists.json?search%5Burl_matches%5D=` +
+      `${encodeURIComponent(url)}&only=name&limit=5`;
+  try {
+    const recs = await fetchJson(apiUrl);
+    if (!Array.isArray(recs)) return [];
+    return recs.map(r => r.name).filter(Boolean).map(normalizeName);
+  } catch (err) {
+    log('warn', 'url_matches lookup failed', { url, error: err.message });
+    return [];
+  }
+}
+
+/**
+ * Step 3 (combined) — For each Approver+ post, gather artist names from both
+ * the active body and any `[s]...[/s]` strike content. Wikilinks are preferred
+ * when present in the active bucket; ext-URL fallback runs only when active
+ * wikilinks are absent (so wikilink+URL posts trust the wikilink alone —
+ * Approver intent). Completed bucket is wikilink-only (no URL fallback —
+ * strike-out is a cleanup signal, not a new recommendation).
+ * @param {!Array<!Object>} approverPosts
+ * @return {Promise<!Array<{post: !Object, activeNames: !Array<string>, completedNames: !Array<string>}>>}
+ */
+async function extractArtistMentions(approverPosts) {
+  const result = [];
+  let fallbackPosts = 0;
+  let fallbackHits = 0;
+  for (const post of approverPosts) {
+    const { active, completed } = preprocessBody(post.body);
+    let activeNames = extractWikilinks(active);
+    const completedNames = extractWikilinks(completed);
+    if (activeNames.length === 0) {
+      const urls = extractExtUrls(active);
+      if (urls.length > 0) {
+        fallbackPosts += 1;
+        const collected = [];
+        for (const url of urls) {
+          const matched = await lookupArtistsByUrl(url);
+          collected.push(...matched);
+        }
+        activeNames = [...new Set(collected)];
+        if (activeNames.length > 0) fallbackHits += 1;
+      }
+    }
+    result.push({ post, activeNames, completedNames });
+  }
+  log('info', 'ext-url fallback summary', {
+    fallback_posts: fallbackPosts,
+    fallback_hits: fallbackHits,
+  });
+  return result;
+}
+
+/**
+ * Step 3 (resolve) — Batch-resolve active aliases using `antecedent_name_array[]`
+ * repetition (Resolved 16). Returns Map<antecedent, consequent>.
+ * @param {!Array<string>} names
+ * @return {Promise<!Map<string, string>>}
+ */
+async function resolveAliases(names) {
+  const aliasMap = new Map();
+  for (let i = 0; i < names.length; i += ALIAS_CHUNK_SIZE) {
+    const chunk = names.slice(i, i + ALIAS_CHUNK_SIZE);
+    const params = chunk
+        .map(n => `search%5Bantecedent_name_array%5D%5B%5D=${encodeURIComponent(n)}`)
+        .join('&');
+    const url = `${API_BASE}/tag_aliases.json?${params}` +
+        `&search%5Bstatus%5D=active&only=antecedent_name,consequent_name` +
+        `&limit=${ALIAS_LIMIT}`;
+    const aliases = await fetchJson(url);
+    if (!Array.isArray(aliases)) {
+      log('warn', 'tag_aliases.json returned non-array; skipping chunk',
+          { type: typeof aliases });
+      continue;
+    }
+    for (const a of aliases) {
+      // v0.3.6 S6 — reject malformed alias rows rather than crashing on
+      // .antecedent_name = undefined entries.
+      if (!a || typeof a.antecedent_name !== 'string' ||
+          typeof a.consequent_name !== 'string') continue;
+      if (a.antecedent_name.length > MAX_TAG_NAME_LENGTH ||
+          a.consequent_name.length > MAX_TAG_NAME_LENGTH) continue;
+      aliasMap.set(a.antecedent_name, a.consequent_name);
+    }
+  }
+  return aliasMap;
+}
+
+/**
+ * Step 3 (merge) — Map (post, extracted names) × alias resolution into
+ * canonical-keyed entries. Tracks active/completed bucket origin and the
+ * earliest post `created_at` per tag for `registered_at_utc` (Resolved 36 +
+ * Task v3.1.1).
+ * @param {!Array<{post: !Object, activeNames: !Array<string>, completedNames: !Array<string>}>} postsWithNames
+ * @param {!Map<number, !Object>} userMap
+ * @param {!Map<string, string>} aliasMap
+ * @return {!Map<string, {post_ids: !Set<number>, approvers: !Map<number, string>, aliased_from: !Set<string>, earliest_created_at: ?number, has_active: boolean}>}
+ */
+function buildArtistMap(postsWithNames, userMap, aliasMap) {
+  const artistMap = new Map();
+  for (const { post, activeNames, completedNames } of postsWithNames) {
+    const u = userMap.get(post.creator_id);
+    if (!u) continue;
+    const createdMs = post.created_at ? new Date(post.created_at).getTime() : null;
+    const tagged = [];
+    for (const n of activeNames) tagged.push({ raw: n, active: true });
+    for (const n of completedNames) tagged.push({ raw: n, active: false });
+    for (const { raw: rawName, active } of tagged) {
+      const canonical = aliasMap.get(rawName) ?? rawName;
+      if (!artistMap.has(canonical)) {
+        artistMap.set(canonical, {
+          post_ids: new Set(),
+          approvers: new Map(),
+          aliased_from: new Set(),
+          earliest_created_at: null,
+          has_active: false,
+        });
+      }
+      const entry = artistMap.get(canonical);
+      entry.post_ids.add(post.id);
+      entry.approvers.set(u.id, u.name);
+      if (rawName !== canonical) entry.aliased_from.add(rawName);
+      if (active) entry.has_active = true;
+      if (createdMs !== null && Number.isFinite(createdMs) &&
+          (entry.earliest_created_at === null || createdMs < entry.earliest_created_at)) {
+        entry.earliest_created_at = createdMs;
+      }
+    }
+  }
+  return artistMap;
+}
+
+/**
+ * Resolve a single collision by picking the alphabetically smaller canonical
+ * tag — deterministic and stable across runs.
+ */
+function pickCanonicalWinner(prev, current) {
+  return prev < current ? prev : current;
+}
+
+/**
+ * Step 4 — For each canonical tag, fetch `artists.json` to (a) confirm it is
+ * an artist tag (non-artist wikilinks like copyright/general tags return
+ * empty and are silently dropped per PLAN D1 step 4) and (b) extract Pixiv
+ * user IDs and X handles for reverse-index publishing.
+ *
+ * v0.3.6 — concurrent fetch (ARTISTS_FETCH_CONCURRENCY) for wall-time. The
+ * fetch and processing phases are separated so by_pixiv/by_x collision
+ * resolution still iterates tags in sorted order, keeping output
+ * byte-stable across runs regardless of how fast each request returned.
+ * @param {!Map<string, !Object>} artistMap
+ * @return {Promise<{enriched: !Map, byPixiv: !Map, byX: !Map}>}
+ */
+async function enrichWithUrls(artistMap) {
+  const enriched = new Map();
+  const byPixiv = new Map();
+  const byX = new Map();
+  const tags = [...artistMap.keys()].sort();
+
+  const recordsByTag = new Map();
+  for (let i = 0; i < tags.length; i += ARTISTS_FETCH_CONCURRENCY) {
+    const chunk = tags.slice(i, i + ARTISTS_FETCH_CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (tag) => {
+      try {
+        const url = `${API_BASE}/artists.json?search%5Bname%5D=${encodeURIComponent(tag)}` +
+            `&only=name,urls&limit=${ARTISTS_LIMIT}`;
+        return [tag, await fetchJson(url)];
+      } catch (err) {
+        log('warn', 'artists.json fetch failed, dropping tag', {
+          tag,
+          error: err.message,
+        });
+        return [tag, null];
+      }
+    }));
+    for (const [tag, recs] of results) recordsByTag.set(tag, recs);
+  }
+
+  for (const tag of tags) {
+    const artistRecords = recordsByTag.get(tag);
+    if (!Array.isArray(artistRecords) || artistRecords.length === 0) {
+      // Silent drop: non-artist wikilink (e.g. copyright, general tag) or
+      // failed fetch (logged above).
+      continue;
+    }
+    const pixivIds = new Set();
+    const xHandles = new Set();
+    for (const rec of artistRecords) {
+      // v0.3.6 S6 — defensive: artists.json typically returns objects with
+      // .urls but if the API shape regresses we don't want a TypeError.
+      if (!rec || typeof rec !== 'object') continue;
+      const urls = Array.isArray(rec.urls) ? rec.urls : [];
+      for (const urlObj of urls) {
+        const u = typeof urlObj === 'string' ? urlObj : urlObj && urlObj.url;
+        if (typeof u !== 'string' || !u) continue;
+        const pm = u.match(PIXIV_USER_RE);
+        if (pm) pixivIds.add(pm[1]);
+        const xm = u.match(X_HANDLE_RE);
+        if (xm) {
+          const handle = xm[1].toLowerCase();
+          if (handle !== X_INTERNAL_HANDLE) xHandles.add(handle);
+        }
+      }
+    }
+    const entry = artistMap.get(tag);
+    enriched.set(tag, {
+      post_ids: [...entry.post_ids].sort((a, b) => a - b),
+      approvers: [...entry.approvers.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, name]) => name),
+      aliased_from: [...entry.aliased_from].sort(),
+      pixiv_user_ids: [...pixivIds].sort(),
+      x_handles: [...xHandles].sort(),
+      registered_at_utc: entry.earliest_created_at !== null
+          ? new Date(entry.earliest_created_at).toISOString()
+          : null,
+      completed: !entry.has_active,
+    });
+    for (const id of pixivIds) {
+      const prev = byPixiv.get(id);
+      if (prev && prev !== tag) {
+        const winner = pickCanonicalWinner(prev, tag);
+        log('warn', 'by_pixiv collision', { pixiv_id: id, prev, current: tag, winner });
+        byPixiv.set(id, winner);
+      } else {
+        byPixiv.set(id, tag);
+      }
+    }
+    for (const h of xHandles) {
+      const prev = byX.get(h);
+      if (prev && prev !== tag) {
+        const winner = pickCanonicalWinner(prev, tag);
+        log('warn', 'by_x collision', { handle: h, prev, current: tag, winner });
+        byX.set(h, winner);
+      } else {
+        byX.set(h, tag);
+      }
+    }
+  }
+  return { enriched, byPixiv, byX };
+}
+
+/**
+ * Step 4b — Batch-fetch `post_count` for every enriched tag via
+ * `tags.json?search[name_array][]=...` 100 chunks (Resolved 16 pattern,
+ * verified for tags.json in Phase v3.0 Task v3.0.4). Tags that fail to
+ * appear in the response (e.g. just-deleted or never-existed) default to 0
+ * at the call site.
+ * @param {!Array<string>} tags
+ * @return {Promise<!Map<string, number>>}
+ */
+async function fetchPostCounts(tags) {
+  const counts = new Map();
+  for (let i = 0; i < tags.length; i += TAGS_CHUNK_SIZE) {
+    const chunk = tags.slice(i, i + TAGS_CHUNK_SIZE);
+    const params = chunk
+        .map(n => `search%5Bname_array%5D%5B%5D=${encodeURIComponent(n)}`)
+        .join('&');
+    const url = `${API_BASE}/tags.json?${params}` +
+        `&only=name,post_count&limit=${TAGS_LIMIT}`;
+    const records = await fetchJson(url);
+    if (!Array.isArray(records)) continue;
+    for (const r of records) {
+      if (typeof r.name === 'string' && Number.isFinite(r.post_count)) {
+        counts.set(r.name, r.post_count);
+      }
+    }
+  }
+  return counts;
+}
+
+/**
+ * Step 4c — For each enriched tag, count posts created in the last
+ * `POSTS_COUNT_WINDOW_DAYS` days via `counts/posts.json?tags=<tag> date:>=…`.
+ * Danbooru lacks a batch endpoint for this — every tag needs its own call —
+ * so we run small concurrent chunks (`POSTS_COUNT_CONCURRENCY`) to keep the
+ * total wall time bounded without hammering the API. Per-tag failures degrade
+ * to "no delta available" rather than aborting the whole build (Resolved 45).
+ * @param {!Array<string>} tags
+ * @return {Promise<!Map<string, number>>}
+ */
+async function fetchPostCount30dDeltas(tags) {
+  const deltas = new Map();
+  const since = new Date(Date.now() - POSTS_COUNT_WINDOW_DAYS * 86400000);
+  const sinceISO = since.toISOString().slice(0, 10);  // YYYY-MM-DD
+  let failures = 0;
+  for (let i = 0; i < tags.length; i += POSTS_COUNT_CONCURRENCY) {
+    const chunk = tags.slice(i, i + POSTS_COUNT_CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (tag) => {
+      const query = `${tag} date:>=${sinceISO}`;
+      const url = `${API_BASE}/counts/posts.json?tags=${encodeURIComponent(query)}`;
+      try {
+        const r = await fetchJson(url);
+        const n = r && r.counts && r.counts.posts;
+        return [tag, Number.isFinite(n) ? n : null];
+      } catch (err) {
+        log('warn', 'count delta fetch failed', { tag, error: err.message });
+        return [tag, null];
+      }
+    }));
+    for (const [tag, n] of results) {
+      if (n === null) {
+        failures += 1;
+        continue;
+      }
+      deltas.set(tag, n);
+    }
+  }
+  log('info', 'post_count delta survey', {
+    tags: tags.length,
+    captured: deltas.size,
+    failures,
+    window_days: POSTS_COUNT_WINDOW_DAYS,
+    since: sinceISO,
+  });
+  return deltas;
+}
+
+/**
+ * Step 5 — Serialize to a deterministic schema_version=1 object: every map
+ * is sorted by key, lists by content. Output is byte-stable across runs
+ * when inputs are unchanged (C7).
+ * @param {{enriched: !Map, byPixiv: !Map, byX: !Map}} input
+ * @return {!Object}
+ */
+function serialize({ enriched, byPixiv, byX }) {
+  const artists = {};
+  for (const tag of [...enriched.keys()].sort()) {
+    artists[tag] = enriched.get(tag);
+  }
+  const by_pixiv = {};
+  for (const k of [...byPixiv.keys()].sort()) by_pixiv[k] = byPixiv.get(k);
+  const by_x = {};
+  for (const k of [...byX.keys()].sort()) by_x[k] = byX.get(k);
+  return {
+    schema_version: SCHEMA_VERSION,
+    source: SOURCE_URL,
+    approver_level_threshold: APPROVER_LEVEL_THRESHOLD,
+    artists,
+    by_pixiv,
+    by_x,
+  };
+}
+
+async function main() {
+  const outputPath = process.argv[2];
+  if (!outputPath) {
+    log('error', 'usage: node build-bounty.mjs <output_path>');
+    process.exit(2);
+  }
+
+  log('info', 'step 1: fetch forum posts', { topic_id: TOPIC_ID });
+  const posts = await fetchForumPosts(TOPIC_ID);
+  log('info', 'forum posts fetched', { count: posts.length });
+
+  log('info', 'step 2: filter Approver+');
+  const creatorIds = [...new Set(posts.map(p => p.creator_id))].sort((a, b) => a - b);
+  const userMap = await fetchUsers(creatorIds);
+  const approverPosts = filterApproverPlus(posts, userMap, APPROVER_LEVEL_THRESHOLD);
+  log('info', 'approver+ posts', {
+    total_posts: posts.length,
+    approver_posts: approverPosts.length,
+    unique_creators: creatorIds.length,
+    approver_creators: [...userMap.values()].filter(u => u.level >= APPROVER_LEVEL_THRESHOLD).length,
+  });
+
+  log('info', 'step 3: extract mentions (wikilink + ext-URL fallback)');
+  const postsWithNames = await extractArtistMentions(approverPosts);
+  const rawNames = new Set();
+  for (const { activeNames, completedNames } of postsWithNames) {
+    for (const n of activeNames) rawNames.add(n);
+    for (const n of completedNames) rawNames.add(n);
+  }
+  const sortedNames = [...rawNames].sort();
+  log('info', 'raw mentions extracted', { unique_names: sortedNames.length });
+  const aliasMap = await resolveAliases(sortedNames);
+  log('info', 'aliases resolved', { alias_count: aliasMap.size });
+  const artistMap = buildArtistMap(postsWithNames, userMap, aliasMap);
+  log('info', 'artist map built', { canonical_tags: artistMap.size });
+
+  log('info', 'step 4: enrich with URLs');
+  const { enriched, byPixiv, byX } = await enrichWithUrls(artistMap);
+  log('info', 'enrichment complete', {
+    enriched_tags: enriched.size,
+    dropped_non_artist: artistMap.size - enriched.size,
+    by_pixiv_count: byPixiv.size,
+    by_x_count: byX.size,
+  });
+
+  log('info', 'step 4b: batch-fetch post_count');
+  const enrichedTags = [...enriched.keys()];
+  const postCounts = await fetchPostCounts(enrichedTags);
+  let postCountMissing = 0;
+  let postCountCompletedCount = 0;
+  for (const [tag, entry] of enriched) {
+    const c = postCounts.get(tag);
+    if (c === undefined) postCountMissing += 1;
+    entry.post_count_at_build = c ?? 0;
+    if (entry.completed) postCountCompletedCount += 1;
+  }
+  log('info', 'post_count attached', {
+    tags: enrichedTags.length,
+    missing: postCountMissing,
+    completed_tags: postCountCompletedCount,
+  });
+
+  log('info', 'step 4c: per-tag 30d delta survey');
+  const deltas = await fetchPostCount30dDeltas(enrichedTags);
+  let growthCount = 0;
+  for (const [tag, entry] of enriched) {
+    const d = deltas.get(tag);
+    // Field is always emitted (number) for deterministic output. Renderer
+    // checks `> 0` before showing the `+N` suffix per user spec.
+    entry.post_count_30d_delta = Number.isFinite(d) ? d : 0;
+    if (entry.post_count_30d_delta > 0) growthCount += 1;
+  }
+  log('info', '30d delta attached', {
+    tags: enrichedTags.length,
+    growing_tags: growthCount,
+  });
+
+  log('info', 'step 5: serialize + write', { output: outputPath });
+  const obj = serialize({ enriched, byPixiv, byX });
+  const json = JSON.stringify(obj, null, 2) + '\n';
+
+  let prevHash = null;
+  try {
+    const prev = await readFile(outputPath, 'utf8');
+    prevHash = prev === json ? 'identical' : 'changed';
+  } catch {
+    prevHash = 'new';
+  }
+  await writeFile(outputPath, json, 'utf8');
+  log('info', 'done', { state: prevHash, bytes: json.length });
+}
+
+main().catch(err => {
+  log('error', 'fatal', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
