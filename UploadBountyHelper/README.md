@@ -73,20 +73,7 @@ On each supported page the script identifies "who is this page about?" and looks
 
 On the forum thread page itself, a small icon appears next to the heading. Clicking it opens a popover with the full bounty list:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ Bounty Artist List (230)   ☐ Hide completed   [Name][Count][...] │ × │
-├──────────────────────────────────────────────────────────────────┤
-│ Name                                Count    Approver     Date   │ State    │
-│ ─────────────────────────────────── ─────    ──────────── ────── ────────── │
-│ dairi                               18672 +16 someUser    2024-… ● Active   │
-│ rizu_(rizunm)                       802 +487 anotherUser  2024-… ● Active   │
-│ artist_xyz                          (struck) someUser     2023-… ✓ Completed│
-│ …                                                                │          │
-├──────────────────────────────────────────────────────────────────┤
-│        < 1 [2] 3 4 5 6 >                                         │
-└──────────────────────────────────────────────────────────────────┘
-```
+<img width="770" height="515" alt="image" src="https://github.com/user-attachments/assets/6f4bdf8a-b547-45da-bb6b-86e1908835eb" />
 
 - **Sortable columns** — Click `Name`, `Count`, `Approver`, or `Date` to sort. Clicking the active column toggles direction. Your sort choice + the Hide-completed toggle persist across page loads.
 - **`Count`** is the artist's total post count at the time of the last cron run, with a `+N` growth suffix when the artist gained at least one post in the past 30 days.
