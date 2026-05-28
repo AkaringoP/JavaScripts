@@ -19,6 +19,7 @@ A collection of UserScripts developed by **AkaringoP** (with Claude Code).
 | **[Danbooru Grouping Tags](./GroupingTags)** | Advanced tag management system featuring visual grouping, character-first sorting, and Gist synchronization. | [Install](https://github.com/AkaringoP/JavaScripts/raw/build/groupingtags.user.js) |
 | **[Danbooru Post Timeline](./PostTimeline)** | Displays the upload timeline of a post — source platform publish date, media asset upload, and post creation — in Danbooru's Information section. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PostTimeline/PostTimeline.user.js) |
 | **[Danbooru Bottom-Up Tag Removal](./BottomUpTagRemoval)** | When you remove a tag on submit, offers to also remove its implied parent tags via a confirmation popover. Walks transitive implication chains. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/BottomUpTagRemoval/BottomUpTagRemoval.user.js) |
+| **[Danbooru Upload Bounty Helper](./UploadBountyHelper)** | Surfaces the Upload Bounty forum thread on the pages where it matters — Danbooru upload form, Pixiv artist pages, and X (Twitter) profiles / timelines — plus a sortable popover on the thread itself. Powered by a GitHub Actions cron that pre-builds a JSON index every 8 hours. | [Install](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/UploadBountyHelper/UploadBountyHelper.user.js) |
 
 ## How to Install
 
