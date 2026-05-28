@@ -878,6 +878,25 @@
       "completed": false,
       "post_count_at_build": 31
     },
+    "fuyudori_yukino": {
+      "post_ids": [
+        442352
+      ],
+      "approvers": [
+        "Sober_Bober"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "2470162"
+      ],
+      "x_handles": [
+        "petasweetie",
+        "petasweety"
+      ],
+      "registered_at_utc": "2026-05-28T07:59:33.930Z",
+      "completed": false,
+      "post_count_at_build": 58
+    },
     "gamgyul": {
       "post_ids": [
         388879
@@ -1222,7 +1241,7 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 123
+      "post_count_at_build": 124
     },
     "hitoto": {
       "post_ids": [
@@ -1329,7 +1348,7 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 84
+      "post_count_at_build": 85
     },
     "ichino_(1no)": {
       "post_ids": [
@@ -2086,7 +2105,7 @@
       ],
       "registered_at_utc": "2026-05-25T16:54:46.126Z",
       "completed": false,
-      "post_count_at_build": 175
+      "post_count_at_build": 200
     },
     "mame_nabe_donko": {
       "post_ids": [
@@ -4143,6 +4162,7 @@
     "2239804": "ikeda_(kasutera)",
     "2461024": "kachidama",
     "2461497": "grel_(r6hgvu5)",
+    "2470162": "fuyudori_yukino",
     "2739958": "akai_takami",
     "2870982": "rizu_(rizunm)",
     "2915498": "21_ke",
@@ -4513,6 +4533,8 @@
     "pafujojo": "tsumoi_(infinity)",
     "pazzi53606189": "pazzi_(zzxh2354)",
     "pazzi_00": "pazzi_(zzxh2354)",
+    "petasweetie": "fuyudori_yukino",
+    "petasweety": "fuyudori_yukino",
     "pon_cutest": "pongldr",
     "pon_never_dies": "pongldr",
     "pon_sfw": "pongldr",
