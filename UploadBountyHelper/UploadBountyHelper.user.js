@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Upload Bounty Helper
 // @namespace    AkaringoP/JavaScripts
-// @version      1.0.0
+// @version      1.0.1
 // @description  Bounty-artist marks on Danbooru upload + Pixiv/X, plus a Bounty Thread popover on forum_topics/24186
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -1014,7 +1014,11 @@
   const PIXIV_PROFILE_URL_RE = /^\/(?:en\/)?users\/(\d+)/;
   const PIXIV_ARTWORK_URL_RE = /^\/(?:en\/)?artworks\/\d+/;
   const PIXIV_FOLLOW_BTN_SELECTOR = '.gtm-profile-follow-button-follow';
-  const PIXIV_AUTHOR_LINK_SELECTOR = 'a[data-gtm-value][href^="/users/"]';
+  // Pixiv prefixes user paths with the active locale on /en/ pages
+  // (sidebar + bottom author links read as href="/en/users/<id>" instead
+  // of "/users/<id>"). Selector matches both shapes — v1.0.1 fix.
+  const PIXIV_AUTHOR_LINK_SELECTOR =
+      'a[data-gtm-value][href^="/users/"], a[data-gtm-value][href^="/en/users/"]';
   const PIXIV_NAV_DEBOUNCE_MS = 300;  // Resolved 29 — pushState mutation settles in ~2s
   const PIXIV_RETRY_DELAY_MS = 500;  // safety retry for lazy mount
 
