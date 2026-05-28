@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Upload Bounty Helper
 // @namespace    AkaringoP/JavaScripts
-// @version      0.3.3
+// @version      0.3.4
 // @description  Bounty-artist marks on Danbooru upload + Pixiv/X, plus a Bounty Thread popover on forum_topics/24186
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -1509,6 +1509,14 @@
       font-variant-numeric: tabular-nums;
       width: 80px;
     }
+    /* (+N) growth suffix — muted small font so the main count stays prominent.
+       Only rendered when delta > 0 (Resolved 45). */
+    .ubm-bt-delta {
+      color: var(--ubm-bt-text-muted);
+      font-size: 11px;
+      margin-left: 2px;
+      cursor: help;
+    }
     .ubm-bt-col-date { width: 110px; color: var(--ubm-bt-text-muted); font-size: 12px; }
     .ubm-bt-col-state { width: 100px; }
     /* Inline-flex wrapper aligns the tag link and grid button on the same
@@ -1722,9 +1730,11 @@
 
   // --- Forum data normalization (graceful degrade for v0.2 fetch) -----------
   /**
-   * Project bounty.json artists map → uniform array. Missing v0.3 fields
-   * (registered_at_utc / completed / post_count_at_build) degrade to safe
-   * defaults so the popover opens even against a pre-v0.3 build.
+   * Project bounty.json artists map → uniform array. Missing v0.3+ fields
+   * (registered_at_utc / completed / post_count_at_build / post_count_30d_delta)
+   * degrade to safe defaults so the popover opens even against a pre-v0.3
+   * cache. post_count_30d_delta missing → 0 means "no growth indicator",
+   * indistinguishable from a stable tag (acceptable, Resolved 45).
    * @param {?Object} data
    * @return {!Array<!Object>}
    */
@@ -1743,6 +1753,8 @@
             typeof e.registered_at_utc === 'string' ? e.registered_at_utc : null,
         post_count_at_build:
             typeof e.post_count_at_build === 'number' ? e.post_count_at_build : null,
+        post_count_30d_delta:
+            typeof e.post_count_30d_delta === 'number' ? e.post_count_30d_delta : 0,
       });
     }
     return out;
@@ -2098,10 +2110,24 @@
     tdTag.appendChild(tagCell);
     tr.appendChild(tdTag);
 
+    // Posts cell — current count + optional (+N) growth suffix (Resolved 45).
+    // Suffix appears only for tags that grew in the last 30 days (per user
+    // spec — shrinkage stays hidden). Number formatting is space-separated
+    // so a sub-span can carry muted color independently of the main number.
     const tdPosts = document.createElement('td');
     tdPosts.className = 'ubm-bt-col-posts';
-    tdPosts.textContent =
-        a.post_count_at_build === null ? '—' : String(a.post_count_at_build);
+    if (a.post_count_at_build === null) {
+      tdPosts.textContent = '—';
+    } else {
+      tdPosts.appendChild(document.createTextNode(String(a.post_count_at_build)));
+      if (a.post_count_30d_delta > 0) {
+        const delta = document.createElement('span');
+        delta.className = 'ubm-bt-delta';
+        delta.textContent = ` (+${a.post_count_30d_delta})`;
+        delta.title = `+${a.post_count_30d_delta} posts in the last 30 days`;
+        tdPosts.appendChild(delta);
+      }
+    }
     tr.appendChild(tdPosts);
 
     // Approver cell (D24 updated, Resolved 42 d) — first approver becomes a

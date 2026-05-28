@@ -17,9 +17,14 @@ const TAGS_LIMIT = 1000;
 const ALIAS_CHUNK_SIZE = 100;
 const TAGS_CHUNK_SIZE = 100;
 const SCHEMA_VERSION = 1;
+// Recent-activity window for `post_count_30d_delta` (Resolved 45). Rolling
+// 30 days from build time — meaning drifts slightly per cron slot, accepted
+// trade-off for "이 작가가 한달새 활발하다" signal precision.
+const POSTS_COUNT_WINDOW_DAYS = 30;
+const POSTS_COUNT_CONCURRENCY = 5;
 const SOURCE_URL = `https://danbooru.donmai.us/forum_topics/${TOPIC_ID}`;
 const API_BASE = 'https://danbooru.donmai.us';
-const USER_AGENT = 'UploadBountyHelper-build/0.3 (github.com/AkaringoP/JavaScripts)';
+const USER_AGENT = 'UploadBountyHelper-build/0.4 (github.com/AkaringoP/JavaScripts)';
 
 const PIXIV_USER_RE = /pixiv\.net\/(?:en\/)?users\/(\d+)/i;
 const PIXIV_USER_RE_G = /pixiv\.net\/(?:en\/)?users\/(\d+)/gi;
@@ -472,6 +477,53 @@ async function fetchPostCounts(tags) {
 }
 
 /**
+ * Step 4c — For each enriched tag, count posts created in the last
+ * `POSTS_COUNT_WINDOW_DAYS` days via `counts/posts.json?tags=<tag> date:>=…`.
+ * Danbooru lacks a batch endpoint for this — every tag needs its own call —
+ * so we run small concurrent chunks (`POSTS_COUNT_CONCURRENCY`) to keep the
+ * total wall time bounded without hammering the API. Per-tag failures degrade
+ * to "no delta available" rather than aborting the whole build (Resolved 45).
+ * @param {!Array<string>} tags
+ * @return {Promise<!Map<string, number>>}
+ */
+async function fetchPostCount30dDeltas(tags) {
+  const deltas = new Map();
+  const since = new Date(Date.now() - POSTS_COUNT_WINDOW_DAYS * 86400000);
+  const sinceISO = since.toISOString().slice(0, 10);  // YYYY-MM-DD
+  let failures = 0;
+  for (let i = 0; i < tags.length; i += POSTS_COUNT_CONCURRENCY) {
+    const chunk = tags.slice(i, i + POSTS_COUNT_CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (tag) => {
+      const query = `${tag} date:>=${sinceISO}`;
+      const url = `${API_BASE}/counts/posts.json?tags=${encodeURIComponent(query)}`;
+      try {
+        const r = await fetchJson(url);
+        const n = r && r.counts && r.counts.posts;
+        return [tag, Number.isFinite(n) ? n : null];
+      } catch (err) {
+        log('warn', 'count delta fetch failed', { tag, error: err.message });
+        return [tag, null];
+      }
+    }));
+    for (const [tag, n] of results) {
+      if (n === null) {
+        failures += 1;
+        continue;
+      }
+      deltas.set(tag, n);
+    }
+  }
+  log('info', 'post_count delta survey', {
+    tags: tags.length,
+    captured: deltas.size,
+    failures,
+    window_days: POSTS_COUNT_WINDOW_DAYS,
+    since: sinceISO,
+  });
+  return deltas;
+}
+
+/**
  * Step 5 — Serialize to a deterministic schema_version=1 object: every map
  * is sorted by key, lists by content. Output is byte-stable across runs
  * when inputs are unchanged (C7).
@@ -557,6 +609,21 @@ async function main() {
     tags: enrichedTags.length,
     missing: postCountMissing,
     completed_tags: postCountCompletedCount,
+  });
+
+  log('info', 'step 4c: per-tag 30d delta survey');
+  const deltas = await fetchPostCount30dDeltas(enrichedTags);
+  let growthCount = 0;
+  for (const [tag, entry] of enriched) {
+    const d = deltas.get(tag);
+    // Field is always emitted (number) for deterministic output. Renderer
+    // checks `> 0` before showing the `+N` suffix per user spec.
+    entry.post_count_30d_delta = Number.isFinite(d) ? d : 0;
+    if (entry.post_count_30d_delta > 0) growthCount += 1;
+  }
+  log('info', '30d delta attached', {
+    tags: enrichedTags.length,
+    growing_tags: growthCount,
   });
 
   log('info', 'step 5: serialize + write', { output: outputPath });
