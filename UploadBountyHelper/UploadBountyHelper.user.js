@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Upload Bounty Helper
 // @namespace    AkaringoP/JavaScripts
-// @version      0.3.4
+// @version      0.3.5
 // @description  Bounty-artist marks on Danbooru upload + Pixiv/X, plus a Bounty Thread popover on forum_topics/24186
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -1393,7 +1393,11 @@
       --ubm-bt-btn-active-fg: #ffffff;
       position: absolute;
       z-index: 9999;
-      width: min(720px, calc(100vw - 32px));
+      /* 765px tuned so the auto-width Name column lands at ~250px under
+         fixed table layout (table 750 minus 100 Posts + 180 Approver +
+         110 Date + 110 State = 250). Shrinks responsively under narrow
+         viewports via the min() cap. */
+      width: min(765px, calc(100vw - 32px));
       max-height: min(70vh, 600px);
       background: var(--ubm-bt-bg);
       color: var(--ubm-bt-text);
@@ -1481,8 +1485,26 @@
     .ubm-bt-close:hover { color: var(--ubm-bt-text); border-color: var(--ubm-bt-border); }
     .ubm-bt-close:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
 
-    .ubm-bt-body { flex: 1; overflow: auto; }
-    .ubm-bt-table { width: 100%; border-collapse: collapse; }
+    .ubm-bt-body {
+      flex: 1;
+      overflow: auto;
+      /* Reserve a stable gutter so the row content does not jump left/right
+         when the scrollbar appears or disappears between filter states.
+         Modern Safari/Chromium/Firefox all honour this; older browsers
+         fall back to the default scrollbar-on-overflow behaviour. */
+      scrollbar-gutter: stable;
+    }
+    .ubm-bt-table {
+      width: 100%;
+      border-collapse: collapse;
+      /* Lock column widths to the layout instead of the per-row content,
+         otherwise toggling Hide completed (or paginating) shifts every
+         auto-width column horizontally as the visible names change.
+         Fixed columns sum to 500px (Posts 100 + Approver 180 + Date 110 +
+         State 110); the Name column absorbs the rest (~250px at 765px
+         popover width). */
+      table-layout: fixed;
+    }
     .ubm-bt-table th {
       position: sticky;
       top: 0;
@@ -1504,13 +1526,23 @@
     }
     .ubm-bt-table tr:last-child td { border-bottom: none; }
     .ubm-bt-table tbody tr:hover { background: var(--ubm-bt-row-hover); }
-    .ubm-bt-col-posts {
+    /* Bumped specificity so the header th wins against the generic
+       ".ubm-bt-table th" text-align:left rule. Without this, the POSTS
+       header sat left-aligned while the cells below were right-aligned,
+       leaving the column visually misaligned. */
+    .ubm-bt-table .ubm-bt-col-posts {
       text-align: right;
       font-variant-numeric: tabular-nums;
-      width: 80px;
+      /* 100px is the minimum width that keeps every current "<count>
+         (+<delta>)" combination on a single line — the largest count
+         seen in the bounty list is 18672 (dairi) with delta 16, and a
+         high-delta entry is 802 (+487) (rizu_(rizunm)). Both fit in the
+         76px content area with margin to spare. */
+      width: 100px;
+      white-space: nowrap;
     }
-    /* (+N) growth suffix — muted small font so the main count stays prominent.
-       Only rendered when delta > 0 (Resolved 45). */
+    /* (+N) growth suffix — muted small font so the main count stays
+       prominent. Only rendered when delta > 0 (Resolved 45). */
     .ubm-bt-delta {
       color: var(--ubm-bt-text-muted);
       font-size: 11px;
@@ -1518,7 +1550,15 @@
       cursor: help;
     }
     .ubm-bt-col-date { width: 110px; color: var(--ubm-bt-text-muted); font-size: 12px; }
-    .ubm-bt-col-state { width: 100px; }
+    /* 180px sized to fit the longest single approver name with a small
+       multi-approver suffix (e.g. "CommentaryRequest" ≈ 145px). Anything
+       longer is ellipsised by the .ubm-bt-approvers rule below; hover
+       title still surfaces the full name. */
+    .ubm-bt-col-approver { width: 180px; }
+    /* 110px (matches Posts/Date) gives the badge breathing room from the
+       popover right edge and pads "✓ Completed" (the widest badge) on
+       both sides. */
+    .ubm-bt-col-state { width: 110px; }
     /* Inline-flex wrapper aligns the tag link and grid button on the same
        baseline without per-element vertical-align fudge. */
     .ubm-bt-tag-cell {
@@ -1561,6 +1601,15 @@
       color: var(--ubm-bt-text-muted);
       font-size: 12px;
       text-decoration: none;
+      /* inline-block + max-width:100% lets the ellipsis kick in on names
+         that would overflow the 180px Approver column. The hover title
+         (set per-row in JS) still surfaces the full name. */
+      display: inline-block;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
     }
     a.ubm-bt-approvers { cursor: pointer; }
     a.ubm-bt-approvers:hover {
@@ -1665,6 +1714,12 @@
   let forumDocKeyHandler = null;
   let forumDocClickHandler = null;
   let forumFocusReturn = null;
+  // Persistent anchor for Hide-completed toggling. Captured lazily on the
+  // first toggle since the last manual navigation, and reused for every
+  // subsequent toggle so repeated on/off keeps the same artist in view
+  // instead of drifting one page per cycle. Cleared whenever the user
+  // takes an explicit navigation action (sort, pagination, popover close).
+  let forumAnchorTag = null;
 
   function injectForumStyles() {
     if (document.getElementById(FORUM_STYLE_TAG_ID)) return;
@@ -1991,9 +2046,56 @@
     cb.type = 'checkbox';
     cb.checked = forumHideCompleted;
     cb.addEventListener('change', () => {
+      // Anchor-preserving page navigation. Uses a persistent forumAnchorTag
+      // so repeated on/off toggling keeps the same artist as the anchor —
+      // without persistence each toggle would re-pick "current top of page"
+      // and drift one page per cycle (the picked top is not the same
+      // artist that was the anchor a moment ago, because the new visible
+      // page boundary lands a few rows earlier than the previous anchor).
+      const beforeList = sortForumArtists(
+          filteredForumArtists(), forumSortMode, forumSortDir);
+      const beforeStart = forumCurrentPage * FORUM_PAGE_SIZE;
+      const visibleBefore = beforeList.slice(
+          beforeStart, beforeStart + FORUM_PAGE_SIZE);
+
+      // Lazy-initialise the anchor on the first toggle since the last
+      // manual navigation. Subsequent toggles reuse this same tag.
+      if (forumAnchorTag === null && visibleBefore.length > 0) {
+        forumAnchorTag = visibleBefore[0].tag;
+      }
+
       forumHideCompleted = cb.checked;
-      forumCurrentPage = 0;
       saveForumPrefs();
+
+      const afterList = sortForumArtists(
+          filteredForumArtists(), forumSortMode, forumSortDir);
+      let newPage = 0;
+      let anchorIdx = -1;
+      if (forumAnchorTag !== null) {
+        anchorIdx = afterList.findIndex(a => a.tag === forumAnchorTag);
+      }
+      if (anchorIdx >= 0) {
+        newPage = Math.floor(anchorIdx / FORUM_PAGE_SIZE);
+      } else {
+        // Persistent anchor was filtered out (it was completed and the
+        // user just hid completed entries, or vice-versa). Fall through
+        // the previously visible rows to find the closest survivor and
+        // adopt it as the new persistent anchor so the next toggle stays
+        // put. If every visible row got filtered out, drop the anchor so
+        // the next manual navigation reseeds cleanly.
+        let fallbackTag = null;
+        for (const candidate of visibleBefore) {
+          const idx = afterList.findIndex(a => a.tag === candidate.tag);
+          if (idx >= 0) {
+            newPage = Math.floor(idx / FORUM_PAGE_SIZE);
+            fallbackTag = candidate.tag;
+            break;
+          }
+        }
+        forumAnchorTag = fallbackTag;
+      }
+      forumCurrentPage = newPage;
+
       rerenderForum();
     });
     lbl.appendChild(cb);
@@ -2032,6 +2134,10 @@
         forumSortDir = FORUM_SORT_DEFAULT_DIR[mode];
       }
       forumCurrentPage = 0;
+      // Sort changes the meaning of "where am I" entirely; drop the
+      // toggle anchor so the next Hide-completed click reseeds from the
+      // new top of page.
+      forumAnchorTag = null;
       saveForumPrefs();
       rerenderForum();
     });
@@ -2064,7 +2170,7 @@
         '<tr>' +
         '<th>Name</th>' +
         '<th class="ubm-bt-col-posts">Posts</th>' +
-        '<th>Approver</th>' +
+        '<th class="ubm-bt-col-approver">Approver</th>' +
         '<th class="ubm-bt-col-date">Registered</th>' +
         '<th class="ubm-bt-col-state">State</th>' +
         '</tr>';
@@ -2217,6 +2323,7 @@
     prev.addEventListener('click', () => {
       if (forumCurrentPage > 0) {
         forumCurrentPage -= 1;
+        forumAnchorTag = null;
         rerenderForum();
       }
     });
@@ -2234,6 +2341,7 @@
       const page = i;
       btn.addEventListener('click', () => {
         forumCurrentPage = page;
+        forumAnchorTag = null;
         rerenderForum();
       });
       nav.appendChild(btn);
@@ -2248,6 +2356,7 @@
     next.addEventListener('click', () => {
       if (forumCurrentPage < totalPages - 1) {
         forumCurrentPage += 1;
+        forumAnchorTag = null;
         rerenderForum();
       }
     });
@@ -2312,6 +2421,7 @@
     if (trigger) trigger.remove();
     forumData = null;
     forumCurrentPage = 0;
+    forumAnchorTag = null;
   }
 
   // ==========================================================================
