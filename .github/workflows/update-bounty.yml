@@ -2,9 +2,10 @@ name: Update Upload Bounty data
 
 on:
   schedule:
-    # 12h cron — actual cadence depends on data changes (no-op skip when
-    # UploadBountyMarks/data/bounty.json is byte-identical). See PLAN D9.
-    - cron: '0 */12 * * *'
+    # 8h cron — post v0.3, `post_count_at_build` fluctuates per run so the
+    # no-op skip (Resolved 13) rarely fires; effective cadence ≈ 3 commits/day
+    # to UploadBountyMarks/data/bounty.json (Resolved 37). See PLAN D9.
+    - cron: '0 */8 * * *'
   workflow_dispatch:
   push:
     paths:

@@ -13,11 +13,13 @@ const FORUM_LIMIT = 1000;
 const USERS_LIMIT = 1000;
 const ALIAS_LIMIT = 1000;
 const ARTISTS_LIMIT = 1000;
+const TAGS_LIMIT = 1000;
 const ALIAS_CHUNK_SIZE = 100;
+const TAGS_CHUNK_SIZE = 100;
 const SCHEMA_VERSION = 1;
 const SOURCE_URL = `https://danbooru.donmai.us/forum_topics/${TOPIC_ID}`;
 const API_BASE = 'https://danbooru.donmai.us';
-const USER_AGENT = 'UploadBountyMarks-build/0.1 (github.com/AkaringoP/JavaScripts)';
+const USER_AGENT = 'UploadBountyMarks-build/0.3 (github.com/AkaringoP/JavaScripts)';
 
 const PIXIV_USER_RE = /pixiv\.net\/(?:en\/)?users\/(\d+)/i;
 const PIXIV_USER_RE_G = /pixiv\.net\/(?:en\/)?users\/(\d+)/gi;
@@ -30,7 +32,10 @@ const X_HANDLE_RE_G = /(?:^|[^.\w])(?:x\.com|twitter\.com)\/([A-Za-z0-9_]{1,15})
 const X_INTERNAL_HANDLE = 'i';
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|[^\]]*)?\]\]/g;
 const QUOTE_BLOCK_RE = /\[quote\][\s\S]*?\[\/quote\]/gi;
-const STRIKE_BLOCK_RE = /\[s\][\s\S]*?\[\/s\]/gi;
+// Capture group used by `preprocessBody` to harvest strikethrough inner text
+// into the `completed` bucket (Resolved 36). Plain `.replace(re, '')` still
+// works because the replacement string ignores capture groups.
+const STRIKE_BLOCK_RE = /\[s\]([\s\S]*?)\[\/s\]/gi;
 
 /**
  * Emit a structured single-line JSON log record to stderr.
@@ -167,13 +172,22 @@ function normalizeName(raw) {
 }
 
 /**
- * Strip `[quote]`/`[s]` blocks before extraction (Resolved 15).
+ * Strip `[quote]` blocks, then split remaining text into active (outside any
+ * `[s]...[/s]`) and completed (inner of each strike block) buckets — Resolved
+ * 36 supersedes Resolved 15 (which dropped strike content entirely). Quote
+ * inner content is always discarded.
  * @param {string|null|undefined} body
- * @return {string}
+ * @return {{active: string, completed: string}}
  */
 function preprocessBody(body) {
-  if (!body) return '';
-  return body.replace(QUOTE_BLOCK_RE, '').replace(STRIKE_BLOCK_RE, '');
+  if (!body) return { active: '', completed: '' };
+  const dequoted = body.replace(QUOTE_BLOCK_RE, '');
+  const strikeChunks = [];
+  const active = dequoted.replace(STRIKE_BLOCK_RE, (_, inner) => {
+    strikeChunks.push(inner);
+    return '';
+  });
+  return { active, completed: strikeChunks.join('\n') };
 }
 
 /**
@@ -230,22 +244,25 @@ async function lookupArtistsByUrl(url) {
 }
 
 /**
- * Step 3 (combined) — For each Approver+ post, gather artist names. Wikilinks
- * are preferred when present; ext-URL fallback runs only when wikilinks are
- * absent (post-level OR not per-mention, so wikilink+URL posts trust the
- * wikilink alone — Approver intent).
+ * Step 3 (combined) — For each Approver+ post, gather artist names from both
+ * the active body and any `[s]...[/s]` strike content. Wikilinks are preferred
+ * when present in the active bucket; ext-URL fallback runs only when active
+ * wikilinks are absent (so wikilink+URL posts trust the wikilink alone —
+ * Approver intent). Completed bucket is wikilink-only (no URL fallback —
+ * strike-out is a cleanup signal, not a new recommendation).
  * @param {!Array<!Object>} approverPosts
- * @return {Promise<!Array<{post: !Object, names: !Array<string>}>>}
+ * @return {Promise<!Array<{post: !Object, activeNames: !Array<string>, completedNames: !Array<string>}>>}
  */
 async function extractArtistMentions(approverPosts) {
   const result = [];
   let fallbackPosts = 0;
   let fallbackHits = 0;
   for (const post of approverPosts) {
-    const cleaned = preprocessBody(post.body);
-    let names = extractWikilinks(cleaned);
-    if (names.length === 0) {
-      const urls = extractExtUrls(cleaned);
+    const { active, completed } = preprocessBody(post.body);
+    let activeNames = extractWikilinks(active);
+    const completedNames = extractWikilinks(completed);
+    if (activeNames.length === 0) {
+      const urls = extractExtUrls(active);
       if (urls.length > 0) {
         fallbackPosts += 1;
         const collected = [];
@@ -253,11 +270,11 @@ async function extractArtistMentions(approverPosts) {
           const matched = await lookupArtistsByUrl(url);
           collected.push(...matched);
         }
-        names = [...new Set(collected)];
-        if (names.length > 0) fallbackHits += 1;
+        activeNames = [...new Set(collected)];
+        if (activeNames.length > 0) fallbackHits += 1;
       }
     }
-    result.push({ post, names });
+    result.push({ post, activeNames, completedNames });
   }
   log('info', 'ext-url fallback summary', {
     fallback_posts: fallbackPosts,
@@ -292,30 +309,43 @@ async function resolveAliases(names) {
 
 /**
  * Step 3 (merge) — Map (post, extracted names) × alias resolution into
- * canonical-keyed entries.
- * @param {!Array<{post: !Object, names: !Array<string>}>} postsWithNames
+ * canonical-keyed entries. Tracks active/completed bucket origin and the
+ * earliest post `created_at` per tag for `registered_at_utc` (Resolved 36 +
+ * Task v3.1.1).
+ * @param {!Array<{post: !Object, activeNames: !Array<string>, completedNames: !Array<string>}>} postsWithNames
  * @param {!Map<number, !Object>} userMap
  * @param {!Map<string, string>} aliasMap
- * @return {!Map<string, {post_ids: !Set<number>, approvers: !Map<number, string>, aliased_from: !Set<string>}>}
+ * @return {!Map<string, {post_ids: !Set<number>, approvers: !Map<number, string>, aliased_from: !Set<string>, earliest_created_at: ?number, has_active: boolean}>}
  */
 function buildArtistMap(postsWithNames, userMap, aliasMap) {
   const artistMap = new Map();
-  for (const { post, names } of postsWithNames) {
+  for (const { post, activeNames, completedNames } of postsWithNames) {
     const u = userMap.get(post.creator_id);
     if (!u) continue;
-    for (const rawName of names) {
+    const createdMs = post.created_at ? new Date(post.created_at).getTime() : null;
+    const tagged = [];
+    for (const n of activeNames) tagged.push({ raw: n, active: true });
+    for (const n of completedNames) tagged.push({ raw: n, active: false });
+    for (const { raw: rawName, active } of tagged) {
       const canonical = aliasMap.get(rawName) ?? rawName;
       if (!artistMap.has(canonical)) {
         artistMap.set(canonical, {
           post_ids: new Set(),
           approvers: new Map(),
           aliased_from: new Set(),
+          earliest_created_at: null,
+          has_active: false,
         });
       }
       const entry = artistMap.get(canonical);
       entry.post_ids.add(post.id);
       entry.approvers.set(u.id, u.name);
       if (rawName !== canonical) entry.aliased_from.add(rawName);
+      if (active) entry.has_active = true;
+      if (createdMs !== null && Number.isFinite(createdMs) &&
+          (entry.earliest_created_at === null || createdMs < entry.earliest_created_at)) {
+        entry.earliest_created_at = createdMs;
+      }
     }
   }
   return artistMap;
@@ -383,6 +413,10 @@ async function enrichWithUrls(artistMap) {
       aliased_from: [...entry.aliased_from].sort(),
       pixiv_user_ids: [...pixivIds].sort(),
       x_handles: [...xHandles].sort(),
+      registered_at_utc: entry.earliest_created_at !== null
+          ? new Date(entry.earliest_created_at).toISOString()
+          : null,
+      completed: !entry.has_active,
     });
     for (const id of pixivIds) {
       const prev = byPixiv.get(id);
@@ -406,6 +440,35 @@ async function enrichWithUrls(artistMap) {
     }
   }
   return { enriched, byPixiv, byX };
+}
+
+/**
+ * Step 4b — Batch-fetch `post_count` for every enriched tag via
+ * `tags.json?search[name_array][]=...` 100 chunks (Resolved 16 pattern,
+ * verified for tags.json in Phase v3.0 Task v3.0.4). Tags that fail to
+ * appear in the response (e.g. just-deleted or never-existed) default to 0
+ * at the call site.
+ * @param {!Array<string>} tags
+ * @return {Promise<!Map<string, number>>}
+ */
+async function fetchPostCounts(tags) {
+  const counts = new Map();
+  for (let i = 0; i < tags.length; i += TAGS_CHUNK_SIZE) {
+    const chunk = tags.slice(i, i + TAGS_CHUNK_SIZE);
+    const params = chunk
+        .map(n => `search%5Bname_array%5D%5B%5D=${encodeURIComponent(n)}`)
+        .join('&');
+    const url = `${API_BASE}/tags.json?${params}` +
+        `&only=name,post_count&limit=${TAGS_LIMIT}`;
+    const records = await fetchJson(url);
+    if (!Array.isArray(records)) continue;
+    for (const r of records) {
+      if (typeof r.name === 'string' && Number.isFinite(r.post_count)) {
+        counts.set(r.name, r.post_count);
+      }
+    }
+  }
+  return counts;
 }
 
 /**
@@ -459,8 +522,9 @@ async function main() {
   log('info', 'step 3: extract mentions (wikilink + ext-URL fallback)');
   const postsWithNames = await extractArtistMentions(approverPosts);
   const rawNames = new Set();
-  for (const { names } of postsWithNames) {
-    for (const n of names) rawNames.add(n);
+  for (const { activeNames, completedNames } of postsWithNames) {
+    for (const n of activeNames) rawNames.add(n);
+    for (const n of completedNames) rawNames.add(n);
   }
   const sortedNames = [...rawNames].sort();
   log('info', 'raw mentions extracted', { unique_names: sortedNames.length });
@@ -476,6 +540,23 @@ async function main() {
     dropped_non_artist: artistMap.size - enriched.size,
     by_pixiv_count: byPixiv.size,
     by_x_count: byX.size,
+  });
+
+  log('info', 'step 4b: batch-fetch post_count');
+  const enrichedTags = [...enriched.keys()];
+  const postCounts = await fetchPostCounts(enrichedTags);
+  let postCountMissing = 0;
+  let postCountCompletedCount = 0;
+  for (const [tag, entry] of enriched) {
+    const c = postCounts.get(tag);
+    if (c === undefined) postCountMissing += 1;
+    entry.post_count_at_build = c ?? 0;
+    if (entry.completed) postCountCompletedCount += 1;
+  }
+  log('info', 'post_count attached', {
+    tags: enrichedTags.length,
+    missing: postCountMissing,
+    completed_tags: postCountCompletedCount,
   });
 
   log('info', 'step 5: serialize + write', { output: outputPath });
