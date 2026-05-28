@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Upload Bounty Helper
 // @namespace    AkaringoP/JavaScripts
-// @version      0.3.5
+// @version      1.0.0
 // @description  Bounty-artist marks on Danbooru upload + Pixiv/X, plus a Bounty Thread popover on forum_topics/24186
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
@@ -37,6 +37,13 @@
   // the popover's Posts column. v2 forces one refresh per user on upgrade.
   const CACHE_KEY = 'ubm_bounty_artists_v2';
   const CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2h (PLAN D3)
+  // v0.3.6 — fetcher hardening. FETCH_TIMEOUT_MS lets GM_xmlhttpRequest's
+  // ontimeout handler actually fire (without the `timeout` option a stalled
+  // response sits forever). FETCH_FAILURE_BACKOFF_MS suppresses repeat
+  // fetches after a failure so a transient origin outage (or a 429 from
+  // raw.githubusercontent.com) doesn't get retried on every page nav.
+  const FETCH_TIMEOUT_MS = 30 * 1000;
+  const FETCH_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
   const LOG_PREFIX = '[UBM]';
 
   // --- Cache (stale-while-revalidate, PLAN D3) ------------------------------
@@ -88,6 +95,7 @@
         url: BOUNTY_DATA_URL,
         responseType: 'json',
         headers: { 'Accept': 'application/json' },
+        timeout: FETCH_TIMEOUT_MS,
         onload: (response) => {
           if (response.status < 200 || response.status >= 300) {
             reject(new Error(`HTTP ${response.status}`));
@@ -115,14 +123,33 @@
   }
 
   let inFlight = null;
-  function backgroundRefresh() {
+  let lastFailureTs = 0;
+
+  /**
+   * Dedupe + negative-cache wrapper around fetchRemote. Returns the
+   * in-flight promise if one is already running — v0.3.6 fix: previously
+   * getBountyData's first-load path bypassed this guard and could trigger
+   * overlapping fetches when two modules initialized back-to-back (Turbo
+   * nav race). Recent failures short-circuit to null until
+   * FETCH_FAILURE_BACKOFF_MS has elapsed, preventing thundering-herd retry
+   * across rapid page navigations.
+   * @return {!Promise<?Object>}
+   */
+  function refreshBountyData() {
     if (inFlight) return inFlight;
+    if (Date.now() - lastFailureTs < FETCH_FAILURE_BACKOFF_MS) {
+      return Promise.resolve(null);
+    }
     inFlight = (async () => {
       try {
         const data = await fetchRemote();
         saveCache(data);
+        lastFailureTs = 0;
+        return data;
       } catch (err) {
-        console.warn(LOG_PREFIX, 'background refresh failed', err);
+        lastFailureTs = Date.now();
+        console.warn(LOG_PREFIX, 'fetch failed', err);
+        return null;
       } finally {
         inFlight = null;
       }
@@ -134,17 +161,63 @@
     const cached = loadCache();
     if (cached) {
       const stale = Date.now() - cached.ts > CACHE_TTL_MS;
-      if (stale) backgroundRefresh();
+      if (stale) refreshBountyData();
       return cached.data;
     }
-    try {
-      const data = await fetchRemote();
-      saveCache(data);
-      return data;
-    } catch (err) {
-      console.warn(LOG_PREFIX, 'initial fetch failed; no label this turn', err);
-      return null;
+    const data = await refreshBountyData();
+    if (!data) {
+      console.warn(LOG_PREFIX, 'initial fetch unavailable; no label this turn');
     }
+    return data;
+  }
+
+  // --- Style injection ------------------------------------------------------
+  /**
+   * Insert a `<style id={id}>` block into <head>, idempotent. Each module
+   * owns a distinct id so the inject is safe to call from any init() without
+   * coordinating order. (PLAN D13 — shared utility, v0.3.6 dedup of three
+   * inline copies that existed in v0.3.5 and earlier.)
+   * @param {string} id — style tag id (acts as the idempotency key)
+   * @param {string} css — full CSS body to insert
+   */
+  function injectStyles(id, css) {
+    if (document.getElementById(id)) return;
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = css;
+    document.head.appendChild(style);
+  }
+
+  // --- SPA navigation hooks (Pixiv + X share this) --------------------------
+  // Patch history.pushState / replaceState and listen for popstate so a
+  // single-page navigation triggers the caller's `schedule()` (typically a
+  // debounced re-mount). Used by Pixiv (initPixiv) and X (initX); Danbooru
+  // does not need this because Turbo emits its own `turbo:load` event.
+  //
+  // Lifecycle: install once per page lifetime (idempotent via the module-
+  // level `spaHooksInstalled` flag). The cleanup() functions intentionally
+  // do NOT undo this patch — Pixiv/X SPAs only leave the userscript scope
+  // by full page unload, so the patched references die naturally with the
+  // window. Leaving the patch installed avoids a class of restore-order bugs
+  // (e.g. another extension monkey-patching history after us would be wiped
+  // out if we tried to restore the original here).
+  let spaHooksInstalled = false;
+  function installSpaNavHooks(schedule) {
+    if (spaHooksInstalled) return;
+    spaHooksInstalled = true;
+    const origPush = history.pushState;
+    history.pushState = function(...args) {
+      const ret = origPush.apply(this, args);
+      schedule();
+      return ret;
+    };
+    const origReplace = history.replaceState;
+    history.replaceState = function(...args) {
+      const ret = origReplace.apply(this, args);
+      schedule();
+      return ret;
+    };
+    window.addEventListener('popstate', schedule);
   }
 
   // --- Mark asset + forum permalink helpers ---------------------------------
@@ -255,14 +328,6 @@
       opacity: 0.7;
     }
   `;
-
-  function injectMarkStyles() {
-    if (document.getElementById(MARK_STYLE_TAG_ID)) return;
-    const style = document.createElement('style');
-    style.id = MARK_STYLE_TAG_ID;
-    style.textContent = MARK_CSS;
-    document.head.appendChild(style);
-  }
 
   /**
    * Build the external-site mark anchor (PLAN D16). Returns a <span> when
@@ -512,27 +577,18 @@
     }
   `;
 
-  // --- Danbooru styles ------------------------------------------------------
-  function injectDanbooruStyles() {
-    if (document.getElementById(DANBOORU_STYLE_TAG_ID)) return;
-    const style = document.createElement('style');
-    style.id = DANBOORU_STYLE_TAG_ID;
-    style.textContent = DANBOORU_CSS;
-    document.head.appendChild(style);
-  }
-
   // --- Danbooru artist identification (Resolved 17/18/19) -------------------
   function lookupArtist(data) {
     if (!data || !data.artists) return null;
 
-    // 1차: DOM artist tag (li.selected, tag-type-1 = artist category).
+    // Primary: DOM artist tag (li.selected, tag-type-1 = artist category).
     const tagEl = document.querySelector(ARTIST_TAG_SELECTOR);
     const tag = tagEl?.dataset?.tagName;
     if (tag && Object.prototype.hasOwnProperty.call(data.artists, tag)) {
       return { tag, entry: data.artists[tag] };
     }
 
-    // 2차: source URL fallback (Pixiv user / X handle reverse-index).
+    // Fallback: source URL (Pixiv user / X handle reverse-index).
     const sourceEl = document.querySelector(SOURCE_INPUT_SELECTOR);
     const sourceUrl = sourceEl?.value;
     if (!sourceUrl) return null;
@@ -898,7 +954,7 @@
   }
 
   async function initDanbooru() {
-    injectDanbooruStyles();
+    injectStyles(DANBOORU_STYLE_TAG_ID, DANBOORU_CSS);
 
     // Early synchronous pass — start blocking PPD before bounty.json fetch
     // completes (it may be slow or fail). Duplicate bubble is deferred to
@@ -963,7 +1019,6 @@
   // --- Pixiv module state ---------------------------------------------------
   let pixivData = null;
   let pixivNavTimer = null;
-  let pixivSpaHooked = false;
 
   // --- Pixiv mount logic ----------------------------------------------------
 
@@ -1035,39 +1090,17 @@
     }, PIXIV_NAV_DEBOUNCE_MS);
   }
 
-  /**
-   * Install SPA navigation hooks once per page lifetime. Pixiv uses
-   * pushState for in-app routing; replaceState fires on back-button (Phase
-   * v2.0.4 spy measured replaceState + popstate within 80ms). Patching
-   * three sources is defensive but cheap.
-   */
-  function setupPixivSpaHooks() {
-    if (pixivSpaHooked) return;
-    pixivSpaHooked = true;
-
-    const origPush = history.pushState;
-    history.pushState = function(...args) {
-      const ret = origPush.apply(this, args);
-      schedulePixivRun();
-      return ret;
-    };
-    const origReplace = history.replaceState;
-    history.replaceState = function(...args) {
-      const ret = origReplace.apply(this, args);
-      schedulePixivRun();
-      return ret;
-    };
-    window.addEventListener('popstate', schedulePixivRun);
-  }
-
   async function initPixiv() {
-    injectMarkStyles();
+    injectStyles(MARK_STYLE_TAG_ID, MARK_CSS);
     pixivData = await getBountyData();
     if (!pixivData) {
       console.info(LOG_PREFIX, '[pixiv] no bounty data, mark skipped');
       return;
     }
-    setupPixivSpaHooks();
+    // pushState/replaceState/popstate routing (Phase v2.0.4 spy measured
+    // replaceState + popstate within 80ms of back-button). Hook survives
+    // cleanup intentionally — see `installSpaNavHooks` for rationale.
+    installSpaNavHooks(schedulePixivRun);
     runPixiv();
     // Lazy-mount safety retry. Idempotency makes this safe to call again.
     setTimeout(runPixiv, PIXIV_RETRY_DELAY_MS);
@@ -1117,7 +1150,6 @@
   let xNavTimer = null;
   let xObserverDebounceTimer = null;
   let xObserver = null;
-  let xSpaHooked = false;
 
   // --- X helpers ------------------------------------------------------------
   /**
@@ -1244,33 +1276,15 @@
     xObserver.observe(root, { childList: true, subtree: true });
   }
 
-  function setupXSpaHooks() {
-    if (xSpaHooked) return;
-    xSpaHooked = true;
-
-    const origPush = history.pushState;
-    history.pushState = function(...args) {
-      const ret = origPush.apply(this, args);
-      scheduleXRun();
-      return ret;
-    };
-    const origReplace = history.replaceState;
-    history.replaceState = function(...args) {
-      const ret = origReplace.apply(this, args);
-      scheduleXRun();
-      return ret;
-    };
-    window.addEventListener('popstate', scheduleXRun);
-  }
-
   async function initX() {
-    injectMarkStyles();
+    injectStyles(MARK_STYLE_TAG_ID, MARK_CSS);
     xData = await getBountyData();
     if (!xData) {
       console.info(LOG_PREFIX, '[x] no bounty data, mark skipped');
       return;
     }
-    setupXSpaHooks();
+    // SPA routing hook (see `installSpaNavHooks` for cleanup-survives note).
+    installSpaNavHooks(scheduleXRun);
     setupXTimelineObserver();
     runX();
     setTimeout(runX, X_RETRY_DELAY_MS);
@@ -1295,9 +1309,10 @@
   // ==========================================================================
   // === Forum module (v0.3, /forum_topics/24186*) ============================
   // ==========================================================================
-  // Bounty Thread popover. heading <h1> 옆 scroll-icon trigger → popover with
-  // sortable/paginated artist list. Resolved 34 (mount selector), Resolved 35
-  // (icon), Resolved 36 (completed flag source), PLAN D20-D27 + D29.
+  // Bounty Thread popover. A scroll-icon trigger sits next to the heading
+  // <h1>; clicking it opens a popover with a sortable/paginated artist
+  // list. Resolved 34 (mount selector), Resolved 35 (icon), Resolved 36
+  // (completed flag source), PLAN D20-D27 + D29.
   //
   // UX choices:
   //   - Popover positioning: sub-popover anchored under heading trigger
@@ -1433,14 +1448,21 @@
       border-bottom: 1px solid var(--ubm-bt-border);
     }
     .ubm-bt-title { font-weight: 600; margin-right: auto; }
-    .ubm-bt-sort-group {
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-group {
       display: inline-flex;
       gap: 0;
       border: 1px solid var(--ubm-bt-border);
       border-radius: 4px;
       overflow: hidden;
     }
-    .ubm-bt-sort-btn {
+    /* All sort-button rules are prefixed with .ubm-bt-popover so external
+       page CSS (Danbooru forum_topics defines its own button:hover and
+       button:focus rules) can't outweigh ours by equal-specificity cascade.
+       v0.3.6 fix: previously the bare ".ubm-bt-sort-btn:hover" selector
+       (0,2,0) tied with Danbooru's "form button:focus" (0,2,1) and lost
+       cascade — Safari then repainted the focused tab to a near-white
+       background, leaving the white "active" tab text unreadable. */
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn {
       padding: 4px 10px;
       background: var(--ubm-bt-btn-bg);
       color: var(--ubm-bt-text);
@@ -1450,14 +1472,28 @@
       display: inline-flex;
       align-items: center;
       gap: 4px;
+      /* Reset native <button> chrome so Safari/Chrome don't repaint the
+         background to the user-agent "buttonface" colour during mousedown. */
+      appearance: none;
+      -webkit-appearance: none;
     }
-    .ubm-bt-sort-btn + .ubm-bt-sort-btn { border-left: 1px solid var(--ubm-bt-border); }
-    .ubm-bt-sort-btn:hover { background: var(--ubm-bt-btn-bg-hover); }
-    .ubm-bt-sort-btn.active {
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn + .ubm-bt-sort-btn {
+      border-left: 1px solid var(--ubm-bt-border);
+    }
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn:hover,
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn:focus,
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn:active {
+      background: var(--ubm-bt-btn-bg-hover);
+      color: var(--ubm-bt-text);
+    }
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn.active,
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn.active:hover,
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn.active:focus,
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn.active:active {
       background: var(--ubm-bt-btn-active-bg);
       color: var(--ubm-bt-btn-active-fg);
     }
-    .ubm-bt-sort-btn:focus-visible {
+    .${FORUM_POPOVER_CLASS} .ubm-bt-sort-btn:focus-visible {
       outline: 2px solid #22c55e;
       outline-offset: -2px;
     }
@@ -1720,14 +1756,6 @@
   // instead of drifting one page per cycle. Cleared whenever the user
   // takes an explicit navigation action (sort, pagination, popover close).
   let forumAnchorTag = null;
-
-  function injectForumStyles() {
-    if (document.getElementById(FORUM_STYLE_TAG_ID)) return;
-    const style = document.createElement('style');
-    style.id = FORUM_STYLE_TAG_ID;
-    style.textContent = FORUM_CSS;
-    document.head.appendChild(style);
-  }
 
   // --- Preference persistence (Resolved 43) ---------------------------------
   /**
@@ -2004,6 +2032,13 @@
   }
 
   // --- Popover DOM ----------------------------------------------------------
+  /**
+   * Build the popover root. Computes the sorted+filtered artist list once
+   * and passes it to header/body/pagination — previously each of those
+   * helpers re-projected and re-filtered (and body also re-sorted) the full
+   * artist map on every render, three to four times per click.
+   * @return {!HTMLElement}
+   */
   function buildForumPopover() {
     const el = document.createElement('div');
     el.className = FORUM_POPOVER_CLASS;
@@ -2015,30 +2050,23 @@
     // detached click target up to document, (c) trip the close handler
     // because `popoverEl.contains(detachedTarget)` returns false.
     el.addEventListener('click', e => e.stopPropagation());
-    el.appendChild(buildForumHeader());
-    el.appendChild(buildForumBody());
-    el.appendChild(buildForumPagination());
+    const sorted = sortForumArtists(
+        filteredForumArtists(), forumSortMode, forumSortDir);
+    el.appendChild(buildForumHeader(sorted));
+    el.appendChild(buildForumBody(sorted));
+    el.appendChild(buildForumPagination(sorted));
     return el;
   }
 
-  function buildForumHeader() {
+  function buildForumHeader(sorted) {
     const header = document.createElement('div');
     header.className = 'ubm-bt-header';
 
-    const total = filteredForumArtists().length;
+    const total = sorted.length;
     const title = document.createElement('div');
     title.className = 'ubm-bt-title';
     title.textContent = `Bounty Artist List (${total})`;
     header.appendChild(title);
-
-    const sortGroup = document.createElement('div');
-    sortGroup.className = 'ubm-bt-sort-group';
-    sortGroup.setAttribute('role', 'group');
-    sortGroup.setAttribute('aria-label', 'Sort by');
-    for (const mode of FORUM_SORT_TAB_ORDER) {
-      sortGroup.appendChild(buildForumSortButton(mode));
-    }
-    header.appendChild(sortGroup);
 
     const lbl = document.createElement('label');
     lbl.className = 'ubm-bt-hide-completed';
@@ -2102,6 +2130,19 @@
     lbl.appendChild(document.createTextNode('Hide completed'));
     header.appendChild(lbl);
 
+    // Sort tabs sit to the right of the Hide-completed checkbox (v0.3.6
+    // layout swap, per user request — previously Sort | Hide | Close, now
+    // Hide | Sort | Close). Title keeps its `margin-right: auto` so it
+    // anchors the row at the left edge.
+    const sortGroup = document.createElement('div');
+    sortGroup.className = 'ubm-bt-sort-group';
+    sortGroup.setAttribute('role', 'group');
+    sortGroup.setAttribute('aria-label', 'Sort by');
+    for (const mode of FORUM_SORT_TAB_ORDER) {
+      sortGroup.appendChild(buildForumSortButton(mode));
+    }
+    header.appendChild(sortGroup);
+
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'ubm-bt-close';
@@ -2144,12 +2185,10 @@
     return btn;
   }
 
-  function buildForumBody() {
+  function buildForumBody(sorted) {
     const body = document.createElement('div');
     body.className = 'ubm-bt-body';
 
-    const filtered = filteredForumArtists();
-    const sorted = sortForumArtists(filtered, forumSortMode, forumSortDir);
     const start = forumCurrentPage * FORUM_PAGE_SIZE;
     const page = sorted.slice(start, start + FORUM_PAGE_SIZE);
 
@@ -2301,8 +2340,8 @@
     return tr;
   }
 
-  function buildForumPagination() {
-    const total = filteredForumArtists().length;
+  function buildForumPagination(sorted) {
+    const total = sorted.length;
     const totalPages = Math.max(1, Math.ceil(total / FORUM_PAGE_SIZE));
     const nav = document.createElement('nav');
     nav.className = 'ubm-bt-pagination';
@@ -2391,7 +2430,7 @@
     // here from a /uploads/* visit, then immediately re-fire on a non-forum
     // path during back-button. Path check keeps mount attempts confined.
     if (!location.pathname.startsWith(FORUM_PATH_PREFIX)) return;
-    injectForumStyles();
+    injectStyles(FORUM_STYLE_TAG_ID, FORUM_CSS);
     // Apply persisted sort/filter prefs before any popover render so the
     // first open reflects the user's last choice (Resolved 43).
     loadForumPrefs();

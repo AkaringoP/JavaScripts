@@ -19,9 +19,17 @@ const TAGS_CHUNK_SIZE = 100;
 const SCHEMA_VERSION = 1;
 // Recent-activity window for `post_count_30d_delta` (Resolved 45). Rolling
 // 30 days from build time — meaning drifts slightly per cron slot, accepted
-// trade-off for "이 작가가 한달새 활발하다" signal precision.
+// trade-off for "active in the last month" signal precision.
 const POSTS_COUNT_WINDOW_DAYS = 30;
 const POSTS_COUNT_CONCURRENCY = 5;
+const ARTISTS_FETCH_CONCURRENCY = 5;
+// v0.3.6 input-safety caps. Danbooru tag names are spec-limited to ~100 chars
+// and usernames to ~20; the buffers below let normal entries through while
+// rejecting adversarial wikilink targets or malformed API responses that
+// could otherwise bloat bounty.json. Mismatched values are silently dropped
+// (logged once) rather than crashing the build.
+const MAX_TAG_NAME_LENGTH = 170;
+const MAX_USER_NAME_LENGTH = 50;
 const SOURCE_URL = `https://danbooru.donmai.us/forum_topics/${TOPIC_ID}`;
 const API_BASE = 'https://danbooru.donmai.us';
 const USER_AGENT = 'UploadBountyHelper-build/0.4 (github.com/AkaringoP/JavaScripts)';
@@ -145,6 +153,9 @@ async function fetchForumPosts(topicId) {
 
 /**
  * Step 2 helper — batch lookup users by id (comma-separated, exact match).
+ * Drops records whose shape disagrees with Danbooru's documented response or
+ * whose `name` exceeds MAX_USER_NAME_LENGTH (defensive guard against API
+ * regression or maliciously crafted display names — v0.3.6 S5/S6).
  * @param {!Array<number>} ids
  * @return {Promise<!Map<number, !Object>>}
  */
@@ -153,7 +164,24 @@ async function fetchUsers(ids) {
   const url = `${API_BASE}/users.json?search%5Bid%5D=${ids.join(',')}` +
       `&only=id,name,level&limit=${USERS_LIMIT}`;
   const users = await fetchJson(url);
-  return new Map(users.map(u => [u.id, u]));
+  if (!Array.isArray(users)) {
+    log('warn', 'users.json returned non-array; ignoring', { type: typeof users });
+    return new Map();
+  }
+  let dropped = 0;
+  const map = new Map();
+  for (const u of users) {
+    if (!u || typeof u.id !== 'number' ||
+        typeof u.name !== 'string' || u.name.length === 0 ||
+        u.name.length > MAX_USER_NAME_LENGTH ||
+        typeof u.level !== 'number') {
+      dropped += 1;
+      continue;
+    }
+    map.set(u.id, u);
+  }
+  if (dropped > 0) log('warn', 'users.json shape rejects', { dropped });
+  return map;
 }
 
 /**
@@ -197,6 +225,9 @@ function preprocessBody(body) {
 
 /**
  * Step 3 (extract) — Return normalized wikilink targets in source order.
+ * Targets longer than MAX_TAG_NAME_LENGTH are silently dropped — Danbooru's
+ * own tag spec caps names well below that threshold, and accepting longer
+ * strings would let adversarial forum posts inflate bounty.json (S4).
  * @param {string} cleanedBody
  * @return {!Array<string>}
  */
@@ -204,7 +235,7 @@ function extractWikilinks(cleanedBody) {
   const out = [];
   for (const m of cleanedBody.matchAll(WIKILINK_RE)) {
     const name = normalizeName(m[1]);
-    if (name) out.push(name);
+    if (name && name.length <= MAX_TAG_NAME_LENGTH) out.push(name);
   }
   return out;
 }
@@ -305,7 +336,18 @@ async function resolveAliases(names) {
         `&search%5Bstatus%5D=active&only=antecedent_name,consequent_name` +
         `&limit=${ALIAS_LIMIT}`;
     const aliases = await fetchJson(url);
+    if (!Array.isArray(aliases)) {
+      log('warn', 'tag_aliases.json returned non-array; skipping chunk',
+          { type: typeof aliases });
+      continue;
+    }
     for (const a of aliases) {
+      // v0.3.6 S6 — reject malformed alias rows rather than crashing on
+      // .antecedent_name = undefined entries.
+      if (!a || typeof a.antecedent_name !== 'string' ||
+          typeof a.consequent_name !== 'string') continue;
+      if (a.antecedent_name.length > MAX_TAG_NAME_LENGTH ||
+          a.consequent_name.length > MAX_TAG_NAME_LENGTH) continue;
       aliasMap.set(a.antecedent_name, a.consequent_name);
     }
   }
@@ -369,6 +411,11 @@ function pickCanonicalWinner(prev, current) {
  * an artist tag (non-artist wikilinks like copyright/general tags return
  * empty and are silently dropped per PLAN D1 step 4) and (b) extract Pixiv
  * user IDs and X handles for reverse-index publishing.
+ *
+ * v0.3.6 — concurrent fetch (ARTISTS_FETCH_CONCURRENCY) for wall-time. The
+ * fetch and processing phases are separated so by_pixiv/by_x collision
+ * resolution still iterates tags in sorted order, keeping output
+ * byte-stable across runs regardless of how fast each request returned.
  * @param {!Map<string, !Object>} artistMap
  * @return {Promise<{enriched: !Map, byPixiv: !Map, byX: !Map}>}
  */
@@ -377,29 +424,43 @@ async function enrichWithUrls(artistMap) {
   const byPixiv = new Map();
   const byX = new Map();
   const tags = [...artistMap.keys()].sort();
+
+  const recordsByTag = new Map();
+  for (let i = 0; i < tags.length; i += ARTISTS_FETCH_CONCURRENCY) {
+    const chunk = tags.slice(i, i + ARTISTS_FETCH_CONCURRENCY);
+    const results = await Promise.all(chunk.map(async (tag) => {
+      try {
+        const url = `${API_BASE}/artists.json?search%5Bname%5D=${encodeURIComponent(tag)}` +
+            `&only=name,urls&limit=${ARTISTS_LIMIT}`;
+        return [tag, await fetchJson(url)];
+      } catch (err) {
+        log('warn', 'artists.json fetch failed, dropping tag', {
+          tag,
+          error: err.message,
+        });
+        return [tag, null];
+      }
+    }));
+    for (const [tag, recs] of results) recordsByTag.set(tag, recs);
+  }
+
   for (const tag of tags) {
-    let artistRecords;
-    try {
-      const url = `${API_BASE}/artists.json?search%5Bname%5D=${encodeURIComponent(tag)}` +
-          `&only=name,urls&limit=${ARTISTS_LIMIT}`;
-      artistRecords = await fetchJson(url);
-    } catch (err) {
-      log('warn', 'artists.json fetch failed, dropping tag', {
-        tag,
-        error: err.message,
-      });
-      continue;
-    }
+    const artistRecords = recordsByTag.get(tag);
     if (!Array.isArray(artistRecords) || artistRecords.length === 0) {
-      // Silent drop: non-artist wikilink (e.g. copyright, general tag).
+      // Silent drop: non-artist wikilink (e.g. copyright, general tag) or
+      // failed fetch (logged above).
       continue;
     }
     const pixivIds = new Set();
     const xHandles = new Set();
     for (const rec of artistRecords) {
-      for (const urlObj of rec.urls ?? []) {
-        const u = typeof urlObj === 'string' ? urlObj : urlObj.url;
-        if (!u) continue;
+      // v0.3.6 S6 — defensive: artists.json typically returns objects with
+      // .urls but if the API shape regresses we don't want a TypeError.
+      if (!rec || typeof rec !== 'object') continue;
+      const urls = Array.isArray(rec.urls) ? rec.urls : [];
+      for (const urlObj of urls) {
+        const u = typeof urlObj === 'string' ? urlObj : urlObj && urlObj.url;
+        if (typeof u !== 'string' || !u) continue;
         const pm = u.match(PIXIV_USER_RE);
         if (pm) pixivIds.add(pm[1]);
         const xm = u.match(X_HANDLE_RE);
