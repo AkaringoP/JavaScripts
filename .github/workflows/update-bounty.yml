@@ -4,12 +4,12 @@ on:
   schedule:
     # 8h cron — post v0.3, `post_count_at_build` fluctuates per run so the
     # no-op skip (Resolved 13) rarely fires; effective cadence ≈ 3 commits/day
-    # to UploadBountyMarks/data/bounty.json (Resolved 37). See PLAN D9.
+    # to UploadBountyHelper/data/bounty.json (Resolved 37). See PLAN D9.
     - cron: '0 */8 * * *'
   workflow_dispatch:
   push:
     paths:
-      - 'UploadBountyMarks/scripts/**'
+      - 'UploadBountyHelper/scripts/**'
       - '.github/workflows/update-bounty.yml'
 
 permissions:
@@ -27,16 +27,16 @@ jobs:
           node-version: '20'
 
       - name: Build bounty.json
-        run: node UploadBountyMarks/scripts/build-bounty.mjs UploadBountyMarks/data/bounty.json
+        run: node UploadBountyHelper/scripts/build-bounty.mjs UploadBountyHelper/data/bounty.json
 
       - name: Commit & push if changed
         run: |
-          if git diff --quiet UploadBountyMarks/data/bounty.json; then
+          if git diff --quiet UploadBountyHelper/data/bounty.json; then
             echo "no changes — skipping commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add UploadBountyMarks/data/bounty.json
-          git commit -m "data(uploadbountymarks): refresh bounty.json (run #${GITHUB_RUN_ID})"
+          git add UploadBountyHelper/data/bounty.json
+          git commit -m "data(uploadbountyhelper): refresh bounty.json (run #${GITHUB_RUN_ID})"
           git push

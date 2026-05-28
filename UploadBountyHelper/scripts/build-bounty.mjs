@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// UploadBountyMarks — bounty.json builder
+// UploadBountyHelper — bounty.json builder
 // Node 20+, ES module, zero npm dependencies (uses built-in fetch).
 // Usage: node build-bounty.mjs <output_path>
 // See PLAN.md D1 pipeline (5 steps) and Resolved Decisions 14–19.
@@ -19,7 +19,7 @@ const TAGS_CHUNK_SIZE = 100;
 const SCHEMA_VERSION = 1;
 const SOURCE_URL = `https://danbooru.donmai.us/forum_topics/${TOPIC_ID}`;
 const API_BASE = 'https://danbooru.donmai.us';
-const USER_AGENT = 'UploadBountyMarks-build/0.3 (github.com/AkaringoP/JavaScripts)';
+const USER_AGENT = 'UploadBountyHelper-build/0.3 (github.com/AkaringoP/JavaScripts)';
 
 const PIXIV_USER_RE = /pixiv\.net\/(?:en\/)?users\/(\d+)/i;
 const PIXIV_USER_RE_G = /pixiv\.net\/(?:en\/)?users\/(\d+)/gi;

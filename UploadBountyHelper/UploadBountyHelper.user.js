@@ -1,10 +1,11 @@
 // ==UserScript==
-// @name         Danbooru Upload Bounty Marks
+// @name         Danbooru Upload Bounty Helper
 // @namespace    AkaringoP/JavaScripts
-// @version      0.2.4
-// @description  Mark bounty artists (forum_topics/24186) on Danbooru upload + Pixiv/X
+// @version      0.3.3
+// @description  Bounty-artist marks on Danbooru upload + Pixiv/X, plus a Bounty Thread popover on forum_topics/24186
 // @author       AkaringoP
 // @match        https://danbooru.donmai.us/uploads/*
+// @match        https://danbooru.donmai.us/forum_topics/24186*
 // @match        https://www.pixiv.net/*
 // @match        https://x.com/*
 // @match        https://twitter.com/*
@@ -12,8 +13,8 @@
 // @grant        GM_xmlhttpRequest
 // @connect      raw.githubusercontent.com
 // @run-at       document-end
-// @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyMarks/UploadBountyMarks.user.js
-// @downloadURL  https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyMarks/UploadBountyMarks.user.js
+// @updateURL    https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/UploadBountyHelper.user.js
+// @downloadURL  https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/UploadBountyHelper.user.js
 // ==/UserScript==
 
 (function() {
@@ -28,10 +29,13 @@
   // --- Shared constants -----------------------------------------------------
   // v0.1 BOUNTY_DATA_URL points at the feature branch (Resolved 22). Switch to
   // `main` in Phase v2.5.1 alongside the @updateURL/@downloadURL above.
-  const BOUNTY_DATA_URL = 'https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyMarks/data/bounty.json';
+  const BOUNTY_DATA_URL = 'https://raw.githubusercontent.com/AkaringoP/JavaScripts/feature/upload-bounty-marks/UploadBountyHelper/data/bounty.json';
   const FORUM_POST_BASE = 'https://danbooru.donmai.us/forum_posts';
   const SCHEMA_VERSION = 1;
-  const CACHE_KEY = 'ubm_bounty_artists_v1';
+  // Bumped at v0.3 — v1 caches predate Resolved 36's strikethrough split and
+  // Resolved 37's post_count_at_build, so a stale v1 cache would show "—" in
+  // the popover's Posts column. v2 forces one refresh per user on upgrade.
+  const CACHE_KEY = 'ubm_bounty_artists_v2';
   const CACHE_TTL_MS = 2 * 60 * 60 * 1000;  // 2h (PLAN D3)
   const LOG_PREFIX = '[UBM]';
 
@@ -153,6 +157,29 @@
       '<path fill="#22c55e" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M3 7 L3 17 L12 22 L12 12 Z"/>' +
       '<path fill="#16a34a" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M21 7 L21 17 L12 22 L12 12 Z"/>' +
       '<path fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="M7 12.7 L10.5 16.2 L17 9.2"/>' +
+      '</svg>';
+
+  // Synced manually from assets/scroll-icon.svg (Resolved 35). Forum thread
+  // popover trigger — bounty-mark box body + magnifying glass overlay.
+  const SCROLL_ICON_SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" role="img" aria-label="Show bounty artist list">' +
+      '<title>Bounty Artist List</title>' +
+      '<path fill="#4ade80" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M12 2 L21 7 L12 12 L3 7 Z"/>' +
+      '<path fill="#22c55e" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M3 7 L3 17 L12 22 L12 12 Z"/>' +
+      '<path fill="#16a34a" stroke="#15803d" stroke-width="0.7" stroke-linejoin="round" d="M21 7 L21 17 L12 22 L12 12 Z"/>' +
+      '<circle cx="10.5" cy="12" r="3" fill="none" stroke="#ffffff" stroke-width="2.2"/>' +
+      '<line x1="12.6" y1="14.1" x2="17" y2="18.5" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round"/>' +
+      '</svg>';
+
+  // 4-square grid icon for the popover row's "view posts" side button (D25
+  // updated 2026-05-28, Resolved 41). currentColor inherits from the link so
+  // it picks up theme colors automatically.
+  const POSTS_ICON_SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">' +
+      '<rect x="1" y="1" width="6" height="6" rx="0.5"/>' +
+      '<rect x="9" y="1" width="6" height="6" rx="0.5"/>' +
+      '<rect x="1" y="9" width="6" height="6" rx="0.5"/>' +
+      '<rect x="9" y="9" width="6" height="6" rx="0.5"/>' +
       '</svg>';
 
   /**
@@ -1266,44 +1293,1075 @@
   }
 
   // ==========================================================================
+  // === Forum module (v0.3, /forum_topics/24186*) ============================
+  // ==========================================================================
+  // Bounty Thread popover. heading <h1> 옆 scroll-icon trigger → popover with
+  // sortable/paginated artist list. Resolved 34 (mount selector), Resolved 35
+  // (icon), Resolved 36 (completed flag source), PLAN D20-D27 + D29.
+  //
+  // UX choices:
+  //   - Popover positioning: sub-popover anchored under heading trigger
+  //     (Q_v3_5 = absolute, not viewport modal).
+  //   - Approver column: hover-only via native title, no click action
+  //     (Q_v3_4 = option c — keep simple).
+  //   - Graceful degrade: missing v0.3 fields render as "—" / fallback
+  //     defaults so a stale v0.2 bounty.json still opens the popover.
+
+  // --- Forum constants ------------------------------------------------------
+  const FORUM_PATH_PREFIX = '/forum_topics/24186';
+  const FORUM_HEADING_SELECTOR = 'div#c-forum-topics div#a-show > h1';
+  const FORUM_TRIGGER_CLASS = 'ubm-bt-trigger';
+  const FORUM_POPOVER_CLASS = 'ubm-bt-popover';
+  const FORUM_PAGE_SIZE = 20;
+  const FORUM_STYLE_TAG_ID = 'ubm-bt-styles';
+  const FORUM_MAX_RETRY_MS = 5000;  // mirrors Danbooru upload module (Resolved 23)
+  // Default sort = date desc (most recently registered first). Better matches
+  // the use case "what's new on the bounty list?" — users typically already
+  // know about high-post-count artists, the value is finding fresh ones.
+  const FORUM_DEFAULT_SORT_MODE = 'date';
+  const FORUM_DEFAULT_SORT_DIR = 'desc';
+  const FORUM_SORT_DEFAULT_DIR = {
+    posts: 'desc', name: 'asc', date: 'desc', approver: 'asc',
+  };
+  // User preference persistence (Resolved 43, v0.3.3). Sort mode/dir +
+  // hide-completed survive across page reloads + Turbo navigation. Page
+  // number stays transient — meaningful state would shift anyway whenever
+  // the filter changes, so resetting to 0 on each open is the saner default.
+  const FORUM_PREFS_KEY = 'ubm_bt_prefs_v1';
+  const FORUM_VALID_SORT_MODES = new Set(['name', 'posts', 'approver', 'date']);
+  const FORUM_VALID_SORT_DIRS = new Set(['asc', 'desc']);
+  // Display labels. Mode keys stay aligned to the underlying field they sort
+  // on (`posts` = post_count_at_build); label "Count" is the user-facing
+  // name chosen to read consistently with the rest of the UI (Resolved 42 f).
+  const FORUM_SORT_LABELS = {
+    name: 'Name', posts: 'Count', approver: 'Approver', date: 'Date',
+  };
+  // Tab order matches the visible column order: Name | Posts | Approver |
+  // Registered. Keeps the user's mental model of "click the header you want
+  // to sort by" even though sort buttons live in the popover header bar.
+  const FORUM_SORT_TAB_ORDER = ['name', 'posts', 'approver', 'date'];
+
+  const FORUM_CSS = `
+    .${FORUM_TRIGGER_CLASS} {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      margin-left: 10px;
+      padding: 0;
+      vertical-align: middle;
+      /* vertical-align: middle centers on x-height; h1 bold text has its
+         optical center slightly higher (closer to cap-center), so the icon
+         looks a couple px low. Translate to compensate — same trick the
+         external mark CSS uses for Pixiv/X headers. */
+      transform: translateY(-2px);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      cursor: pointer;
+      line-height: 0;
+    }
+    .${FORUM_TRIGGER_CLASS}:hover {
+      background: rgba(34,197,94,0.1);
+      border-color: rgba(34,197,94,0.3);
+    }
+    .${FORUM_TRIGGER_CLASS}:focus-visible {
+      outline: 2px solid #22c55e;
+      outline-offset: 2px;
+    }
+    .${FORUM_TRIGGER_CLASS}[aria-expanded="true"] {
+      background: rgba(34,197,94,0.15);
+      border-color: #22c55e;
+    }
+    .${FORUM_TRIGGER_CLASS} svg { width: 32px; height: 32px; }
+
+    .${FORUM_POPOVER_CLASS} {
+      --ubm-bt-bg: #ffffff;
+      --ubm-bt-text: #1f2937;
+      --ubm-bt-text-muted: #6b7280;
+      --ubm-bt-border: #d1d5db;
+      --ubm-bt-row-hover: #f3f4f6;
+      --ubm-bt-link: #2563eb;
+      --ubm-bt-badge-active-bg: #22c55e;
+      --ubm-bt-badge-active-fg: #ffffff;
+      --ubm-bt-badge-completed-bg: #e5e7eb;
+      --ubm-bt-badge-completed-fg: #6b7280;
+      --ubm-bt-btn-bg: #f9fafb;
+      --ubm-bt-btn-bg-hover: #f3f4f6;
+      --ubm-bt-btn-active-bg: #22c55e;
+      --ubm-bt-btn-active-fg: #ffffff;
+      position: absolute;
+      z-index: 9999;
+      width: min(720px, calc(100vw - 32px));
+      max-height: min(70vh, 600px);
+      background: var(--ubm-bt-bg);
+      color: var(--ubm-bt-text);
+      border: 1px solid var(--ubm-bt-border);
+      border-radius: 6px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    body[data-current-user-theme="dark"] .${FORUM_POPOVER_CLASS} {
+      --ubm-bt-bg: #1f2937;
+      --ubm-bt-text: #e5e7eb;
+      --ubm-bt-text-muted: #9ca3af;
+      --ubm-bt-border: #374151;
+      --ubm-bt-row-hover: #2d3748;
+      --ubm-bt-link: #60a5fa;
+      --ubm-bt-badge-active-bg: #16a34a;
+      --ubm-bt-badge-completed-bg: #374151;
+      --ubm-bt-badge-completed-fg: #9ca3af;
+      --ubm-bt-btn-bg: #374151;
+      --ubm-bt-btn-bg-hover: #4b5563;
+      --ubm-bt-btn-active-bg: #16a34a;
+    }
+
+    .ubm-bt-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--ubm-bt-border);
+    }
+    .ubm-bt-title { font-weight: 600; margin-right: auto; }
+    .ubm-bt-sort-group {
+      display: inline-flex;
+      gap: 0;
+      border: 1px solid var(--ubm-bt-border);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .ubm-bt-sort-btn {
+      padding: 4px 10px;
+      background: var(--ubm-bt-btn-bg);
+      color: var(--ubm-bt-text);
+      border: none;
+      font-size: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .ubm-bt-sort-btn + .ubm-bt-sort-btn { border-left: 1px solid var(--ubm-bt-border); }
+    .ubm-bt-sort-btn:hover { background: var(--ubm-bt-btn-bg-hover); }
+    .ubm-bt-sort-btn.active {
+      background: var(--ubm-bt-btn-active-bg);
+      color: var(--ubm-bt-btn-active-fg);
+    }
+    .ubm-bt-sort-btn:focus-visible {
+      outline: 2px solid #22c55e;
+      outline-offset: -2px;
+    }
+
+    .ubm-bt-hide-completed {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ubm-bt-close {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      color: var(--ubm-bt-text-muted);
+    }
+    .ubm-bt-close:hover { color: var(--ubm-bt-text); border-color: var(--ubm-bt-border); }
+    .ubm-bt-close:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
+
+    .ubm-bt-body { flex: 1; overflow: auto; }
+    .ubm-bt-table { width: 100%; border-collapse: collapse; }
+    .ubm-bt-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--ubm-bt-bg);
+      text-align: left;
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--ubm-bt-text-muted);
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--ubm-bt-border);
+    }
+    .ubm-bt-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--ubm-bt-border);
+      vertical-align: middle;
+    }
+    .ubm-bt-table tr:last-child td { border-bottom: none; }
+    .ubm-bt-table tbody tr:hover { background: var(--ubm-bt-row-hover); }
+    .ubm-bt-col-posts {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      width: 80px;
+    }
+    .ubm-bt-col-date { width: 110px; color: var(--ubm-bt-text-muted); font-size: 12px; }
+    .ubm-bt-col-state { width: 100px; }
+    /* Inline-flex wrapper aligns the tag link and grid button on the same
+       baseline without per-element vertical-align fudge. */
+    .ubm-bt-tag-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .ubm-bt-tag-link {
+      color: var(--ubm-bt-link);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .ubm-bt-tag-link:hover { text-decoration: underline; }
+
+    /* Side button (grid icon) → /posts?tags=<tag> gallery (D25 updated) */
+    .ubm-bt-posts-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      color: var(--ubm-bt-text-muted);
+      border: 1px solid transparent;
+      border-radius: 3px;
+      text-decoration: none;
+      line-height: 0;
+    }
+    .ubm-bt-posts-btn:hover {
+      background: var(--ubm-bt-row-hover);
+      color: var(--ubm-bt-text);
+      border-color: var(--ubm-bt-border);
+    }
+    .ubm-bt-posts-btn:focus-visible {
+      outline: 2px solid #22c55e;
+      outline-offset: 1px;
+    }
+    .ubm-bt-row-completed .ubm-bt-posts-btn { opacity: 0.5; }
+    .ubm-bt-approvers {
+      color: var(--ubm-bt-text-muted);
+      font-size: 12px;
+      text-decoration: none;
+    }
+    a.ubm-bt-approvers { cursor: pointer; }
+    a.ubm-bt-approvers:hover {
+      color: var(--ubm-bt-text);
+      text-decoration: underline;
+    }
+    a.ubm-bt-approvers:focus-visible {
+      outline: 2px solid #22c55e;
+      outline-offset: 1px;
+      border-radius: 2px;
+    }
+
+    /* Date cell — when registered_at + post_ids are present it renders as
+       a link to the originating forum post. Inherit the muted column color. */
+    .ubm-bt-col-date a {
+      color: inherit;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .ubm-bt-col-date a:hover {
+      color: var(--ubm-bt-text);
+      text-decoration: underline;
+    }
+    .ubm-bt-col-date a:focus-visible {
+      outline: 2px solid #22c55e;
+      outline-offset: 1px;
+      border-radius: 2px;
+    }
+
+    .ubm-bt-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .ubm-bt-badge-active {
+      background: var(--ubm-bt-badge-active-bg);
+      color: var(--ubm-bt-badge-active-fg);
+    }
+    .ubm-bt-badge-completed {
+      background: var(--ubm-bt-badge-completed-bg);
+      color: var(--ubm-bt-badge-completed-fg);
+    }
+    /* Completed row: strikethrough scoped to the tag name only (Resolved 42 c).
+       Approver / date / posts-count keep readable plain text — they are still
+       meaningful even after the bounty is closed (e.g. seeing who recommended
+       a now-uploaded artist, or when it was originally posted). */
+    .ubm-bt-row-completed td { color: var(--ubm-bt-text-muted); }
+    .ubm-bt-row-completed .ubm-bt-tag-link {
+      text-decoration: line-through;
+      color: var(--ubm-bt-text-muted);
+    }
+
+    .ubm-bt-pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      border-top: 1px solid var(--ubm-bt-border);
+      flex-wrap: wrap;
+    }
+    .ubm-bt-page-btn {
+      min-width: 28px;
+      height: 28px;
+      padding: 0 8px;
+      background: var(--ubm-bt-btn-bg);
+      color: var(--ubm-bt-text);
+      border: 1px solid var(--ubm-bt-border);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .ubm-bt-page-btn:hover:not(:disabled) { background: var(--ubm-bt-btn-bg-hover); }
+    .ubm-bt-page-btn.active {
+      background: var(--ubm-bt-btn-active-bg);
+      color: var(--ubm-bt-btn-active-fg);
+      border-color: var(--ubm-bt-btn-active-bg);
+    }
+    .ubm-bt-page-btn:focus-visible { outline: 2px solid #22c55e; outline-offset: 2px; }
+    .ubm-bt-page-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .ubm-bt-empty {
+      padding: 24px;
+      text-align: center;
+      color: var(--ubm-bt-text-muted);
+    }
+  `;
+
+  // --- Forum module state ---------------------------------------------------
+  let forumData = null;
+  let forumMountObserver = null;
+  let forumMountTimeoutId = null;
+  let forumPopoverEl = null;
+  let forumOpen = false;
+  let forumSortMode = FORUM_DEFAULT_SORT_MODE;
+  let forumSortDir = FORUM_DEFAULT_SORT_DIR;
+  let forumHideCompleted = false;
+  let forumCurrentPage = 0;
+  let forumDocKeyHandler = null;
+  let forumDocClickHandler = null;
+  let forumFocusReturn = null;
+
+  function injectForumStyles() {
+    if (document.getElementById(FORUM_STYLE_TAG_ID)) return;
+    const style = document.createElement('style');
+    style.id = FORUM_STYLE_TAG_ID;
+    style.textContent = FORUM_CSS;
+    document.head.appendChild(style);
+  }
+
+  // --- Preference persistence (Resolved 43) ---------------------------------
+  /**
+   * Read persisted sort/filter prefs into module state. Each field is
+   * individually validated — a corrupt stored value (e.g. an out-of-range
+   * sort mode after a hypothetical key rename) gets ignored instead of
+   * crashing the load, and the in-memory defaults stand.
+   */
+  function loadForumPrefs() {
+    let raw;
+    try {
+      raw = localStorage.getItem(FORUM_PREFS_KEY);
+    } catch (err) {
+      console.warn(LOG_PREFIX, '[forum] prefs read failed', err);
+      return;
+    }
+    if (!raw) return;
+    let obj;
+    try {
+      obj = JSON.parse(raw);
+    } catch (err) {
+      console.warn(LOG_PREFIX, '[forum] prefs corrupt, dropping', err);
+      try { localStorage.removeItem(FORUM_PREFS_KEY); } catch (_) {}
+      return;
+    }
+    if (!obj || typeof obj !== 'object') return;
+    if (typeof obj.sortMode === 'string' && FORUM_VALID_SORT_MODES.has(obj.sortMode)) {
+      forumSortMode = obj.sortMode;
+    }
+    if (typeof obj.sortDir === 'string' && FORUM_VALID_SORT_DIRS.has(obj.sortDir)) {
+      forumSortDir = obj.sortDir;
+    }
+    if (typeof obj.hideCompleted === 'boolean') {
+      forumHideCompleted = obj.hideCompleted;
+    }
+  }
+
+  /**
+   * Write current sort/filter prefs to localStorage. Called eagerly on every
+   * sort-button click and hide-completed toggle so storage stays in sync
+   * with the popover. Quota/SecurityError silently ignored — persistence is
+   * a nice-to-have, not a correctness invariant.
+   */
+  function saveForumPrefs() {
+    try {
+      localStorage.setItem(FORUM_PREFS_KEY, JSON.stringify({
+        sortMode: forumSortMode,
+        sortDir: forumSortDir,
+        hideCompleted: forumHideCompleted,
+      }));
+    } catch (err) {
+      console.warn(LOG_PREFIX, '[forum] prefs write failed', err);
+    }
+  }
+
+  // --- Forum data normalization (graceful degrade for v0.2 fetch) -----------
+  /**
+   * Project bounty.json artists map → uniform array. Missing v0.3 fields
+   * (registered_at_utc / completed / post_count_at_build) degrade to safe
+   * defaults so the popover opens even against a pre-v0.3 build.
+   * @param {?Object} data
+   * @return {!Array<!Object>}
+   */
+  function projectForumArtists(data) {
+    if (!data || !data.artists) return [];
+    const out = [];
+    for (const tag of Object.keys(data.artists)) {
+      const e = data.artists[tag];
+      if (!e || typeof e !== 'object') continue;
+      out.push({
+        tag,
+        post_ids: Array.isArray(e.post_ids) ? e.post_ids : [],
+        approvers: Array.isArray(e.approvers) ? e.approvers : [],
+        completed: e.completed === true,
+        registered_at_utc:
+            typeof e.registered_at_utc === 'string' ? e.registered_at_utc : null,
+        post_count_at_build:
+            typeof e.post_count_at_build === 'number' ? e.post_count_at_build : null,
+      });
+    }
+    return out;
+  }
+
+  function formatRegisteredDate(iso) {
+    if (!iso) return '—';
+    // ISO 8601 → YYYY-MM-DD (UTC). Avoids Intl locale variation across users.
+    return iso.slice(0, 10);
+  }
+
+  function sortForumArtists(arr, mode, dir) {
+    const mult = dir === 'asc' ? 1 : -1;
+    const cmpByMode = {
+      posts: (a, b) => {
+        // null treated as -1 so unknown counts sink to bottom on desc / top on asc.
+        const av = a.post_count_at_build ?? -1;
+        const bv = b.post_count_at_build ?? -1;
+        return av - bv;
+      },
+      name: (a, b) => a.tag.localeCompare(b.tag),
+      date: (a, b) => {
+        const av = a.registered_at_utc || '';
+        const bv = b.registered_at_utc || '';
+        return av < bv ? -1 : av > bv ? 1 : 0;
+      },
+      approver: (a, b) => {
+        const av = (a.approvers[0] || '').toLowerCase();
+        const bv = (b.approvers[0] || '').toLowerCase();
+        return av.localeCompare(bv);
+      },
+    };
+    const cmp = cmpByMode[mode] || cmpByMode.posts;
+    return [...arr].sort((a, b) => {
+      const r = cmp(a, b);
+      // Stable tie-breaker by tag so two consecutive renders match exactly.
+      return r !== 0 ? r * mult : a.tag.localeCompare(b.tag);
+    });
+  }
+
+  function filteredForumArtists() {
+    const all = projectForumArtists(forumData);
+    return forumHideCompleted ? all.filter(a => !a.completed) : all;
+  }
+
+  // --- Trigger button -------------------------------------------------------
+  function buildForumTrigger() {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = FORUM_TRIGGER_CLASS;
+    btn.setAttribute('aria-label', 'Show bounty artist list');
+    btn.setAttribute('aria-haspopup', 'dialog');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.innerHTML = SCROLL_ICON_SVG;
+    btn.addEventListener('click', onForumTriggerClick);
+    return btn;
+  }
+
+  function mountForumTrigger() {
+    const h1 = document.querySelector(FORUM_HEADING_SELECTOR);
+    if (!h1) return false;
+    // Idempotent — observer / safety retry may call this repeatedly.
+    if (h1.querySelector(`.${FORUM_TRIGGER_CLASS}`)) return true;
+    h1.appendChild(buildForumTrigger());
+    console.info(LOG_PREFIX, '[forum] trigger mounted');
+    return true;
+  }
+
+  function onForumTriggerClick(e) {
+    e.preventDefault();
+    if (forumOpen) closeForumPopover();
+    else openForumPopover(e.currentTarget);
+  }
+
+  // --- Popover lifecycle ----------------------------------------------------
+  function openForumPopover(triggerEl) {
+    if (forumOpen) return;
+    if (!forumData) {
+      console.warn(LOG_PREFIX, '[forum] no bounty data — popover skipped');
+      return;
+    }
+    forumFocusReturn = triggerEl;
+    triggerEl.setAttribute('aria-expanded', 'true');
+    forumPopoverEl = buildForumPopover();
+    document.body.appendChild(forumPopoverEl);
+    positionForumPopover(triggerEl, forumPopoverEl);
+    forumOpen = true;
+    installForumCloseHandlers();
+    // Focus first interactive control so keyboard users land inside.
+    const firstBtn = forumPopoverEl.querySelector(
+        'button, input, [tabindex]:not([tabindex="-1"])');
+    if (firstBtn) firstBtn.focus();
+  }
+
+  function closeForumPopover() {
+    if (!forumOpen) return;
+    removeForumCloseHandlers();
+    if (forumPopoverEl) {
+      forumPopoverEl.remove();
+      forumPopoverEl = null;
+    }
+    const trigger = document.querySelector(`.${FORUM_TRIGGER_CLASS}`);
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    forumOpen = false;
+    if (forumFocusReturn && document.contains(forumFocusReturn)) {
+      forumFocusReturn.focus();
+    }
+    forumFocusReturn = null;
+  }
+
+  function positionForumPopover(triggerEl, popoverEl) {
+    const r = triggerEl.getBoundingClientRect();
+    const popW = popoverEl.offsetWidth;
+    const scrollY = window.scrollY;
+    const scrollX = window.scrollX;
+    const viewW = window.innerWidth;
+    let top = r.bottom + scrollY + 6;
+    let left = r.left + scrollX;
+    // Right edge overflow → shift left to fit, leaving a 16px gutter.
+    if (left + popW > scrollX + viewW - 16) {
+      left = scrollX + viewW - popW - 16;
+    }
+    if (left < scrollX + 16) left = scrollX + 16;
+    popoverEl.style.top = `${top}px`;
+    popoverEl.style.left = `${left}px`;
+  }
+
+  const FORUM_FOCUSABLE_SELECTOR =
+      'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"]), a[href]';
+
+  function forumFocusableElements() {
+    if (!forumPopoverEl) return [];
+    return Array.from(forumPopoverEl.querySelectorAll(FORUM_FOCUSABLE_SELECTOR));
+  }
+
+  function installForumCloseHandlers() {
+    forumDocKeyHandler = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeForumPopover();
+        return;
+      }
+      // Tab cycling — keep focus inside the popover (focus trap, PLAN D27).
+      // Capture only when focus is at the boundary so users can still Tab
+      // freely between buttons / inputs inside.
+      if (e.key !== 'Tab' || !forumPopoverEl) return;
+      const focusables = forumFocusableElements();
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      const insidePopover = forumPopoverEl.contains(active);
+      if (!insidePopover) {
+        // Focus slipped outside (e.g. user clicked an underlying page link
+        // that didn't close us). Pull it back in to the first control.
+        e.preventDefault();
+        first.focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    forumDocClickHandler = (e) => {
+      if (!forumPopoverEl) return;
+      if (forumPopoverEl.contains(e.target)) return;
+      const trigger = document.querySelector(`.${FORUM_TRIGGER_CLASS}`);
+      if (trigger && trigger.contains(e.target)) return;
+      closeForumPopover();
+    };
+    document.addEventListener('keydown', forumDocKeyHandler);
+    // Defer click listener install by one tick — the click that opened the
+    // popover would otherwise bubble to this handler and close it instantly.
+    setTimeout(() => {
+      if (forumOpen) document.addEventListener('click', forumDocClickHandler);
+    }, 0);
+  }
+
+  function removeForumCloseHandlers() {
+    if (forumDocKeyHandler) {
+      document.removeEventListener('keydown', forumDocKeyHandler);
+      forumDocKeyHandler = null;
+    }
+    if (forumDocClickHandler) {
+      document.removeEventListener('click', forumDocClickHandler);
+      forumDocClickHandler = null;
+    }
+  }
+
+  // --- Popover DOM ----------------------------------------------------------
+  function buildForumPopover() {
+    const el = document.createElement('div');
+    el.className = FORUM_POPOVER_CLASS;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Bounty artist list');
+    // Stop popover-internal clicks from bubbling to the document-level
+    // outside-click handler. Without this, a sort/page button click would
+    // (a) replace the popover DOM via rerenderForum, (b) bubble the now-
+    // detached click target up to document, (c) trip the close handler
+    // because `popoverEl.contains(detachedTarget)` returns false.
+    el.addEventListener('click', e => e.stopPropagation());
+    el.appendChild(buildForumHeader());
+    el.appendChild(buildForumBody());
+    el.appendChild(buildForumPagination());
+    return el;
+  }
+
+  function buildForumHeader() {
+    const header = document.createElement('div');
+    header.className = 'ubm-bt-header';
+
+    const total = filteredForumArtists().length;
+    const title = document.createElement('div');
+    title.className = 'ubm-bt-title';
+    title.textContent = `Bounty Artist List (${total})`;
+    header.appendChild(title);
+
+    const sortGroup = document.createElement('div');
+    sortGroup.className = 'ubm-bt-sort-group';
+    sortGroup.setAttribute('role', 'group');
+    sortGroup.setAttribute('aria-label', 'Sort by');
+    for (const mode of FORUM_SORT_TAB_ORDER) {
+      sortGroup.appendChild(buildForumSortButton(mode));
+    }
+    header.appendChild(sortGroup);
+
+    const lbl = document.createElement('label');
+    lbl.className = 'ubm-bt-hide-completed';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = forumHideCompleted;
+    cb.addEventListener('change', () => {
+      forumHideCompleted = cb.checked;
+      forumCurrentPage = 0;
+      saveForumPrefs();
+      rerenderForum();
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode('Hide completed'));
+    header.appendChild(lbl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'ubm-bt-close';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    close.addEventListener('click', closeForumPopover);
+    header.appendChild(close);
+
+    return header;
+  }
+
+  function buildForumSortButton(mode) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ubm-bt-sort-btn';
+    btn.dataset.mode = mode;
+    const isActive = forumSortMode === mode;
+    if (isActive) {
+      btn.classList.add('active');
+      btn.textContent = `${FORUM_SORT_LABELS[mode]} ${forumSortDir === 'asc' ? '▲' : '▼'}`;
+    } else {
+      btn.textContent = FORUM_SORT_LABELS[mode];
+    }
+    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    btn.addEventListener('click', () => {
+      if (forumSortMode === mode) {
+        forumSortDir = forumSortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        forumSortMode = mode;
+        forumSortDir = FORUM_SORT_DEFAULT_DIR[mode];
+      }
+      forumCurrentPage = 0;
+      saveForumPrefs();
+      rerenderForum();
+    });
+    return btn;
+  }
+
+  function buildForumBody() {
+    const body = document.createElement('div');
+    body.className = 'ubm-bt-body';
+
+    const filtered = filteredForumArtists();
+    const sorted = sortForumArtists(filtered, forumSortMode, forumSortDir);
+    const start = forumCurrentPage * FORUM_PAGE_SIZE;
+    const page = sorted.slice(start, start + FORUM_PAGE_SIZE);
+
+    if (page.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ubm-bt-empty';
+      empty.textContent = forumHideCompleted
+          ? 'No active bounty artists.'
+          : 'No bounty artists.';
+      body.appendChild(empty);
+      return body;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'ubm-bt-table';
+    const thead = document.createElement('thead');
+    thead.innerHTML =
+        '<tr>' +
+        '<th>Name</th>' +
+        '<th class="ubm-bt-col-posts">Posts</th>' +
+        '<th>Approver</th>' +
+        '<th class="ubm-bt-col-date">Registered</th>' +
+        '<th class="ubm-bt-col-state">State</th>' +
+        '</tr>';
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const a of page) tbody.appendChild(buildForumRow(a));
+    table.appendChild(tbody);
+    body.appendChild(table);
+    return body;
+  }
+
+  function buildForumRow(a) {
+    const tr = document.createElement('tr');
+    if (a.completed) tr.classList.add('ubm-bt-row-completed');
+
+    // Tag cell (PLAN D25 updated 2026-05-28 / Resolved 41+42) — two links
+    // in an inline-flex wrapper for clean baseline alignment:
+    //   1. Tag text → /artists/show_or_new?name=<tag> (artist wiki).
+    //   2. Grid icon button → /posts?tags=<tag> (gallery view).
+    // Both open in a new tab so the forum thread context is preserved.
+    const tdTag = document.createElement('td');
+    const tagCell = document.createElement('span');
+    tagCell.className = 'ubm-bt-tag-cell';
+
+    const tagLink = document.createElement('a');
+    tagLink.className = 'ubm-bt-tag-link';
+    tagLink.href = `/artists/show_or_new?name=${encodeURIComponent(a.tag)}`;
+    tagLink.target = '_blank';
+    tagLink.rel = 'noopener noreferrer';
+    tagLink.textContent = a.tag.replace(/_/g, ' ');
+    tagCell.appendChild(tagLink);
+
+    const postsBtn = document.createElement('a');
+    postsBtn.className = 'ubm-bt-posts-btn';
+    postsBtn.href = `/posts?tags=${encodeURIComponent(a.tag)}`;
+    postsBtn.target = '_blank';
+    postsBtn.rel = 'noopener noreferrer';
+    postsBtn.title = `View ${a.tag.replace(/_/g, ' ')} posts`;
+    postsBtn.setAttribute('aria-label', postsBtn.title);
+    postsBtn.innerHTML = POSTS_ICON_SVG;
+    tagCell.appendChild(postsBtn);
+    tdTag.appendChild(tagCell);
+    tr.appendChild(tdTag);
+
+    const tdPosts = document.createElement('td');
+    tdPosts.className = 'ubm-bt-col-posts';
+    tdPosts.textContent =
+        a.post_count_at_build === null ? '—' : String(a.post_count_at_build);
+    tr.appendChild(tdPosts);
+
+    // Approver cell (D24 updated, Resolved 42 d) — first approver becomes a
+    // link to their Danbooru profile (`/users?name=` auto-redirects to
+    // `/users/<id>` on exact match). Hover title still surfaces the full
+    // list for multi-approver entries. Click on the "+N" suffix area also
+    // routes to first approver — accepted simplification (per-approver
+    // sub-popover would be a future enhancement).
+    const tdApprover = document.createElement('td');
+    if (a.approvers.length === 0) {
+      const span = document.createElement('span');
+      span.className = 'ubm-bt-approvers';
+      span.textContent = '—';
+      tdApprover.appendChild(span);
+    } else {
+      const apprLink = document.createElement('a');
+      apprLink.className = 'ubm-bt-approvers';
+      apprLink.href = `/users?name=${encodeURIComponent(a.approvers[0])}`;
+      apprLink.target = '_blank';
+      apprLink.rel = 'noopener noreferrer';
+      if (a.approvers.length === 1) {
+        apprLink.textContent = a.approvers[0];
+        apprLink.title = a.approvers[0];
+      } else {
+        apprLink.textContent = `${a.approvers[0]} +${a.approvers.length - 1}`;
+        apprLink.title = a.approvers.join(', ');
+      }
+      tdApprover.appendChild(apprLink);
+    }
+    tr.appendChild(tdApprover);
+
+    // Date cell (Resolved 42 e) — links to the originating forum post when
+    // both registered_at and post_ids are present. The forum permalink
+    // resolves to the latest Approver mention (D8 pattern reuse).
+    const tdDate = document.createElement('td');
+    tdDate.className = 'ubm-bt-col-date';
+    const dateHref = forumPermalink(a.post_ids);
+    if (dateHref && a.registered_at_utc) {
+      const dateLink = document.createElement('a');
+      dateLink.href = dateHref;
+      dateLink.target = '_blank';
+      dateLink.rel = 'noopener noreferrer';
+      dateLink.title = 'Open the originating forum post in a new tab';
+      dateLink.textContent = formatRegisteredDate(a.registered_at_utc);
+      tdDate.appendChild(dateLink);
+    } else {
+      tdDate.textContent = formatRegisteredDate(a.registered_at_utc);
+    }
+    tr.appendChild(tdDate);
+
+    const tdState = document.createElement('td');
+    tdState.className = 'ubm-bt-col-state';
+    const badge = document.createElement('span');
+    badge.className = 'ubm-bt-badge';
+    if (a.completed) {
+      badge.classList.add('ubm-bt-badge-completed');
+      badge.textContent = '✓ Completed';
+    } else {
+      badge.classList.add('ubm-bt-badge-active');
+      badge.textContent = '● Active';
+    }
+    tdState.appendChild(badge);
+    tr.appendChild(tdState);
+
+    return tr;
+  }
+
+  function buildForumPagination() {
+    const total = filteredForumArtists().length;
+    const totalPages = Math.max(1, Math.ceil(total / FORUM_PAGE_SIZE));
+    const nav = document.createElement('nav');
+    nav.className = 'ubm-bt-pagination';
+    nav.setAttribute('aria-label', 'Pagination');
+    if (totalPages <= 1) {
+      // Render an empty hidden node so the popover layout has a consistent
+      // 3-child structure (header / body / footer). Cheaper than DOM null-check.
+      nav.style.display = 'none';
+      return nav;
+    }
+
+    const prev = document.createElement('button');
+    prev.type = 'button';
+    prev.className = 'ubm-bt-page-btn';
+    prev.setAttribute('aria-label', 'Previous page');
+    prev.textContent = '‹';
+    prev.disabled = forumCurrentPage === 0;
+    prev.addEventListener('click', () => {
+      if (forumCurrentPage > 0) {
+        forumCurrentPage -= 1;
+        rerenderForum();
+      }
+    });
+    nav.appendChild(prev);
+
+    for (let i = 0; i < totalPages; i += 1) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ubm-bt-page-btn';
+      if (i === forumCurrentPage) {
+        btn.classList.add('active');
+        btn.setAttribute('aria-current', 'page');
+      }
+      btn.textContent = String(i + 1);
+      const page = i;
+      btn.addEventListener('click', () => {
+        forumCurrentPage = page;
+        rerenderForum();
+      });
+      nav.appendChild(btn);
+    }
+
+    const next = document.createElement('button');
+    next.type = 'button';
+    next.className = 'ubm-bt-page-btn';
+    next.setAttribute('aria-label', 'Next page');
+    next.textContent = '›';
+    next.disabled = forumCurrentPage === totalPages - 1;
+    next.addEventListener('click', () => {
+      if (forumCurrentPage < totalPages - 1) {
+        forumCurrentPage += 1;
+        rerenderForum();
+      }
+    });
+    nav.appendChild(next);
+    return nav;
+  }
+
+  function rerenderForum() {
+    if (!forumPopoverEl) return;
+    const replacement = buildForumPopover();
+    // Preserve viewport position across re-render (sort / page / filter).
+    replacement.style.top = forumPopoverEl.style.top;
+    replacement.style.left = forumPopoverEl.style.left;
+    forumPopoverEl.replaceWith(replacement);
+    forumPopoverEl = replacement;
+  }
+
+  // --- Forum lifecycle ------------------------------------------------------
+  function stopForumMountWatch() {
+    if (forumMountObserver) {
+      forumMountObserver.disconnect();
+      forumMountObserver = null;
+    }
+    if (forumMountTimeoutId !== null) {
+      clearTimeout(forumMountTimeoutId);
+      forumMountTimeoutId = null;
+    }
+  }
+
+  async function initForum() {
+    // Defensive — @match is path-scoped but Turbo navigation can deliver us
+    // here from a /uploads/* visit, then immediately re-fire on a non-forum
+    // path during back-button. Path check keeps mount attempts confined.
+    if (!location.pathname.startsWith(FORUM_PATH_PREFIX)) return;
+    injectForumStyles();
+    // Apply persisted sort/filter prefs before any popover render so the
+    // first open reflects the user's last choice (Resolved 43).
+    loadForumPrefs();
+
+    forumData = await getBountyData();
+    if (!forumData) {
+      console.info(LOG_PREFIX, '[forum] no bounty data, trigger skipped');
+      return;
+    }
+
+    if (mountForumTrigger()) return;
+
+    // Heading not present yet (Turbo partial render race). Watch body until
+    // it appears, with a hard 5s timeout to release the observer (Resolved 23
+    // pattern — mirrors Danbooru upload module).
+    forumMountObserver = new MutationObserver(() => {
+      if (mountForumTrigger()) stopForumMountWatch();
+    });
+    forumMountObserver.observe(document.body, { childList: true, subtree: true });
+    forumMountTimeoutId = setTimeout(stopForumMountWatch, FORUM_MAX_RETRY_MS);
+  }
+
+  function cleanupForum() {
+    stopForumMountWatch();
+    closeForumPopover();
+    const trigger = document.querySelector(`.${FORUM_TRIGGER_CLASS}`);
+    if (trigger) trigger.remove();
+    forumData = null;
+    forumCurrentPage = 0;
+  }
+
+  // ==========================================================================
   // === Top-level dispatcher =================================================
   // ==========================================================================
   // Tampermonkey lacks per-@match entry-point dispatch, so we route by
-  // hostname (PLAN D13). Each module owns its own init/cleanup lifecycle;
-  // Danbooru uses Turbo events, Pixiv/X will hook pushState in v2.2/v2.3.
+  // hostname + path (PLAN D13 + D29). Danbooru splits into upload vs. forum
+  // sub-modules; Turbo navigation can switch between them, so the dispatcher
+  // tracks which one is currently active and cleans up only that one before
+  // routing the new path on `turbo:load`.
 
   /**
-   * Pick the site module matching the current hostname, or null if this
-   * userscript shouldn't run here (defensive — @match should prevent this).
-   * @return {?{name: string, init: !Function, cleanup: !Function}}
+   * Pick the site module matching the current hostname + path, or null if
+   * this userscript shouldn't run here. Danbooru returns one of two
+   * sub-modules; other hostnames are single-module.
+   * @return {?{name: string, init: !Function, cleanup: !Function, turbo: boolean}}
    */
   function getActiveModule() {
     const host = location.hostname;
+    const path = location.pathname;
     if (host === 'danbooru.donmai.us') {
-      return { name: 'danbooru', init: initDanbooru, cleanup: cleanupDanbooru };
+      if (path.startsWith('/uploads/')) {
+        return { name: 'danbooru-upload', init: initDanbooru, cleanup: cleanupDanbooru, turbo: true };
+      }
+      if (path.startsWith(FORUM_PATH_PREFIX)) {
+        return { name: 'danbooru-forum', init: initForum, cleanup: cleanupForum, turbo: true };
+      }
+      return null;  // other Danbooru pages — no-op
     }
     if (host === 'www.pixiv.net') {
-      return { name: 'pixiv', init: initPixiv, cleanup: cleanupPixiv };
+      return { name: 'pixiv', init: initPixiv, cleanup: cleanupPixiv, turbo: false };
     }
     if (host === 'x.com' || host === 'twitter.com') {
-      return { name: 'x', init: initX, cleanup: cleanupX };
+      return { name: 'x', init: initX, cleanup: cleanupX, turbo: false };
     }
     return null;
   }
 
-  const active = getActiveModule();
-  if (!active) {
-    console.info(LOG_PREFIX, 'no module for hostname', location.hostname);
+  // Tracks the currently active Turbo-based module so `turbo:before-visit`
+  // cleans up only that one even when the next page would route to a
+  // different module (upload → forum or vice versa).
+  let danbooruActiveModule = null;
+
+  function danbooruTurboLoadHandler() {
+    const m = getActiveModule();
+    if (!m || !m.turbo) {
+      danbooruActiveModule = null;
+      return;
+    }
+    danbooruActiveModule = m;
+    m.init();
+  }
+
+  function danbooruTurboBeforeVisitHandler() {
+    if (danbooruActiveModule) {
+      danbooruActiveModule.cleanup();
+      danbooruActiveModule = null;
+    }
+  }
+
+  const initial = getActiveModule();
+  if (!initial) {
+    console.info(LOG_PREFIX, 'no module for', location.hostname + location.pathname);
     return;
   }
 
-  if (active.name === 'danbooru') {
-    document.addEventListener('turbo:load', active.init);
-    document.addEventListener('turbo:before-visit', active.cleanup);
+  // Attach Danbooru-wide Turbo listeners once. They handle in-app navigation
+  // between /uploads/* and /forum_topics/24186*. Pixiv/X handle SPA nav with
+  // their own pushState hooks installed by their init functions.
+  if (location.hostname === 'danbooru.donmai.us') {
+    document.addEventListener('turbo:load', danbooruTurboLoadHandler);
+    document.addEventListener('turbo:before-visit', danbooruTurboBeforeVisitHandler);
   }
-  // Pixiv/X SPA hooks (pushState/popstate) land in v2.2/v2.3.
 
-  // First-load safety net — Turbo may have already fired before our script
+  // First-load safety net — Turbo may have already fired before this script
   // attached, and Pixiv/X run this as their only entry point.
-  active.init();
+  if (initial.turbo) danbooruActiveModule = initial;
+  initial.init();
 })();
