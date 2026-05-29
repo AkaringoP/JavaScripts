@@ -444,7 +444,7 @@
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
       "post_count_at_build": 38,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "bizan_zan": {
       "post_ids": [
@@ -753,7 +753,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 80,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "ecomoesty": {
       "post_ids": [
@@ -1170,7 +1170,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1770,
-      "post_count_30d_delta": 70
+      "post_count_30d_delta": 68
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1309,7 +1309,7 @@
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
       "post_count_at_build": 124,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 4
     },
     "hitoto": {
       "post_ids": [
@@ -2242,8 +2242,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 228,
-      "post_count_30d_delta": 14
+      "post_count_at_build": 229,
+      "post_count_30d_delta": 15
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -3061,8 +3061,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 415,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 416,
+      "post_count_30d_delta": 14
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3195,7 +3195,7 @@
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
       "post_count_at_build": 802,
-      "post_count_30d_delta": 487
+      "post_count_30d_delta": 486
     },
     "rottencrow": {
       "post_ids": [
@@ -4078,7 +4078,7 @@
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
       "post_count_at_build": 15,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 3
     },
     "xioiri": {
       "post_ids": [
@@ -4292,6 +4292,27 @@
       "post_count_at_build": 29,
       "post_count_30d_delta": 1
     },
+    "zero_(sleepy_meltan)": {
+      "post_ids": [
+        442511
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "11860672"
+      ],
+      "x_handles": [
+        "meltan_sims",
+        "meltan_valley",
+        "sleepy_meltan"
+      ],
+      "registered_at_utc": "2026-05-29T00:17:10.003Z",
+      "completed": false,
+      "post_count_at_build": 228,
+      "post_count_30d_delta": 9
+    },
     "zexli_qiu": {
       "post_ids": [
         345200
@@ -4339,7 +4360,7 @@
       "registered_at_utc": "2024-12-12T18:34:03.655Z",
       "completed": false,
       "post_count_at_build": 47,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "zongil_salryeo": {
       "post_ids": [
@@ -4426,6 +4447,7 @@
     "11250310": "pongldr",
     "11290331": "owl_taro",
     "11739672": "wuliu_heihuo",
+    "11860672": "zero_(sleepy_meltan)",
     "12630199": "marine_(confeitokobo)",
     "12678039": "kuro_tsubasa",
     "12780795": "lluyss",
@@ -4723,6 +4745,8 @@
     "mdoh02": "mudou_eichi",
     "mdoh_004": "mudou_eichi",
     "mdoh_5": "mudou_eichi",
+    "meltan_sims": "zero_(sleepy_meltan)",
+    "meltan_valley": "zero_(sleepy_meltan)",
     "memori0801": "memori_(egachachachan)",
     "mgmg_g_zzz": "mgmg_g_zzz",
     "miagawari011128": "miagawari011128",
@@ -4800,6 +4824,7 @@
     "showeneotama": "otamashimai",
     "siroussa": "kuroussa",
     "sisierep": "sisierep",
+    "sleepy_meltan": "zero_(sleepy_meltan)",
     "smyecc": "smyecc",
     "soleilmtfbwy03": "soleil_(soleilmtfbwy03)",
     "somartist": "philipp_urlich",
