@@ -1188,8 +1188,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1771,
-      "post_count_30d_delta": 68
+      "post_count_at_build": 1772,
+      "post_count_30d_delta": 69
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1230,8 +1230,8 @@
       ],
       "registered_at_utc": "2023-07-26T03:09:45.580Z",
       "completed": true,
-      "post_count_at_build": 71,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 72,
+      "post_count_30d_delta": 1
     },
     "hinata_yuu": {
       "post_ids": [
@@ -2258,8 +2258,8 @@
       ],
       "registered_at_utc": "2026-05-25T16:54:46.126Z",
       "completed": false,
-      "post_count_at_build": 237,
-      "post_count_30d_delta": 121
+      "post_count_at_build": 238,
+      "post_count_30d_delta": 122
     },
     "mame_nabe_donko": {
       "post_ids": [
