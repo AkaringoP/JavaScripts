@@ -392,9 +392,7 @@
       "approvers": [
         "zetsubousensei"
       ],
-      "aliased_from": [
-        "igurumi_00128"
-      ],
+      "aliased_from": [],
       "pixiv_user_ids": [
         "42080808"
       ],
@@ -445,8 +443,8 @@
       ],
       "registered_at_utc": "2026-05-29T19:50:55.320Z",
       "completed": false,
-      "post_count_at_build": 66,
-      "post_count_30d_delta": 19
+      "post_count_at_build": 95,
+      "post_count_30d_delta": 48
     },
     "bigchaping": {
       "post_ids": [
@@ -621,8 +619,8 @@
       ],
       "registered_at_utc": "2024-11-03T18:59:22.456Z",
       "completed": false,
-      "post_count_at_build": 402,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 404,
+      "post_count_30d_delta": 5
     },
     "cryborg": {
       "post_ids": [
@@ -1290,8 +1288,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 626,
-      "post_count_30d_delta": 9
+      "post_count_at_build": 627,
+      "post_count_30d_delta": 10
     },
     "hiranko": {
       "post_ids": [
@@ -1754,14 +1752,16 @@
         "Dogbooru"
       ],
       "aliased_from": [],
-      "pixiv_user_ids": [],
+      "pixiv_user_ids": [
+        "5885352"
+      ],
       "x_handles": [
         "kharu11"
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 60,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 75,
+      "post_count_30d_delta": 11
     },
     "kikomo": {
       "post_ids": [
@@ -3342,8 +3342,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 34,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 39,
+      "post_count_30d_delta": 5
     },
     "shatang_wei_xing_cheng": {
       "post_ids": [
@@ -4531,6 +4531,7 @@
     "5073769": "oimo_(14sainobba)",
     "5661835": "shirashura",
     "5709662": "nanananana",
+    "5885352": "kharu11",
     "7266563": "easel_(dam0628)",
     "7640910": "ama0805",
     "7857690": "f3000_kiara",
