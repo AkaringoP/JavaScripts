@@ -656,8 +656,8 @@
       ],
       "registered_at_utc": "2025-06-15T22:24:56.359Z",
       "completed": true,
-      "post_count_at_build": 18672,
-      "post_count_30d_delta": 16
+      "post_count_at_build": 18706,
+      "post_count_30d_delta": 50
     },
     "dav-19": {
       "post_ids": [
@@ -1189,7 +1189,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1772,
-      "post_count_30d_delta": 69
+      "post_count_30d_delta": 68
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1441,7 +1441,7 @@
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
       "post_count_at_build": 88,
-      "post_count_30d_delta": 7
+      "post_count_30d_delta": 6
     },
     "ichino_(1no)": {
       "post_ids": [
@@ -1859,7 +1859,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 171,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 3
     },
     "kiyoshi_st": {
       "post_ids": [
@@ -3119,7 +3119,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 416,
-      "post_count_30d_delta": 14
+      "post_count_30d_delta": 13
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3342,8 +3342,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 39,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 42,
+      "post_count_30d_delta": 8
     },
     "shatang_wei_xing_cheng": {
       "post_ids": [
@@ -3955,7 +3955,7 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 298,
+      "post_count_at_build": 299,
       "post_count_30d_delta": 9
     },
     "untsuku": {
