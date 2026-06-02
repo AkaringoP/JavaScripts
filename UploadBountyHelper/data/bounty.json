@@ -443,8 +443,8 @@
       ],
       "registered_at_utc": "2026-05-29T19:50:55.320Z",
       "completed": false,
-      "post_count_at_build": 99,
-      "post_count_30d_delta": 52
+      "post_count_at_build": 101,
+      "post_count_30d_delta": 54
     },
     "bigchaping": {
       "post_ids": [
@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 59,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 81,
+      "post_count_30d_delta": 27
     },
     "gamgyul": {
       "post_ids": [
@@ -1799,8 +1799,8 @@
       ],
       "registered_at_utc": "2024-09-23T21:17:03.810Z",
       "completed": false,
-      "post_count_at_build": 66,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 67,
+      "post_count_30d_delta": 1
     },
     "kinoshita_aki": {
       "post_ids": [
@@ -2280,7 +2280,7 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 244,
+      "post_count_at_build": 245,
       "post_count_30d_delta": 31
     },
     "marine_(confeitokobo)": {
@@ -3915,8 +3915,8 @@
       ],
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
-      "post_count_at_build": 49,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 50,
+      "post_count_30d_delta": 4
     },
     "tsuruko_turuta": {
       "post_ids": [
