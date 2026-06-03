@@ -443,8 +443,8 @@
       ],
       "registered_at_utc": "2026-05-29T19:50:55.320Z",
       "completed": false,
-      "post_count_at_build": 101,
-      "post_count_30d_delta": 54
+      "post_count_at_build": 102,
+      "post_count_30d_delta": 55
     },
     "bigchaping": {
       "post_ids": [
@@ -523,7 +523,7 @@
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
       "post_count_at_build": 41,
-      "post_count_30d_delta": 6
+      "post_count_30d_delta": 5
     },
     "ca_(ca_gemini)": {
       "post_ids": [
@@ -620,7 +620,7 @@
       "registered_at_utc": "2024-11-03T18:59:22.456Z",
       "completed": false,
       "post_count_at_build": 404,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 3
     },
     "cryborg": {
       "post_ids": [
@@ -923,7 +923,7 @@
       "registered_at_utc": "2025-06-29T20:02:46.049Z",
       "completed": false,
       "post_count_at_build": 199,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 1
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
@@ -963,7 +963,7 @@
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
       "post_count_at_build": 81,
-      "post_count_30d_delta": 27
+      "post_count_30d_delta": 26
     },
     "gamgyul": {
       "post_ids": [
@@ -981,8 +981,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 28,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 29,
+      "post_count_30d_delta": 1
     },
     "gaoling_gangqin": {
       "post_ids": [
@@ -1189,7 +1189,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1775,
-      "post_count_30d_delta": 69
+      "post_count_30d_delta": 68
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1704,8 +1704,8 @@
       ],
       "registered_at_utc": "2023-09-02T12:56:21.690Z",
       "completed": true,
-      "post_count_at_build": 145,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 146,
+      "post_count_30d_delta": 2
     },
     "kawaguchi_tadahiko": {
       "post_ids": [
@@ -1876,7 +1876,7 @@
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
       "post_count_at_build": 113,
-      "post_count_30d_delta": 25
+      "post_count_30d_delta": 5
     },
     "knhrpnkt": {
       "post_ids": [
@@ -2300,7 +2300,7 @@
       "registered_at_utc": "2025-12-30T21:18:51.102Z",
       "completed": false,
       "post_count_at_build": 110,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 1
     },
     "marulka": {
       "post_ids": [
@@ -2773,7 +2773,7 @@
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
       "post_count_at_build": 134,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "nojob_hiro": {
       "post_ids": [
@@ -3121,7 +3121,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 417,
-      "post_count_30d_delta": 9
+      "post_count_30d_delta": 8
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3606,8 +3606,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 307,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 311,
+      "post_count_30d_delta": 13
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
