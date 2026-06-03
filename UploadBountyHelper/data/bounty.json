@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 81,
-      "post_count_30d_delta": 26
+      "post_count_at_build": 105,
+      "post_count_30d_delta": 50
     },
     "gamgyul": {
       "post_ids": [
@@ -1311,6 +1311,28 @@
       "post_count_at_build": 386,
       "post_count_30d_delta": 7
     },
+    "hisakata_(hisa_nn)": {
+      "post_ids": [
+        433713
+      ],
+      "approvers": [
+        "zetsubousensei"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "114931",
+        "2165487",
+        "8431458"
+      ],
+      "x_handles": [
+        "hisa_nn_",
+        "kokoharuka_"
+      ],
+      "registered_at_utc": "2026-04-17T05:55:46.115Z",
+      "completed": false,
+      "post_count_at_build": 122,
+      "post_count_30d_delta": 3
+    },
     "hit_by_hit": {
       "post_ids": [
         357489
@@ -1346,8 +1368,8 @@
       ],
       "registered_at_utc": "2025-04-28T17:57:21.899Z",
       "completed": false,
-      "post_count_at_build": 448,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 469,
+      "post_count_30d_delta": 22
     },
     "hori_wo": {
       "post_ids": [
@@ -1591,8 +1613,8 @@
       ],
       "registered_at_utc": "2025-08-18T18:27:23.383Z",
       "completed": false,
-      "post_count_at_build": 21,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 22,
+      "post_count_30d_delta": 1
     },
     "kakaobataa": {
       "post_ids": [
@@ -1649,8 +1671,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 194,
-      "post_count_30d_delta": 15
+      "post_count_at_build": 195,
+      "post_count_30d_delta": 16
     },
     "kangg": {
       "post_ids": [
@@ -1667,6 +1689,25 @@
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
       "post_count_at_build": 15,
+      "post_count_30d_delta": 1
+    },
+    "kanoir": {
+      "post_ids": [
+        443475
+      ],
+      "approvers": [
+        "Alixiron"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "3708303"
+      ],
+      "x_handles": [
+        "kanoir666"
+      ],
+      "registered_at_utc": "2026-06-03T03:39:20.143Z",
+      "completed": false,
+      "post_count_at_build": 9,
       "post_count_30d_delta": 1
     },
     "karintoun": {
@@ -2322,6 +2363,23 @@
       "post_count_at_build": 86,
       "post_count_30d_delta": 15
     },
+    "matanukisuna": {
+      "post_ids": [
+        443475
+      ],
+      "approvers": [
+        "Alixiron"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "76133773"
+      ],
+      "x_handles": [],
+      "registered_at_utc": "2026-06-03T03:39:20.143Z",
+      "completed": false,
+      "post_count_at_build": 12,
+      "post_count_30d_delta": 0
+    },
     "matsuhago": {
       "post_ids": [
         315327
@@ -2453,6 +2511,25 @@
       "completed": false,
       "post_count_at_build": 132,
       "post_count_30d_delta": 0
+    },
+    "miy_001": {
+      "post_ids": [
+        443475
+      ],
+      "approvers": [
+        "Alixiron"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "111596706"
+      ],
+      "x_handles": [
+        "miy_001"
+      ],
+      "registered_at_utc": "2026-06-03T03:39:20.143Z",
+      "completed": false,
+      "post_count_at_build": 138,
+      "post_count_30d_delta": 4
     },
     "miyao385": {
       "post_ids": [
@@ -3074,8 +3151,8 @@
       ],
       "registered_at_utc": "2025-06-13T22:23:47.908Z",
       "completed": false,
-      "post_count_at_build": 438,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 443,
+      "post_count_30d_delta": 5
     },
     "philosophia": {
       "post_ids": [
@@ -4486,6 +4563,7 @@
     "46795": "hinata_yuu",
     "49246": "hachi78b",
     "100279": "macbail",
+    "114931": "hisakata_(hisa_nn)",
     "143527": "hitoto",
     "175955": "layer_(reishuu)",
     "202910": "asato04",
@@ -4507,6 +4585,7 @@
     "1632202": "luminous_slime",
     "1702212": "hibana_(hibana_ztlv)",
     "1732436": "akiyama_cz4a",
+    "2165487": "hisakata_(hisa_nn)",
     "2239804": "ikeda_(kasutera)",
     "2311895": "bibiri_(r42r98r)",
     "2461024": "kachidama",
@@ -4522,6 +4601,7 @@
     "3371956": "hiranko",
     "3583448": "munimuni_muniwo",
     "3685062": "nikubou_maranoshin",
+    "3708303": "kanoir",
     "3760432": "bakasp-lilzy",
     "3861102": "mko_(artist)",
     "4216320": "mika_030",
@@ -4538,6 +4618,7 @@
     "7640910": "ama0805",
     "7857690": "f3000_kiara",
     "8003172": "elaine-didaea",
+    "8431458": "hisakata_(hisa_nn)",
     "8953889": "ca_(ca_gemini)",
     "9304404": "touchika",
     "10370864": "yukmomo",
@@ -4629,6 +4710,7 @@
     "75650632": "oh_gong05",
     "75905724": "senn10000",
     "75984999": "kuroussa",
+    "76133773": "matanukisuna",
     "76141478": "hanamaru_sensei",
     "76730688": "tentacleluver",
     "77455219": "miagawari011128",
@@ -4653,6 +4735,7 @@
     "108151239": "tomoja_rs",
     "108788322": "lao_tan_huacai",
     "110479938": "kamisato_sora",
+    "111596706": "miy_001",
     "113034791": "lantern_madoyoi",
     "113039017": "tsutsugano",
     "113724083": "kangg",
@@ -4774,6 +4857,7 @@
     "hiraga_matsuri": "hiraga_matsuri",
     "hirannko": "hiranko",
     "hirasato12": "hiraga_matsuri",
+    "hisa_nn_": "hisakata_(hisa_nn)",
     "hit_by_hit": "hit_by_hit",
     "homo_1121": "lumo_1121",
     "hosizora_mikoto": "hosizora_mikoto",
@@ -4802,6 +4886,7 @@
     "kakuwashi59489": "tsutsugano",
     "kamisato__sora": "kamisato_sora",
     "kamonomizutaki": "mame_nabe_donko",
+    "kanoir666": "kanoir",
     "karintoun__": "karintoun",
     "kemosuku": "keesuke_(kkosyoku)",
     "kharu11": "kharu11",
@@ -4815,6 +4900,7 @@
     "kkosyoku": "keesuke_(kkosyoku)",
     "kmomoyu": "yukmomo",
     "knst_akiiii": "kinoshita_aki",
+    "kokoharuka_": "hisakata_(hisa_nn)",
     "kot_mochi": "kotarou_(kot_mochi)",
     "kot_rou020": "kotarou_(kot_mochi)",
     "kototomari": "kototomari",
@@ -4856,6 +4942,7 @@
     "mgmg_g_zzz": "mgmg_g_zzz",
     "miagawari011128": "miagawari011128",
     "minimilieu": "minimilieu",
+    "miy_001": "miy_001",
     "miyao385": "miyao385",
     "mo10_shi": "shimogamo_(shimomo_12)",
     "mochanokono": "mochako_(motyako_1005)",
