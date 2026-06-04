@@ -730,8 +730,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 223,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 224,
+      "post_count_30d_delta": 1
     },
     "e20": {
       "post_ids": [
@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 105,
-      "post_count_30d_delta": 50
+      "post_count_at_build": 133,
+      "post_count_30d_delta": 78
     },
     "gamgyul": {
       "post_ids": [
@@ -1801,8 +1801,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 75,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 76,
+      "post_count_30d_delta": 12
     },
     "kikomo": {
       "post_ids": [
@@ -2014,8 +2014,8 @@
       ],
       "registered_at_utc": "2025-10-31T17:32:34.748Z",
       "completed": false,
-      "post_count_at_build": 115,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 119,
+      "post_count_30d_delta": 7
     },
     "kyouko_(roughplus)": {
       "post_ids": [
