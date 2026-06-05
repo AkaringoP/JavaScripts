@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 133,
-      "post_count_30d_delta": 78
+      "post_count_at_build": 168,
+      "post_count_30d_delta": 113
     },
     "gamgyul": {
       "post_ids": [
@@ -3291,8 +3291,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 52,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 53,
+      "post_count_30d_delta": 2
     },
     "riuichi": {
       "post_ids": [
@@ -3683,8 +3683,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 312,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 313,
+      "post_count_30d_delta": 14
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
