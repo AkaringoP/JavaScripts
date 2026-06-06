@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 168,
-      "post_count_30d_delta": 113
+      "post_count_at_build": 182,
+      "post_count_30d_delta": 127
     },
     "gamgyul": {
       "post_ids": [
@@ -2377,8 +2377,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 12,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 21,
+      "post_count_30d_delta": 9
     },
     "matsuhago": {
       "post_ids": [
@@ -3837,8 +3837,8 @@
       ],
       "registered_at_utc": "2025-04-11T14:39:43.331Z",
       "completed": false,
-      "post_count_at_build": 156,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 157,
+      "post_count_30d_delta": 7
     },
     "tenohira_(tenoo)": {
       "post_ids": [
