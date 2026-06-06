@@ -1188,8 +1188,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1803,
-      "post_count_30d_delta": 93
+      "post_count_at_build": 1804,
+      "post_count_30d_delta": 94
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1387,8 +1387,8 @@
       ],
       "registered_at_utc": "2026-05-24T07:47:29.420Z",
       "completed": false,
-      "post_count_at_build": 33,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 34,
+      "post_count_30d_delta": 2
     },
     "hosizora_mikoto": {
       "post_ids": [
@@ -1707,8 +1707,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 11,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 17,
+      "post_count_30d_delta": 9
     },
     "karintoun": {
       "post_ids": [
@@ -2377,8 +2377,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 21,
-      "post_count_30d_delta": 9
+      "post_count_at_build": 28,
+      "post_count_30d_delta": 16
     },
     "matsuhago": {
       "post_ids": [
@@ -2528,8 +2528,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 138,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 139,
+      "post_count_30d_delta": 4
     },
     "miyao385": {
       "post_ids": [
@@ -4034,8 +4034,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 299,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 300,
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
