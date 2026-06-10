@@ -1112,8 +1112,8 @@
       ],
       "registered_at_utc": "2023-10-13T04:01:32.434Z",
       "completed": false,
-      "post_count_at_build": 99,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 101,
+      "post_count_30d_delta": 2
     },
     "haizi0812": {
       "post_ids": [
@@ -1188,8 +1188,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1807,
-      "post_count_30d_delta": 93
+      "post_count_at_build": 1808,
+      "post_count_30d_delta": 94
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2547,8 +2547,8 @@
       ],
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
-      "post_count_at_build": 53,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 57,
+      "post_count_30d_delta": 22
     },
     "mko_(artist)": {
       "post_ids": [
@@ -2681,8 +2681,8 @@
       ],
       "registered_at_utc": "2025-08-28T20:13:30.576Z",
       "completed": false,
-      "post_count_at_build": 1172,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 1174,
+      "post_count_30d_delta": 5
     },
     "muffin_(loveenanag)": {
       "post_ids": [
@@ -4034,8 +4034,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 301,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 302,
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
