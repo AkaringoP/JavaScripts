@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5714,
-      "post_count_30d_delta": 32
+      "post_count_at_build": 5715,
+      "post_count_30d_delta": 33
     },
     "boro^2": {
       "post_ids": [
@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 207,
-      "post_count_30d_delta": 152
+      "post_count_at_build": 214,
+      "post_count_30d_delta": 159
     },
     "gamgyul": {
       "post_ids": [
@@ -1210,8 +1210,8 @@
       ],
       "registered_at_utc": "2024-05-18T23:27:25.211Z",
       "completed": false,
-      "post_count_at_build": 515,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 516,
+      "post_count_30d_delta": 3
     },
     "himajin_(fd_jin)": {
       "post_ids": [
