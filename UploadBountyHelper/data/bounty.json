@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5715,
-      "post_count_30d_delta": 31
+      "post_count_at_build": 5716,
+      "post_count_30d_delta": 32
     },
     "boro^2": {
       "post_ids": [
@@ -562,8 +562,8 @@
       ],
       "registered_at_utc": "2026-01-13T12:30:11.479Z",
       "completed": false,
-      "post_count_at_build": 125,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 126,
+      "post_count_30d_delta": 3
     },
     "chokueji": {
       "post_ids": [
@@ -962,8 +962,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 214,
-      "post_count_30d_delta": 159
+      "post_count_at_build": 222,
+      "post_count_30d_delta": 167
     },
     "gamgyul": {
       "post_ids": [
@@ -1188,8 +1188,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1808,
-      "post_count_30d_delta": 93
+      "post_count_at_build": 1809,
+      "post_count_30d_delta": 94
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1671,8 +1671,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 195,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 196,
+      "post_count_30d_delta": 11
     },
     "kangg": {
       "post_ids": [
@@ -1899,8 +1899,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 173,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 174,
+      "post_count_30d_delta": 6
     },
     "kiyoshi_st": {
       "post_ids": [
@@ -2110,8 +2110,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 88,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 89,
+      "post_count_30d_delta": 4
     },
     "lao_tan_huacai": {
       "post_ids": [
