@@ -506,7 +506,7 @@
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
       "post_count_at_build": 5715,
-      "post_count_30d_delta": 33
+      "post_count_30d_delta": 31
     },
     "boro^2": {
       "post_ids": [
@@ -563,7 +563,7 @@
       "registered_at_utc": "2026-01-13T12:30:11.479Z",
       "completed": false,
       "post_count_at_build": 125,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "chokueji": {
       "post_ids": [
@@ -672,7 +672,7 @@
       "registered_at_utc": "2026-05-08T23:14:05.291Z",
       "completed": false,
       "post_count_at_build": 406,
-      "post_count_30d_delta": 19
+      "post_count_30d_delta": 10
     },
     "dido_(di_do_di_do)": {
       "post_ids": [
@@ -1189,7 +1189,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1808,
-      "post_count_30d_delta": 94
+      "post_count_30d_delta": 93
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1331,7 +1331,7 @@
       "registered_at_utc": "2026-04-17T05:55:46.115Z",
       "completed": false,
       "post_count_at_build": 122,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "hit_by_hit": {
       "post_ids": [
@@ -1860,7 +1860,7 @@
       "registered_at_utc": "2026-05-08T20:42:26.459Z",
       "completed": false,
       "post_count_at_build": 17,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 1
     },
     "kitayu": {
       "post_ids": [
@@ -3273,7 +3273,7 @@
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
       "post_count_at_build": 26,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "ringein": {
       "post_ids": [
@@ -3684,7 +3684,7 @@
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
       "post_count_at_build": 315,
-      "post_count_30d_delta": 13
+      "post_count_30d_delta": 12
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -3878,8 +3878,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 18,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 19,
+      "post_count_30d_delta": 3
     },
     "tom_d0_ob": {
       "post_ids": [
