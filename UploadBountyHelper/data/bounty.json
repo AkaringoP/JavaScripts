@@ -22,8 +22,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 45,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 46,
+      "post_count_30d_delta": 1
     },
     "0_ebj": {
       "post_ids": [
@@ -1899,8 +1899,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 174,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 175,
+      "post_count_30d_delta": 7
     },
     "kiyoshi_st": {
       "post_ids": [
