@@ -693,8 +693,8 @@
       ],
       "registered_at_utc": "2023-08-16T16:32:04.721Z",
       "completed": false,
-      "post_count_at_build": 206,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 207,
+      "post_count_30d_delta": 3
     },
     "dousha0101": {
       "post_ids": [
@@ -791,7 +791,7 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 86,
+      "post_count_at_build": 87,
       "post_count_30d_delta": 0
     },
     "elaine-didaea": {
@@ -3878,8 +3878,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 19,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 20,
+      "post_count_30d_delta": 4
     },
     "tom_d0_ob": {
       "post_ids": [
