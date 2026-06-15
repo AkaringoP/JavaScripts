@@ -671,8 +671,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-05-08T23:14:05.291Z",
       "completed": false,
-      "post_count_at_build": 406,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 407,
+      "post_count_30d_delta": 1
     },
     "dido_(di_do_di_do)": {
       "post_ids": [
@@ -1169,8 +1169,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 6,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 10,
+      "post_count_30d_delta": 4
     },
     "heripantomorrow": {
       "post_ids": [
