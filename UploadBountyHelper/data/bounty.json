@@ -505,8 +505,27 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5720,
-      "post_count_30d_delta": 30
+      "post_count_at_build": 5721,
+      "post_count_30d_delta": 31
+    },
+    "bomhat": {
+      "post_ids": [
+        447821
+      ],
+      "approvers": [
+        "Hereinafter"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "4422668"
+      ],
+      "x_handles": [
+        "bomhat"
+      ],
+      "registered_at_utc": "2026-06-16T04:18:54.254Z",
+      "completed": false,
+      "post_count_at_build": 395,
+      "post_count_30d_delta": 2
     },
     "boro^2": {
       "post_ids": [
@@ -671,8 +690,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-05-08T23:14:05.291Z",
       "completed": false,
-      "post_count_at_build": 407,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 408,
+      "post_count_30d_delta": 2
     },
     "dido_(di_do_di_do)": {
       "post_ids": [
@@ -1188,8 +1207,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1815,
-      "post_count_30d_delta": 82
+      "post_count_at_build": 1816,
+      "post_count_30d_delta": 83
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1748,6 +1767,25 @@
       "post_count_at_build": 146,
       "post_count_30d_delta": 1
     },
+    "katahira_masashi": {
+      "post_ids": [
+        447821
+      ],
+      "approvers": [
+        "Hereinafter"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "6359"
+      ],
+      "x_handles": [
+        "marukata"
+      ],
+      "registered_at_utc": "2026-06-16T04:18:54.254Z",
+      "completed": false,
+      "post_count_at_build": 1527,
+      "post_count_30d_delta": 6
+    },
     "kawaguchi_tadahiko": {
       "post_ids": [
         340870
@@ -2181,8 +2219,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 66,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 67,
+      "post_count_30d_delta": 2
     },
     "lluyss": {
       "post_ids": [
@@ -2321,8 +2359,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 248,
-      "post_count_30d_delta": 34
+      "post_count_at_build": 250,
+      "post_count_30d_delta": 36
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -2870,6 +2908,25 @@
       "completed": false,
       "post_count_at_build": 44,
       "post_count_30d_delta": 1
+    },
+    "nopal_garpu": {
+      "post_ids": [
+        447763
+      ],
+      "approvers": [
+        "vipguy64"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "87323069"
+      ],
+      "x_handles": [
+        "nopalgarpu"
+      ],
+      "registered_at_utc": "2026-06-16T03:43:18.443Z",
+      "completed": false,
+      "post_count_at_build": 1,
+      "post_count_30d_delta": 0
     },
     "ny1n_49": {
       "post_ids": [
@@ -3703,8 +3760,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 116,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 117,
+      "post_count_30d_delta": 3
     },
     "suna_(s73d)": {
       "post_ids": [
@@ -4034,8 +4091,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 302,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 303,
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
@@ -4410,6 +4467,25 @@
       "post_count_at_build": 25,
       "post_count_30d_delta": 0
     },
+    "yukishiba_yanagi": {
+      "post_ids": [
+        447821
+      ],
+      "approvers": [
+        "Hereinafter"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "3216249"
+      ],
+      "x_handles": [
+        "yukishiba13"
+      ],
+      "registered_at_utc": "2026-06-16T04:18:54.254Z",
+      "completed": false,
+      "post_count_at_build": 65,
+      "post_count_30d_delta": 0
+    },
     "yukmomo": {
       "post_ids": [
         345200
@@ -4556,6 +4632,7 @@
   },
   "by_pixiv": {
     "4144": "mudou_eichi",
+    "6359": "katahira_masashi",
     "9948": "bkub",
     "12532": "suna_(s73d)",
     "38471": "hiraga_matsuri",
@@ -4598,6 +4675,7 @@
     "3092207": "moca_(mooooca)",
     "3115947": "sisierep",
     "3212748": "ichino_(1no)",
+    "3216249": "yukishiba_yanagi",
     "3371956": "hiranko",
     "3583448": "munimuni_muniwo",
     "3685062": "nikubou_maranoshin",
@@ -4605,6 +4683,7 @@
     "3760432": "bakasp-lilzy",
     "3861102": "mko_(artist)",
     "4216320": "mika_030",
+    "4422668": "bomhat",
     "4496612": "jinx88_(jinx)",
     "4545042": "monokubo",
     "4584073": "okuribi",
@@ -4724,6 +4803,7 @@
     "84884256": "muffin_(loveenanag)",
     "85631721": "untsuku",
     "86983029": "negiwasa555",
+    "87323069": "nopal_garpu",
     "89621265": "mame_nabe_donko",
     "90503210": "shatang_wei_xing_cheng",
     "92334357": "tomoja_rs",
@@ -4802,6 +4882,7 @@
     "bkub": "bkub",
     "bkub_comic": "bkub",
     "blackenterski": "luminous_slime",
+    "bomhat": "bomhat",
     "bye_cruelworld": "zizzu",
     "ca_gemini_": "ca_(ca_gemini)",
     "chokueji": "chokueji",
@@ -4929,6 +5010,7 @@
     "m0bilis": "m0bilis",
     "macbail1": "macbail",
     "marebitochka": "touchika",
+    "marukata": "katahira_masashi",
     "matsuhago": "matsuhago",
     "mcmn_sub": "omochi_monaka",
     "mdo_h03": "mudou_eichi",
@@ -4964,6 +5046,7 @@
     "nikuya_dq": "seinikuten",
     "nills_ff14": "nills",
     "nojob_hiro": "nojob_hiro",
+    "nopalgarpu": "nopal_garpu",
     "notpongldr": "pongldr",
     "ny1n_49": "ny1n_49",
     "oh_ec0m0esty": "ecomoesty",
@@ -5080,6 +5163,7 @@
     "yuchenghong": "yu_cheng_hong",
     "yuirua55234": "yuirua55234",
     "yukimatihinata": "hinata_yuu",
+    "yukishiba13": "yukishiba_yanagi",
     "yym99_1102": "philosophia",
     "z_we3n": "0_ebj",
     "z_we6n": "0_ebj",
