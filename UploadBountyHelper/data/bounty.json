@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5721,
-      "post_count_30d_delta": 31
+      "post_count_at_build": 5722,
+      "post_count_30d_delta": 32
     },
     "bomhat": {
       "post_ids": [
@@ -941,8 +941,8 @@
       ],
       "registered_at_utc": "2025-06-29T20:02:46.049Z",
       "completed": false,
-      "post_count_at_build": 199,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 200,
+      "post_count_30d_delta": 2
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
