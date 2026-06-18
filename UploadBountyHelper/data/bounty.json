@@ -769,8 +769,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1011,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 1012,
+      "post_count_30d_delta": 5
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1131,8 +1131,8 @@
       ],
       "registered_at_utc": "2023-10-13T04:01:32.434Z",
       "completed": false,
-      "post_count_at_build": 102,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 105,
+      "post_count_30d_delta": 6
     },
     "haizi0812": {
       "post_ids": [
@@ -1207,8 +1207,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1817,
-      "post_count_30d_delta": 82
+      "post_count_at_build": 1818,
+      "post_count_30d_delta": 83
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1289,6 +1289,27 @@
       "completed": false,
       "post_count_at_build": 355,
       "post_count_30d_delta": 0
+    },
+    "hira_icigocha": {
+      "post_ids": [
+        315327
+      ],
+      "approvers": [
+        "ZetsubouHime"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "19408836"
+      ],
+      "x_handles": [
+        "15cha_hira",
+        "15yukichan",
+        "hirapppi"
+      ],
+      "registered_at_utc": "2024-10-27T06:06:38.288Z",
+      "completed": false,
+      "post_count_at_build": 42,
+      "post_count_30d_delta": 2
     },
     "hiraga_matsuri": {
       "post_ids": [
@@ -2853,6 +2874,25 @@
       "post_count_at_build": 1,
       "post_count_30d_delta": 0
     },
+    "nasuka_gee": {
+      "post_ids": [
+        450358
+      ],
+      "approvers": [
+        "CommentaryRequest"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "1004995"
+      ],
+      "x_handles": [
+        "nasuka_gee"
+      ],
+      "registered_at_utc": "2026-06-18T12:28:04.601Z",
+      "completed": false,
+      "post_count_at_build": 201,
+      "post_count_30d_delta": 1
+    },
     "negiwasa555": {
       "post_ids": [
         273604
@@ -3406,8 +3446,8 @@
       ],
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
-      "post_count_at_build": 812,
-      "post_count_30d_delta": 71
+      "post_count_at_build": 813,
+      "post_count_30d_delta": 72
     },
     "rottencrow": {
       "post_ids": [
@@ -4110,8 +4150,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 303,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 304,
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
@@ -4558,8 +4598,8 @@
       ],
       "registered_at_utc": "2025-08-11T05:41:45.766Z",
       "completed": false,
-      "post_count_at_build": 29,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 30,
+      "post_count_30d_delta": 1
     },
     "zero_(sleepy_meltan)": {
       "post_ids": [
@@ -4677,6 +4717,7 @@
     "655664": "chigu",
     "734243": "yu_cheng_hong",
     "921917": "tahra",
+    "1004995": "nasuka_gee",
     "1139695": "naname_(fossama1)",
     "1632202": "luminous_slime",
     "1702212": "hibana_(hibana_ztlv)",
@@ -4750,6 +4791,7 @@
     "19054338": "hakuleg",
     "19285337": "matsuhago",
     "19325383": "024_(1a41a4)",
+    "19408836": "hira_icigocha",
     "19542913": "omochi_monaka",
     "19996480": "kashimu",
     "20100744": "bizan_zan",
@@ -4849,6 +4891,8 @@
     "0iycpa7o5pjgliw": "ojipyon",
     "0t0_yoshikawa": "yoshikawa_tatsuya",
     "123456789qaqaqa": "789illust",
+    "15cha_hira": "hira_icigocha",
+    "15yukichan": "hira_icigocha",
     "1a41a4": "024_(1a41a4)",
     "1a4_xxx": "024_(1a41a4)",
     "1a4zrk": "024_(1a41a4)",
@@ -4957,6 +5001,7 @@
     "hiko_gleeman": "owl_taro",
     "hiraga_matsuri": "hiraga_matsuri",
     "hirannko": "hiranko",
+    "hirapppi": "hira_icigocha",
     "hirasato12": "hiraga_matsuri",
     "hisa_nn_": "hisakata_(hisa_nn)",
     "hit_by_hit": "hit_by_hit",
@@ -5061,6 +5106,7 @@
     "mushi_buchi0122": "dido_(di_do_di_do)",
     "myvia_mokols": "myvia_mokols",
     "nanananaaannaa": "nanananana",
+    "nasuka_gee": "nasuka_gee",
     "negggi4": "mame_nabe_donko",
     "negiwasa555": "negiwasa555",
     "ngtblan": "lan_(ngtblan)",
