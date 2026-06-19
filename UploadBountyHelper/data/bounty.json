@@ -1207,8 +1207,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1818,
-      "post_count_30d_delta": 82
+      "post_count_at_build": 1819,
+      "post_count_30d_delta": 83
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1711,8 +1711,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 197,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 198,
+      "post_count_30d_delta": 7
     },
     "kangg": {
       "post_ids": [
@@ -3446,8 +3446,8 @@
       ],
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
-      "post_count_at_build": 813,
-      "post_count_30d_delta": 53
+      "post_count_at_build": 818,
+      "post_count_30d_delta": 58
     },
     "rottencrow": {
       "post_ids": [
@@ -3840,8 +3840,8 @@
       ],
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
-      "post_count_at_build": 464,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 465,
+      "post_count_30d_delta": 3
     },
     "suribbon": {
       "post_ids": [
