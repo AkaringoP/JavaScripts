@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5727,
-      "post_count_30d_delta": 37
+      "post_count_at_build": 5735,
+      "post_count_30d_delta": 45
     },
     "bomhat": {
       "post_ids": [
@@ -1208,7 +1208,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1819,
-      "post_count_30d_delta": 83
+      "post_count_30d_delta": 82
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1409,7 +1409,7 @@
       "registered_at_utc": "2025-04-28T17:57:21.899Z",
       "completed": false,
       "post_count_at_build": 470,
-      "post_count_30d_delta": 23
+      "post_count_30d_delta": 22
     },
     "hori_wo": {
       "post_ids": [
@@ -1918,8 +1918,8 @@
       ],
       "registered_at_utc": "2026-05-08T20:42:26.459Z",
       "completed": false,
-      "post_count_at_build": 17,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 18,
+      "post_count_30d_delta": 1
     },
     "kiring_xox": {
       "post_ids": [
@@ -2189,7 +2189,7 @@
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
       "post_count_at_build": 89,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 3
     },
     "lao_tan_huacai": {
       "post_ids": [
@@ -2455,8 +2455,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 37,
-      "post_count_30d_delta": 25
+      "post_count_at_build": 41,
+      "post_count_30d_delta": 29
     },
     "matsuhago": {
       "post_ids": [
@@ -2722,7 +2722,7 @@
       "registered_at_utc": "2026-05-13T16:07:12.040Z",
       "completed": false,
       "post_count_at_build": 281,
-      "post_count_30d_delta": 17
+      "post_count_30d_delta": 9
     },
     "mubai_jiang": {
       "post_ids": [
@@ -2816,8 +2816,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 169,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 170,
+      "post_count_30d_delta": 1
     },
     "naname_(fossama1)": {
       "post_ids": [
@@ -3447,7 +3447,7 @@
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
       "post_count_at_build": 818,
-      "post_count_30d_delta": 58
+      "post_count_30d_delta": 22
     },
     "rottencrow": {
       "post_ids": [
