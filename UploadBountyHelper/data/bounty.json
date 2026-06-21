@@ -524,8 +524,8 @@
       ],
       "registered_at_utc": "2026-06-16T04:18:54.254Z",
       "completed": false,
-      "post_count_at_build": 395,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 397,
+      "post_count_30d_delta": 3
     },
     "boro^2": {
       "post_ids": [
@@ -1207,8 +1207,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1820,
-      "post_count_30d_delta": 82
+      "post_count_at_build": 1821,
+      "post_count_30d_delta": 83
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2547,8 +2547,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 18,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 19,
+      "post_count_30d_delta": 1
     },
     "mika_030": {
       "post_ids": [
@@ -3058,8 +3058,8 @@
       ],
       "registered_at_utc": "2025-06-23T12:29:50.134Z",
       "completed": false,
-      "post_count_at_build": 128,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 132,
+      "post_count_30d_delta": 4
     },
     "ojipyon": {
       "post_ids": [
