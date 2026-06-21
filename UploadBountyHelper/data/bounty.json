@@ -81,8 +81,8 @@
       ],
       "registered_at_utc": "2025-04-17T19:37:14.072Z",
       "completed": false,
-      "post_count_at_build": 37,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 38,
+      "post_count_30d_delta": 1
     },
     "510_gotoudayo": {
       "post_ids": [
@@ -981,8 +981,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 228,
-      "post_count_30d_delta": 172
+      "post_count_at_build": 230,
+      "post_count_30d_delta": 174
     },
     "gamgyul": {
       "post_ids": [
@@ -3799,8 +3799,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 322,
-      "post_count_30d_delta": 17
+      "post_count_at_build": 323,
+      "post_count_30d_delta": 18
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
