@@ -120,8 +120,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 20,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 21,
+      "post_count_30d_delta": 1
     },
     "89_(8989_99)": {
       "post_ids": [
@@ -1207,8 +1207,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1821,
-      "post_count_30d_delta": 82
+      "post_count_at_build": 1822,
+      "post_count_30d_delta": 83
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2296,8 +2296,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 53,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 54,
+      "post_count_30d_delta": 1
     },
     "louyang_zhang": {
       "post_ids": [
@@ -2416,8 +2416,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 250,
-      "post_count_30d_delta": 28
+      "post_count_at_build": 254,
+      "post_count_30d_delta": 32
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -2907,8 +2907,8 @@
       ],
       "registered_at_utc": "2026-06-18T12:28:04.601Z",
       "completed": false,
-      "post_count_at_build": 237,
-      "post_count_30d_delta": 37
+      "post_count_at_build": 244,
+      "post_count_30d_delta": 44
     },
     "negiwasa555": {
       "post_ids": [
@@ -3816,8 +3816,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 323,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 324,
+      "post_count_30d_delta": 19
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4559,8 +4559,8 @@
       ],
       "registered_at_utc": "2026-06-16T04:18:54.254Z",
       "completed": false,
-      "post_count_at_build": 75,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 81,
+      "post_count_30d_delta": 16
     },
     "yukmomo": {
       "post_ids": [
