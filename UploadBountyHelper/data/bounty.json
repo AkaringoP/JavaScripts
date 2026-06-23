@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5739,
-      "post_count_30d_delta": 38
+      "post_count_at_build": 5740,
+      "post_count_30d_delta": 39
     },
     "bomhat": {
       "post_ids": [
@@ -2455,8 +2455,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 88,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 90,
+      "post_count_30d_delta": 7
     },
     "matanukisuna": {
       "post_ids": [
@@ -3857,8 +3857,8 @@
       ],
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
-      "post_count_at_build": 465,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 466,
+      "post_count_30d_delta": 3
     },
     "suribbon": {
       "post_ids": [
