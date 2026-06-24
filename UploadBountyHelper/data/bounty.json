@@ -484,8 +484,8 @@
       ],
       "registered_at_utc": "2025-06-08T07:43:17.526Z",
       "completed": false,
-      "post_count_at_build": 133,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 135,
+      "post_count_30d_delta": 2
     },
     "bkub": {
       "post_ids": [
@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5740,
-      "post_count_30d_delta": 38
+      "post_count_at_build": 5741,
+      "post_count_30d_delta": 39
     },
     "bomhat": {
       "post_ids": [
@@ -2276,8 +2276,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 67,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 68,
+      "post_count_30d_delta": 3
     },
     "lluyss": {
       "post_ids": [
@@ -2564,8 +2564,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 19,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 20,
+      "post_count_30d_delta": 2
     },
     "mika_030": {
       "post_ids": [
@@ -2835,6 +2835,25 @@
       "completed": false,
       "post_count_at_build": 170,
       "post_count_30d_delta": 1
+    },
+    "nagare750": {
+      "post_ids": [
+        433713
+      ],
+      "approvers": [
+        "zetsubousensei"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "505238"
+      ],
+      "x_handles": [
+        "nagagagagaga"
+      ],
+      "registered_at_utc": "2026-04-17T05:55:46.115Z",
+      "completed": false,
+      "post_count_at_build": 85,
+      "post_count_30d_delta": 23
     },
     "naname_(fossama1)": {
       "post_ids": [
@@ -3330,8 +3349,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 421,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 431,
+      "post_count_30d_delta": 17
     },
     "q_(ed69)": {
       "post_ids": [
@@ -4745,6 +4764,7 @@
     "444916": "haizi0812",
     "446127": "cosmic_(crownclowncosmic)",
     "458455": "hosizora_mikoto",
+    "505238": "nagare750",
     "537853": "aoin",
     "587268": "onimaru_(onimal7802)",
     "617289": "aoin",
@@ -5139,6 +5159,7 @@
     "mujica_tarou": "cosmic_(crownclowncosmic)",
     "mushi_buchi0122": "dido_(di_do_di_do)",
     "myvia_mokols": "myvia_mokols",
+    "nagagagagaga": "nagare750",
     "nanananaaannaa": "nanananana",
     "nasuka_gee": "nasuka_gee",
     "negggi4": "mame_nabe_donko",
