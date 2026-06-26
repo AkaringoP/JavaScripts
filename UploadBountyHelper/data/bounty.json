@@ -311,7 +311,7 @@
       "registered_at_utc": "2025-11-16T12:32:49.160Z",
       "completed": false,
       "post_count_at_build": 298,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 4
     },
     "api_(ppi_52)": {
       "post_ids": [
@@ -713,7 +713,7 @@
       "registered_at_utc": "2023-08-16T16:32:04.721Z",
       "completed": false,
       "post_count_at_build": 207,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "dousha0101": {
       "post_ids": [
@@ -866,7 +866,7 @@
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
       "post_count_at_build": 65,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "erhuazi917": {
       "post_ids": [
@@ -1208,7 +1208,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1825,
-      "post_count_30d_delta": 58
+      "post_count_30d_delta": 57
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1229,8 +1229,8 @@
       ],
       "registered_at_utc": "2024-05-18T23:27:25.211Z",
       "completed": false,
-      "post_count_at_build": 519,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 520,
+      "post_count_30d_delta": 5
     },
     "himajin_(fd_jin)": {
       "post_ids": [
@@ -1349,7 +1349,7 @@
       "registered_at_utc": "2023-06-13T15:21:34.593Z",
       "completed": false,
       "post_count_at_build": 388,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 4
     },
     "hisakata_(hisa_nn)": {
       "post_ids": [
@@ -1878,7 +1878,7 @@
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
       "post_count_at_build": 76,
-      "post_count_30d_delta": 12
+      "post_count_30d_delta": 11
     },
     "kikomo": {
       "post_ids": [
@@ -2395,7 +2395,7 @@
       "registered_at_utc": "2026-05-25T16:54:46.126Z",
       "completed": false,
       "post_count_at_build": 238,
-      "post_count_30d_delta": 118
+      "post_count_30d_delta": 78
     },
     "mame_nabe_donko": {
       "post_ids": [
@@ -2584,8 +2584,8 @@
       ],
       "registered_at_utc": "2026-04-11T21:23:21.076Z",
       "completed": true,
-      "post_count_at_build": 44,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 45,
+      "post_count_30d_delta": 1
     },
     "minimilieu": {
       "post_ids": [
@@ -3349,8 +3349,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 431,
-      "post_count_30d_delta": 17
+      "post_count_at_build": 433,
+      "post_count_30d_delta": 18
     },
     "q_(ed69)": {
       "post_ids": [
@@ -4126,7 +4126,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 201,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "tsumoi_(infinity)": {
       "post_ids": [
@@ -4145,7 +4145,7 @@
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
       "post_count_at_build": 54,
-      "post_count_30d_delta": 8
+      "post_count_30d_delta": 7
     },
     "tsuruko_turuta": {
       "post_ids": [
@@ -4186,8 +4186,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 306,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 307,
+      "post_count_30d_delta": 11
     },
     "untsuku": {
       "post_ids": [
@@ -4315,6 +4315,25 @@
       "post_count_at_build": 28,
       "post_count_30d_delta": 0
     },
+    "watawata22": {
+      "post_ids": [
+        451709
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "7515318"
+      ],
+      "x_handles": [
+        "wata_lemon03"
+      ],
+      "registered_at_utc": "2026-06-25T21:44:52.241Z",
+      "completed": false,
+      "post_count_at_build": 90,
+      "post_count_30d_delta": 0
+    },
     "womb_74": {
       "post_ids": [
         441129
@@ -4404,7 +4423,7 @@
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
       "post_count_at_build": 15,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 0
     },
     "xioiri": {
       "post_ids": [
@@ -4808,6 +4827,7 @@
     "5709662": "nanananana",
     "5885352": "kharu11",
     "7266563": "easel_(dam0628)",
+    "7515318": "watawata22",
     "7640910": "ama0805",
     "7857690": "f3000_kiara",
     "8003172": "elaine-didaea",
@@ -5271,6 +5291,7 @@
     "vulkiri": "vulkiri",
     "vvvv587": "xiaotianxia",
     "warabi_tama_": "warabi_tama",
+    "wata_lemon03": "watawata22",
     "womb_74": "womb_74",
     "x2boro": "boro^2",
     "x_x037_lito": "sonzai_(x_x037_lito)",
