@@ -506,7 +506,7 @@
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
       "post_count_at_build": 5742,
-      "post_count_30d_delta": 37
+      "post_count_30d_delta": 36
     },
     "bomhat": {
       "post_ids": [
@@ -982,7 +982,7 @@
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
       "post_count_at_build": 230,
-      "post_count_30d_delta": 174
+      "post_count_30d_delta": 172
     },
     "gamgyul": {
       "post_ids": [
@@ -1208,7 +1208,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1826,
-      "post_count_30d_delta": 58
+      "post_count_30d_delta": 57
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2456,7 +2456,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 90,
-      "post_count_30d_delta": 7
+      "post_count_30d_delta": 5
     },
     "matanukisuna": {
       "post_ids": [
@@ -2643,7 +2643,7 @@
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
       "post_count_at_build": 57,
-      "post_count_30d_delta": 19
+      "post_count_30d_delta": 4
     },
     "mko_(artist)": {
       "post_ids": [
@@ -3877,7 +3877,7 @@
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
       "post_count_at_build": 466,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "suribbon": {
       "post_ids": [
@@ -4187,7 +4187,7 @@
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
       "post_count_at_build": 307,
-      "post_count_30d_delta": 11
+      "post_count_30d_delta": 10
     },
     "untsuku": {
       "post_ids": [
@@ -4740,8 +4740,8 @@
       ],
       "registered_at_utc": "2024-12-12T18:34:03.655Z",
       "completed": false,
-      "post_count_at_build": 49,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 50,
+      "post_count_30d_delta": 3
     },
     "zongil_salryeo": {
       "post_ids": [
