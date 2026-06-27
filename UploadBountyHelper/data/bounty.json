@@ -462,8 +462,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 40,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 41,
+      "post_count_30d_delta": 3
     },
     "bizan_zan": {
       "post_ids": [
@@ -2623,8 +2623,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 148,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 149,
+      "post_count_30d_delta": 12
     },
     "miyao385": {
       "post_ids": [
