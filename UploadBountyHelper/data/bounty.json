@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1828,
-      "post_count_30d_delta": 57
+      "post_count_at_build": 1829,
+      "post_count_30d_delta": 58
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1762,8 +1762,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 199,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 200,
+      "post_count_30d_delta": 6
     },
     "kangg": {
       "post_ids": [
@@ -2201,8 +2201,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 56,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 65,
+      "post_count_30d_delta": 10
     },
     "lan_(ngtblan)": {
       "post_ids": [
@@ -4134,8 +4134,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 22,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 24,
+      "post_count_30d_delta": 6
     },
     "tom_d0_ob": {
       "post_ids": [
