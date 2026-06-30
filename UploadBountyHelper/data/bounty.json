@@ -444,7 +444,7 @@
       "registered_at_utc": "2026-05-29T19:50:55.320Z",
       "completed": false,
       "post_count_at_build": 102,
-      "post_count_30d_delta": 20
+      "post_count_30d_delta": 7
     },
     "bigchaping": {
       "post_ids": [
@@ -639,7 +639,7 @@
       "registered_at_utc": "2024-11-03T18:59:22.456Z",
       "completed": false,
       "post_count_at_build": 407,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 3
     },
     "cryborg": {
       "post_ids": [
@@ -676,7 +676,7 @@
       "registered_at_utc": "2025-06-15T22:24:56.359Z",
       "completed": true,
       "post_count_at_build": 18766,
-      "post_count_30d_delta": 94
+      "post_count_30d_delta": 60
     },
     "dav-19": {
       "post_ids": [
@@ -1225,7 +1225,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1829,
-      "post_count_30d_delta": 58
+      "post_count_30d_delta": 57
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1267,7 +1267,7 @@
       "registered_at_utc": "2023-07-26T03:09:45.580Z",
       "completed": true,
       "post_count_at_build": 72,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "hinata_yuu": {
       "post_ids": [
@@ -1799,7 +1799,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 19,
-      "post_count_30d_delta": 11
+      "post_count_30d_delta": 10
     },
     "karintoun": {
       "post_ids": [
@@ -1912,7 +1912,7 @@
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
       "post_count_at_build": 76,
-      "post_count_30d_delta": 9
+      "post_count_30d_delta": 1
     },
     "kikomo": {
       "post_ids": [
@@ -2429,7 +2429,7 @@
       "registered_at_utc": "2026-05-25T16:54:46.126Z",
       "completed": false,
       "post_count_at_build": 239,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 1
     },
     "magical_princes": {
       "post_ids": [
@@ -3400,8 +3400,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 433,
-      "post_count_30d_delta": 17
+      "post_count_at_build": 434,
+      "post_count_30d_delta": 18
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3644,7 +3644,7 @@
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
       "post_count_at_build": 42,
-      "post_count_30d_delta": 8
+      "post_count_30d_delta": 0
     },
     "shatang_wei_xing_cheng": {
       "post_ids": [
@@ -4291,7 +4291,7 @@
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
       "post_count_at_build": 307,
-      "post_count_30d_delta": 9
+      "post_count_30d_delta": 8
     },
     "untsuku": {
       "post_ids": [
