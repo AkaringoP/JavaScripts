@@ -310,8 +310,8 @@
       ],
       "registered_at_utc": "2025-11-16T12:32:49.160Z",
       "completed": false,
-      "post_count_at_build": 298,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 300,
+      "post_count_30d_delta": 6
     },
     "api_(ppi_52)": {
       "post_ids": [
@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1830,
-      "post_count_30d_delta": 57
+      "post_count_at_build": 1831,
+      "post_count_30d_delta": 58
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2559,8 +2559,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 100,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 101,
+      "post_count_30d_delta": 4
     },
     "megasus": {
       "post_ids": [
@@ -2691,8 +2691,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 161,
-      "post_count_30d_delta": 24
+      "post_count_at_build": 162,
+      "post_count_30d_delta": 25
     },
     "miyao385": {
       "post_ids": [
