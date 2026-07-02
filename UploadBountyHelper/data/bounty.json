@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5742,
-      "post_count_30d_delta": 35
+      "post_count_at_build": 5743,
+      "post_count_30d_delta": 36
     },
     "bomhat": {
       "post_ids": [
@@ -3550,8 +3550,8 @@
       ],
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
-      "post_count_at_build": 822,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 823,
+      "post_count_30d_delta": 19
     },
     "rottencrow": {
       "post_ids": [
@@ -4040,6 +4040,25 @@
       "completed": false,
       "post_count_at_build": 37,
       "post_count_30d_delta": 1
+    },
+    "ta_u_la": {
+      "post_ids": [
+        433713
+      ],
+      "approvers": [
+        "zetsubousensei"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "99627885"
+      ],
+      "x_handles": [
+        "ta_u_la"
+      ],
+      "registered_at_utc": "2026-04-17T05:55:46.115Z",
+      "completed": false,
+      "post_count_at_build": 10,
+      "post_count_30d_delta": 6
     },
     "tahra": {
       "post_ids": [
@@ -5066,6 +5085,7 @@
     "92334357": "tomoja_rs",
     "93392103": "xun_lin_(pixiv_93392103)",
     "93860299": "tsutsugano",
+    "99627885": "ta_u_la",
     "99721105": "inutora08",
     "100935137": "bigchaping",
     "107988579": "hit_by_hit",
@@ -5388,6 +5408,7 @@
     "svlkyri": "shirashura",
     "syotamimi": "bkub",
     "syr_ooo_p": "syrop_(syr_ooo_p)",
+    "ta_u_la": "ta_u_la",
     "tahraart": "tahra",
     "takosuke4chan": "takosuke_(gyzp7373)",
     "tatamaoekaki": "tatamaoekaki",
