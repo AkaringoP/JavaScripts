@@ -638,8 +638,8 @@
       ],
       "registered_at_utc": "2024-11-03T18:59:22.456Z",
       "completed": false,
-      "post_count_at_build": 407,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 409,
+      "post_count_30d_delta": 5
     },
     "cryborg": {
       "post_ids": [
@@ -4326,8 +4326,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 307,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 308,
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
