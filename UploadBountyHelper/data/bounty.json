@@ -1094,8 +1094,8 @@
       ],
       "registered_at_utc": "2025-09-28T23:04:33.281Z",
       "completed": false,
-      "post_count_at_build": 200,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 202,
+      "post_count_30d_delta": 2
     },
     "guaiwu_zhishi": {
       "post_ids": [
@@ -2994,8 +2994,8 @@
       ],
       "registered_at_utc": "2026-06-18T12:28:04.601Z",
       "completed": false,
-      "post_count_at_build": 326,
-      "post_count_30d_delta": 126
+      "post_count_at_build": 327,
+      "post_count_30d_delta": 127
     },
     "negiwasa555": {
       "post_ids": [
@@ -4019,8 +4019,8 @@
       ],
       "registered_at_utc": "2025-07-03T19:56:41.436Z",
       "completed": false,
-      "post_count_at_build": 68,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 69,
+      "post_count_30d_delta": 3
     },
     "syrop_(syr_ooo_p)": {
       "post_ids": [
@@ -4682,7 +4682,7 @@
       ],
       "registered_at_utc": "2025-03-07T18:34:08.298Z",
       "completed": false,
-      "post_count_at_build": 145,
+      "post_count_at_build": 147,
       "post_count_30d_delta": 0
     },
     "yu_cheng_hong": {
