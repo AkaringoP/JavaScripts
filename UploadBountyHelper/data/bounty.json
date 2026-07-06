@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5746,
-      "post_count_30d_delta": 38
+      "post_count_at_build": 5749,
+      "post_count_30d_delta": 41
     },
     "bomhat": {
       "post_ids": [
@@ -769,8 +769,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1012,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 1013,
+      "post_count_30d_delta": 4
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1246,8 +1246,8 @@
       ],
       "registered_at_utc": "2024-05-18T23:27:25.211Z",
       "completed": false,
-      "post_count_at_build": 522,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 523,
+      "post_count_30d_delta": 8
     },
     "himajin_(fd_jin)": {
       "post_ids": [
@@ -2102,8 +2102,8 @@
       ],
       "registered_at_utc": "2024-11-15T09:55:16.626Z",
       "completed": true,
-      "post_count_at_build": 160,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 165,
+      "post_count_30d_delta": 5
     },
     "kototomari": {
       "post_ids": [
@@ -2252,12 +2252,13 @@
       ],
       "x_handles": [
         "lantern_madoyoi",
+        "motonoyoi",
         "motonoyoi_"
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 95,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 96,
+      "post_count_30d_delta": 8
     },
     "lao_tan_huacai": {
       "post_ids": [
@@ -2523,8 +2524,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 92,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 93,
+      "post_count_30d_delta": 6
     },
     "matanukisuna": {
       "post_ids": [
@@ -2691,8 +2692,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 164,
-      "post_count_30d_delta": 26
+      "post_count_at_build": 166,
+      "post_count_30d_delta": 28
     },
     "miyao385": {
       "post_ids": [
@@ -5320,6 +5321,7 @@
     "monaka_0326_": "omochi_monaka",
     "monsterofsukep": "sukepmonster",
     "moooca27": "moca_(mooooca)",
+    "motonoyoi": "lantern_madoyoi",
     "motonoyoi_": "lantern_madoyoi",
     "motyako__1005": "mochako_(motyako_1005)",
     "mugichoconm": "rizu_(rizunm)",
