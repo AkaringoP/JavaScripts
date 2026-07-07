@@ -365,8 +365,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 4,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 5,
+      "post_count_30d_delta": 1
     },
     "aubergrin": {
       "post_ids": [
@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5753,
-      "post_count_30d_delta": 44
+      "post_count_at_build": 5754,
+      "post_count_30d_delta": 45
     },
     "bomhat": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 39,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 93,
+      "post_count_30d_delta": 64
     },
     "imasiphy": {
       "post_ids": [
@@ -2485,8 +2485,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 258,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 260,
+      "post_count_30d_delta": 15
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -4472,8 +4472,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 169,
-      "post_count_30d_delta": 79
+      "post_count_at_build": 171,
+      "post_count_30d_delta": 81
     },
     "womb_74": {
       "post_ids": [
