@@ -310,8 +310,8 @@
       ],
       "registered_at_utc": "2025-11-16T12:32:49.160Z",
       "completed": false,
-      "post_count_at_build": 300,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 302,
+      "post_count_30d_delta": 6
     },
     "api_(ppi_52)": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 175,
-      "post_count_30d_delta": 146
+      "post_count_at_build": 204,
+      "post_count_30d_delta": 175
     },
     "imasiphy": {
       "post_ids": [
@@ -3795,8 +3795,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 56,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 57,
+      "post_count_30d_delta": 2
     },
     "sisierep": {
       "post_ids": [
