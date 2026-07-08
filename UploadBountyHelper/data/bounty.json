@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5755,
-      "post_count_30d_delta": 44
+      "post_count_at_build": 5756,
+      "post_count_30d_delta": 45
     },
     "bomhat": {
       "post_ids": [
@@ -560,8 +560,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 30,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 31,
+      "post_count_30d_delta": 2
     },
     "chigu": {
       "post_ids": [
@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1863,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1864,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -3943,8 +3943,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 117,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 122,
+      "post_count_30d_delta": 6
     },
     "summernight_12": {
       "post_ids": [
@@ -3981,8 +3981,8 @@
       ],
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
-      "post_count_at_build": 468,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 469,
+      "post_count_30d_delta": 5
     },
     "suribbon": {
       "post_ids": [
