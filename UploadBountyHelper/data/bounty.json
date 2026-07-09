@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5756,
-      "post_count_30d_delta": 42
+      "post_count_at_build": 5757,
+      "post_count_30d_delta": 43
     },
     "bomhat": {
       "post_ids": [
@@ -769,8 +769,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1013,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 1014,
+      "post_count_30d_delta": 5
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1167,8 +1167,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 4,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 5,
+      "post_count_30d_delta": 1
     },
     "hakuleg": {
       "post_ids": [
@@ -2560,8 +2560,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 102,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 103,
+      "post_count_30d_delta": 5
     },
     "megasus": {
       "post_ids": [
