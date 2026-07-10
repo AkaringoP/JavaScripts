@@ -273,8 +273,8 @@
       ],
       "registered_at_utc": "2024-11-15T09:55:16.626Z",
       "completed": true,
-      "post_count_at_build": 107,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 108,
+      "post_count_30d_delta": 1
     },
     "ann_yasu_d": {
       "post_ids": [
@@ -365,8 +365,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 5,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 6,
+      "post_count_30d_delta": 2
     },
     "aubergrin": {
       "post_ids": [
@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1865,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1866,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 204,
-      "post_count_30d_delta": 175
+      "post_count_at_build": 209,
+      "post_count_30d_delta": 180
     },
     "imasiphy": {
       "post_ids": [
@@ -3456,8 +3456,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 53,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 54,
+      "post_count_30d_delta": 2
     },
     "realjinn44": {
       "post_ids": [
