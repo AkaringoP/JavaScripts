@@ -422,8 +422,8 @@
       ],
       "registered_at_utc": "2025-07-14T13:48:05.667Z",
       "completed": false,
-      "post_count_at_build": 165,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 171,
+      "post_count_30d_delta": 10
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5759,
-      "post_count_30d_delta": 44
+      "post_count_at_build": 5760,
+      "post_count_30d_delta": 45
     },
     "bomhat": {
       "post_ids": [
@@ -941,8 +941,8 @@
       ],
       "registered_at_utc": "2025-06-29T20:02:46.049Z",
       "completed": false,
-      "post_count_at_build": 200,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 201,
+      "post_count_30d_delta": 2
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
@@ -3551,8 +3551,8 @@
       ],
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
-      "post_count_at_build": 827,
-      "post_count_30d_delta": 15
+      "post_count_at_build": 828,
+      "post_count_30d_delta": 16
     },
     "rottencrow": {
       "post_ids": [
