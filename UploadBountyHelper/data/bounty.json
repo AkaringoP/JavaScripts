@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5760,
-      "post_count_30d_delta": 45
+      "post_count_at_build": 5762,
+      "post_count_30d_delta": 47
     },
     "bomhat": {
       "post_ids": [
@@ -1186,8 +1186,8 @@
       ],
       "registered_at_utc": "2025-05-31T12:03:26.347Z",
       "completed": false,
-      "post_count_at_build": 328,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 329,
+      "post_count_30d_delta": 2
     },
     "hanamaru_sensei": {
       "post_ids": [
@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1866,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1867,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1519,8 +1519,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 90,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 92,
+      "post_count_30d_delta": 4
     },
     "i0723ris": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 209,
-      "post_count_30d_delta": 180
+      "post_count_at_build": 230,
+      "post_count_30d_delta": 201
     },
     "imasiphy": {
       "post_ids": [
@@ -1779,8 +1779,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 208,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 209,
+      "post_count_30d_delta": 14
     },
     "kangg": {
       "post_ids": [
@@ -3923,8 +3923,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 335,
-      "post_count_30d_delta": 20
+      "post_count_at_build": 336,
+      "post_count_30d_delta": 21
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
