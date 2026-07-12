@@ -120,8 +120,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 21,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 22,
+      "post_count_30d_delta": 2
     },
     "89_(8989_99)": {
       "post_ids": [
@@ -422,8 +422,8 @@
       ],
       "registered_at_utc": "2025-07-14T13:48:05.667Z",
       "completed": false,
-      "post_count_at_build": 172,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 176,
+      "post_count_30d_delta": 15
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5763,
-      "post_count_30d_delta": 47
+      "post_count_at_build": 5765,
+      "post_count_30d_delta": 49
     },
     "bomhat": {
       "post_ids": [
@@ -675,8 +675,8 @@
       ],
       "registered_at_utc": "2025-06-15T22:24:56.359Z",
       "completed": true,
-      "post_count_at_build": 18766,
-      "post_count_30d_delta": 46
+      "post_count_at_build": 18767,
+      "post_count_30d_delta": 47
     },
     "dav-19": {
       "post_ids": [
@@ -1224,8 +1224,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1867,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1868,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 273,
-      "post_count_30d_delta": 244
+      "post_count_at_build": 307,
+      "post_count_30d_delta": 278
     },
     "imasiphy": {
       "post_ids": [
@@ -3277,8 +3277,8 @@
       ],
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
-      "post_count_at_build": 343,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 344,
+      "post_count_30d_delta": 6
     },
     "orphaneater_io": {
       "post_ids": [
@@ -3719,6 +3719,26 @@
       "post_count_at_build": 17,
       "post_count_30d_delta": 0
     },
+    "shimejimee": {
+      "post_ids": [
+        454179
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "114705000"
+      ],
+      "x_handles": [
+        "ikijimee",
+        "shimejimee"
+      ],
+      "registered_at_utc": "2026-07-12T02:15:54.041Z",
+      "completed": false,
+      "post_count_at_build": 19,
+      "post_count_30d_delta": 3
+    },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
         244548,
@@ -3923,8 +3943,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 336,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 339,
+      "post_count_30d_delta": 24
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -3943,8 +3963,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 123,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 124,
+      "post_count_30d_delta": 8
     },
     "summernight_12": {
       "post_ids": [
@@ -4917,8 +4937,8 @@
       ],
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
-      "post_count_at_build": 27,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 28,
+      "post_count_30d_delta": 3
     }
   },
   "by_pixiv": {
@@ -5117,6 +5137,7 @@
     "113034791": "lantern_madoyoi",
     "113039017": "tsutsugano",
     "113724083": "kangg",
+    "114705000": "shimejimee",
     "115155077": "gamgyul",
     "122447334": "suribbon"
   },
@@ -5259,6 +5280,7 @@
     "igurumi_4242564": "awoito_(tsurubami_jiguro)",
     "ikeda0121": "ikeda_(kasutera)",
     "ikeda_0121": "ikeda_(kasutera)",
+    "ikijimee": "shimejimee",
     "imasiphy": "imasiphy",
     "inutora08": "inutora08",
     "iyzlime": "iyzlime",
@@ -5408,6 +5430,7 @@
     "sensei_hanamaru": "hanamaru_sensei",
     "shiguretau": "shiguretau",
     "shiiiiimamike": "shiiiiimamike",
+    "shimejimee": "shimejimee",
     "shirashura": "shirashura",
     "shiravalkyrie_": "shirashura",
     "shirukokko": "shirukokko",
