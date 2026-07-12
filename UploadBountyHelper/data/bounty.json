@@ -422,8 +422,8 @@
       ],
       "registered_at_utc": "2025-07-14T13:48:05.667Z",
       "completed": false,
-      "post_count_at_build": 171,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 172,
+      "post_count_30d_delta": 11
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5762,
-      "post_count_30d_delta": 46
+      "post_count_at_build": 5763,
+      "post_count_30d_delta": 47
     },
     "bomhat": {
       "post_ids": [
@@ -1593,8 +1593,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 255,
-      "post_count_30d_delta": 226
+      "post_count_at_build": 273,
+      "post_count_30d_delta": 244
     },
     "imasiphy": {
       "post_ids": [
@@ -4900,6 +4900,25 @@
       "completed": false,
       "post_count_at_build": 11,
       "post_count_30d_delta": 0
+    },
+    "zunda_e_damame": {
+      "post_ids": [
+        454179
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "44182248"
+      ],
+      "x_handles": [
+        "zunda_e_damame"
+      ],
+      "registered_at_utc": "2026-07-12T02:15:54.041Z",
+      "completed": false,
+      "post_count_at_build": 27,
+      "post_count_30d_delta": 2
     }
   },
   "by_pixiv": {
@@ -5042,6 +5061,7 @@
     "43135110": "utsu_(utu_xx)",
     "43387494": "remon_(920moomin)",
     "43473464": "tsukaasa",
+    "44182248": "zunda_e_damame",
     "45948019": "oaza",
     "49279982": "himajin_(fd_jin)",
     "49714510": "kingcraft_kingu",
@@ -5470,6 +5490,7 @@
     "zexliqiu": "zexli_qiu",
     "znnnnnnnnz": "tenohira_(tenoo)",
     "zongil_salryeo": "zongil_salryeo",
+    "zunda_e_damame": "zunda_e_damame",
     "zzll_banaco": "hibana_(hibana_ztlv)"
   }
 }
