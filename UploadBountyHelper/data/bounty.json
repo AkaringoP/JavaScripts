@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5767,
-      "post_count_30d_delta": 50
+      "post_count_at_build": 5768,
+      "post_count_30d_delta": 51
     },
     "bomhat": {
       "post_ids": [
@@ -634,7 +634,8 @@
       "x_handles": [
         "coscoscos39",
         "crownclowncos",
-        "mujica_tarou"
+        "mujica_tarou",
+        "nicotine_tarou"
       ],
       "registered_at_utc": "2024-11-03T18:59:22.456Z",
       "completed": false,
@@ -1224,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1868,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1869,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1986,8 +1987,8 @@
       ],
       "registered_at_utc": "2026-05-08T20:42:26.459Z",
       "completed": false,
-      "post_count_at_build": 18,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 21,
+      "post_count_30d_delta": 4
     },
     "kiring_xox": {
       "post_ids": [
@@ -4001,8 +4002,8 @@
       ],
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
-      "post_count_at_build": 469,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 470,
+      "post_count_30d_delta": 6
     },
     "suribbon": {
       "post_ids": [
@@ -5376,6 +5377,7 @@
     "negggi4": "mame_nabe_donko",
     "negiwasa555": "negiwasa555",
     "ngtblan": "lan_(ngtblan)",
+    "nicotine_tarou": "cosmic_(crownclowncosmic)",
     "nikuya_dq": "seinikuten",
     "nills_ff14": "nills",
     "nojob_hiro": "nojob_hiro",
