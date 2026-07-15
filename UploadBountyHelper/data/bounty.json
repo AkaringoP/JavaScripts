@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5772,
-      "post_count_30d_delta": 55
+      "post_count_at_build": 5774,
+      "post_count_30d_delta": 57
     },
     "bomhat": {
       "post_ids": [
@@ -1225,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1870,
-      "post_count_30d_delta": 56
+      "post_count_at_build": 1873,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1346,8 +1346,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 632,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 633,
+      "post_count_30d_delta": 5
     },
     "hiranko": {
       "post_ids": [
@@ -1780,8 +1780,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 209,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 210,
+      "post_count_30d_delta": 14
     },
     "kangg": {
       "post_ids": [
@@ -2712,8 +2712,8 @@
       ],
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
-      "post_count_at_build": 59,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 61,
+      "post_count_30d_delta": 4
     },
     "mko_(artist)": {
       "post_ids": [
@@ -3756,8 +3756,8 @@
       ],
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
-      "post_count_at_build": 41,
-      "post_count_30d_delta": 25
+      "post_count_at_build": 52,
+      "post_count_30d_delta": 36
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
@@ -3983,8 +3983,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 127,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 128,
+      "post_count_30d_delta": 12
     },
     "summernight_12": {
       "post_ids": [
@@ -4344,8 +4344,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 75,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 76,
+      "post_count_30d_delta": 1
     },
     "tsutsugano": {
       "post_ids": [
