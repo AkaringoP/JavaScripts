@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5776,
-      "post_count_30d_delta": 56
+      "post_count_at_build": 5777,
+      "post_count_30d_delta": 57
     },
     "bomhat": {
       "post_ids": [
@@ -581,8 +581,8 @@
       ],
       "registered_at_utc": "2026-01-13T12:30:11.479Z",
       "completed": false,
-      "post_count_at_build": 127,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 128,
+      "post_count_30d_delta": 2
     },
     "chokueji": {
       "post_ids": [
@@ -1225,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1873,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1874,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2258,8 +2258,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 98,
-      "post_count_30d_delta": 9
+      "post_count_at_build": 102,
+      "post_count_30d_delta": 13
     },
     "lao_tan_huacai": {
       "post_ids": [
