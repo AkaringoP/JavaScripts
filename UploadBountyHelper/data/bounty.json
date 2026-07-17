@@ -1225,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1874,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1875,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1854,8 +1854,8 @@
       ],
       "registered_at_utc": "2023-09-02T12:56:21.690Z",
       "completed": true,
-      "post_count_at_build": 147,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 148,
+      "post_count_30d_delta": 2
     },
     "katahira_masashi": {
       "post_ids": [
