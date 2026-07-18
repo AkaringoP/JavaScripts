@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5777,
-      "post_count_30d_delta": 52
+      "post_count_at_build": 5781,
+      "post_count_30d_delta": 56
     },
     "bomhat": {
       "post_ids": [
@@ -982,8 +982,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 237,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 239,
+      "post_count_30d_delta": 12
     },
     "gamgyul": {
       "post_ids": [
@@ -1225,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1875,
-      "post_count_30d_delta": 58
+      "post_count_at_build": 1876,
+      "post_count_30d_delta": 59
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1780,8 +1780,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 210,
-      "post_count_30d_delta": 14
+      "post_count_at_build": 211,
+      "post_count_30d_delta": 15
     },
     "kangg": {
       "post_ids": [
@@ -2258,8 +2258,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 104,
-      "post_count_30d_delta": 15
+      "post_count_at_build": 105,
+      "post_count_30d_delta": 16
     },
     "lao_tan_huacai": {
       "post_ids": [
@@ -2712,8 +2712,8 @@
       ],
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
-      "post_count_at_build": 62,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 63,
+      "post_count_30d_delta": 6
     },
     "mko_(artist)": {
       "post_ids": [
@@ -3335,8 +3335,8 @@
       ],
       "registered_at_utc": "2025-09-28T23:04:33.281Z",
       "completed": true,
-      "post_count_at_build": 75,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 83,
+      "post_count_30d_delta": 8
     },
     "pazzi_(zzxh2354)": {
       "post_ids": [
@@ -3756,8 +3756,8 @@
       ],
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
-      "post_count_at_build": 58,
-      "post_count_30d_delta": 42
+      "post_count_at_build": 60,
+      "post_count_30d_delta": 44
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
