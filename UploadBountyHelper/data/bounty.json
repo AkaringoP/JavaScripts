@@ -2789,8 +2789,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 58,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 62,
+      "post_count_30d_delta": 4
     },
     "monokubo": {
       "post_ids": [
@@ -4211,8 +4211,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 25,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 26,
+      "post_count_30d_delta": 4
     },
     "tom_d0_ob": {
       "post_ids": [
