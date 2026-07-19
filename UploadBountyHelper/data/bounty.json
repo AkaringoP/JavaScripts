@@ -256,8 +256,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 72,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 73,
+      "post_count_30d_delta": 1
     },
     "amiably_02": {
       "post_ids": [
@@ -1225,8 +1225,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1877,
-      "post_count_30d_delta": 59
+      "post_count_at_build": 1878,
+      "post_count_30d_delta": 60
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1873,8 +1873,8 @@
       ],
       "registered_at_utc": "2026-06-16T04:18:54.254Z",
       "completed": false,
-      "post_count_at_build": 1530,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 1531,
+      "post_count_30d_delta": 2
     },
     "kawaguchi_tadahiko": {
       "post_ids": [
@@ -3891,8 +3891,8 @@
       ],
       "registered_at_utc": "2024-04-29T23:44:46.828Z",
       "completed": false,
-      "post_count_at_build": 353,
-      "post_count_30d_delta": 23
+      "post_count_at_build": 354,
+      "post_count_30d_delta": 24
     },
     "somnolence_(hranxy)": {
       "post_ids": [
