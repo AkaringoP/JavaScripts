@@ -506,7 +506,7 @@
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
       "post_count_at_build": 5781,
-      "post_count_30d_delta": 55
+      "post_count_30d_delta": 46
     },
     "bomhat": {
       "post_ids": [
@@ -619,28 +619,6 @@
       "completed": false,
       "post_count_at_build": 43,
       "post_count_30d_delta": 0
-    },
-    "cosmic_(crownclowncosmic)": {
-      "post_ids": [
-        317273
-      ],
-      "approvers": [
-        "Kuruma"
-      ],
-      "aliased_from": [],
-      "pixiv_user_ids": [
-        "446127"
-      ],
-      "x_handles": [
-        "coscoscos39",
-        "crownclowncos",
-        "mujica_tarou",
-        "nicotine_tarou"
-      ],
-      "registered_at_utc": "2024-11-03T18:59:22.456Z",
-      "completed": false,
-      "post_count_at_build": 409,
-      "post_count_30d_delta": 4
     },
     "cryborg": {
       "post_ids": [
@@ -1187,8 +1165,8 @@
       ],
       "registered_at_utc": "2025-05-31T12:03:26.347Z",
       "completed": false,
-      "post_count_at_build": 329,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 330,
+      "post_count_30d_delta": 3
     },
     "hanamaru_sensei": {
       "post_ids": [
@@ -1225,7 +1203,7 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1878,
+      "post_count_at_build": 1879,
       "post_count_30d_delta": 60
     },
     "hibana_(hibana_ztlv)": {
@@ -1346,8 +1324,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 635,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 647,
+      "post_count_30d_delta": 19
     },
     "hiranko": {
       "post_ids": [
@@ -1781,7 +1759,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 211,
-      "post_count_30d_delta": 15
+      "post_count_30d_delta": 13
     },
     "kangg": {
       "post_ids": [
@@ -1988,7 +1966,7 @@
       "registered_at_utc": "2026-05-08T20:42:26.459Z",
       "completed": false,
       "post_count_at_build": 21,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 3
     },
     "kiring_xox": {
       "post_ids": [
@@ -2184,26 +2162,6 @@
       "completed": false,
       "post_count_at_build": 26,
       "post_count_30d_delta": 0
-    },
-    "kyutai_x": {
-      "post_ids": [
-        317273
-      ],
-      "approvers": [
-        "Kuruma"
-      ],
-      "aliased_from": [],
-      "pixiv_user_ids": [
-        "51287035"
-      ],
-      "x_handles": [
-        "kyutai_q",
-        "kyutai_x"
-      ],
-      "registered_at_utc": "2024-11-03T18:59:22.456Z",
-      "completed": false,
-      "post_count_at_build": 297,
-      "post_count_30d_delta": 1
     },
     "l1amanade": {
       "post_ids": [
@@ -2543,7 +2501,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 41,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 0
     },
     "matsuhago": {
       "post_ids": [
@@ -2694,7 +2652,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 169,
-      "post_count_30d_delta": 24
+      "post_count_30d_delta": 21
     },
     "miyao385": {
       "post_ids": [
@@ -2904,7 +2862,7 @@
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
       "post_count_at_build": 171,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 1
     },
     "nagare750": {
       "post_ids": [
@@ -3091,7 +3049,7 @@
       "registered_at_utc": "2026-06-16T03:43:18.443Z",
       "completed": false,
       "post_count_at_build": 87,
-      "post_count_30d_delta": 10
+      "post_count_30d_delta": 9
     },
     "ny1n_49": {
       "post_ids": [
@@ -3419,8 +3377,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 438,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 439,
+      "post_count_30d_delta": 19
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3572,7 +3530,7 @@
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
       "post_count_at_build": 828,
-      "post_count_30d_delta": 15
+      "post_count_30d_delta": 10
     },
     "rottencrow": {
       "post_ids": [
@@ -3718,7 +3676,7 @@
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
       "post_count_at_build": 90,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 1
     },
     "shiiiiimamike": {
       "post_ids": [
@@ -4022,7 +3980,7 @@
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
       "post_count_at_build": 470,
-      "post_count_30d_delta": 6
+      "post_count_30d_delta": 5
     },
     "suribbon": {
       "post_ids": [
@@ -4907,23 +4865,6 @@
       "post_count_at_build": 7,
       "post_count_30d_delta": 0
     },
-    "zizzu": {
-      "post_ids": [
-        322387
-      ],
-      "approvers": [
-        "Kuruma"
-      ],
-      "aliased_from": [],
-      "pixiv_user_ids": [],
-      "x_handles": [
-        "bye_cruelworld"
-      ],
-      "registered_at_utc": "2024-12-12T18:34:03.655Z",
-      "completed": false,
-      "post_count_at_build": 51,
-      "post_count_30d_delta": 2
-    },
     "zongil_salryeo": {
       "post_ids": [
         380900
@@ -4958,7 +4899,7 @@
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
       "post_count_at_build": 28,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     }
   },
   "by_pixiv": {
@@ -4981,7 +4922,6 @@
     "297791": "q_(ed69)",
     "348290": "dido_(di_do_di_do)",
     "444916": "haizi0812",
-    "446127": "cosmic_(crownclowncosmic)",
     "458455": "hosizora_mikoto",
     "505238": "nagare750",
     "537853": "aoin",
@@ -5106,7 +5046,6 @@
     "45948019": "oaza",
     "49279982": "himajin_(fd_jin)",
     "49714510": "kingcraft_kingu",
-    "51287035": "kyutai_x",
     "52435066": "sisierep",
     "53754495": "okakiatta",
     "54950669": "510_gotoudayo",
@@ -5225,15 +5164,12 @@
     "bkub_comic": "bkub",
     "blackenterski": "luminous_slime",
     "bomhat": "bomhat",
-    "bye_cruelworld": "zizzu",
     "ca_gemini_": "ca_(ca_gemini)",
     "chokueji": "chokueji",
     "chyobi256337115": "mika_030",
     "cjjcha": "cjjcha",
     "confeitokobo": "marine_(confeitokobo)",
     "copeputti": "tsutsugano",
-    "coscoscos39": "cosmic_(crownclowncosmic)",
-    "crownclowncos": "cosmic_(crownclowncosmic)",
     "cutestpon": "pongldr",
     "dairi0610": "dairi",
     "dairi155": "dairi",
@@ -5341,8 +5277,6 @@
     "kuitai_oniku": "oniku_kui_tai",
     "kurotsubasa13": "kuro_tsubasa",
     "kyoko_ar": "kyouko_(roughplus)",
-    "kyutai_q": "kyutai_x",
-    "kyutai_x": "kyutai_x",
     "l09": "naname_(fossama1)",
     "l1amanade": "l1amanade",
     "lantern_madoyoi": "lantern_madoyoi",
@@ -5388,7 +5322,6 @@
     "motonoyoi_": "lantern_madoyoi",
     "motyako__1005": "mochako_(motyako_1005)",
     "mugichoconm": "rizu_(rizunm)",
-    "mujica_tarou": "cosmic_(crownclowncosmic)",
     "mushi_buchi0122": "dido_(di_do_di_do)",
     "myvia_mokols": "myvia_mokols",
     "nagagagagaga": "nagare750",
@@ -5397,7 +5330,6 @@
     "negggi4": "mame_nabe_donko",
     "negiwasa555": "negiwasa555",
     "ngtblan": "lan_(ngtblan)",
-    "nicotine_tarou": "cosmic_(crownclowncosmic)",
     "nikuya_dq": "seinikuten",
     "nills_ff14": "nills",
     "ninnin_14": "renren_(ah_renren)",
