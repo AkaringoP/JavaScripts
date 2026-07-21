@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5783,
-      "post_count_30d_delta": 47
+      "post_count_at_build": 5786,
+      "post_count_30d_delta": 50
     },
     "bomhat": {
       "post_ids": [
@@ -1034,8 +1034,8 @@
       ],
       "registered_at_utc": "2025-05-08T17:34:47.880Z",
       "completed": false,
-      "post_count_at_build": 118,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 119,
+      "post_count_30d_delta": 1
     },
     "goom_(goomyparty)": {
       "post_ids": [
@@ -1203,8 +1203,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1880,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1881,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2483,8 +2483,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 95,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 97,
+      "post_count_30d_delta": 9
     },
     "matanukisuna": {
       "post_ids": [
