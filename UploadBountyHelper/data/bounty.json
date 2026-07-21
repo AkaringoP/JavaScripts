@@ -506,7 +506,7 @@
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
       "post_count_at_build": 5783,
-      "post_count_30d_delta": 48
+      "post_count_30d_delta": 47
     },
     "bomhat": {
       "post_ids": [
@@ -655,7 +655,7 @@
       "registered_at_utc": "2025-06-15T22:24:56.359Z",
       "completed": true,
       "post_count_at_build": 18768,
-      "post_count_30d_delta": 34
+      "post_count_30d_delta": 16
     },
     "dav-19": {
       "post_ids": [
@@ -1204,7 +1204,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1880,
-      "post_count_30d_delta": 61
+      "post_count_30d_delta": 60
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1304,8 +1304,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 42,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 43,
+      "post_count_30d_delta": 1
     },
     "hiraga_matsuri": {
       "post_ids": [
@@ -3378,7 +3378,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 439,
-      "post_count_30d_delta": 19
+      "post_count_30d_delta": 18
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3921,8 +3921,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 344,
-      "post_count_30d_delta": 22
+      "post_count_at_build": 347,
+      "post_count_30d_delta": 25
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4019,7 +4019,7 @@
       "registered_at_utc": "2025-07-03T19:56:41.436Z",
       "completed": false,
       "post_count_at_build": 69,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 1
     },
     "syrop_(syr_ooo_p)": {
       "post_ids": [
@@ -4326,7 +4326,7 @@
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
       "post_count_at_build": 314,
-      "post_count_30d_delta": 10
+      "post_count_30d_delta": 9
     },
     "untsuku": {
       "post_ids": [
