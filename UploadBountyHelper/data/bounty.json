@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5786,
-      "post_count_30d_delta": 50
+      "post_count_at_build": 5787,
+      "post_count_30d_delta": 51
     },
     "bomhat": {
       "post_ids": [
@@ -1385,8 +1385,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 127,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 128,
+      "post_count_30d_delta": 3
     },
     "hitoto": {
       "post_ids": [
@@ -2519,8 +2519,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 103,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 105,
+      "post_count_30d_delta": 6
     },
     "megasus": {
       "post_ids": [
@@ -2670,8 +2670,8 @@
       ],
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
-      "post_count_at_build": 63,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 64,
+      "post_count_30d_delta": 7
     },
     "mko_(artist)": {
       "post_ids": [
