@@ -1203,8 +1203,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1882,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1883,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1794,8 +1794,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 22,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 23,
+      "post_count_30d_delta": 5
     },
     "karintoun": {
       "post_ids": [
@@ -2081,8 +2081,8 @@
       ],
       "registered_at_utc": "2024-11-15T09:55:16.626Z",
       "completed": true,
-      "post_count_at_build": 165,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 166,
+      "post_count_30d_delta": 6
     },
     "kototomari": {
       "post_ids": [
@@ -3979,8 +3979,8 @@
       ],
       "registered_at_utc": "2025-10-20T11:02:30.651Z",
       "completed": false,
-      "post_count_at_build": 470,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 471,
+      "post_count_30d_delta": 6
     },
     "suribbon": {
       "post_ids": [
