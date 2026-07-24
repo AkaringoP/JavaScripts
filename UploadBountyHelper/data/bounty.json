@@ -505,8 +505,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5788,
-      "post_count_30d_delta": 48
+      "post_count_at_build": 5789,
+      "post_count_30d_delta": 49
     },
     "bomhat": {
       "post_ids": [
@@ -920,8 +920,8 @@
       ],
       "registered_at_utc": "2025-06-29T20:02:46.049Z",
       "completed": false,
-      "post_count_at_build": 202,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 203,
+      "post_count_30d_delta": 3
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
@@ -979,8 +979,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 32,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 33,
+      "post_count_30d_delta": 4
     },
     "gaoling_gangqin": {
       "post_ids": [
@@ -1203,8 +1203,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1883,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1884,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2483,8 +2483,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 97,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 98,
+      "post_count_30d_delta": 8
     },
     "matanukisuna": {
       "post_ids": [
