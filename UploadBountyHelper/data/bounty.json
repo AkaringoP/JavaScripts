@@ -1907,8 +1907,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 78,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 79,
+      "post_count_30d_delta": 3
     },
     "kikomo": {
       "post_ids": [
@@ -2216,8 +2216,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 105,
-      "post_count_30d_delta": 16
+      "post_count_at_build": 106,
+      "post_count_30d_delta": 17
     },
     "lao_tan_huacai": {
       "post_ids": [
@@ -2651,8 +2651,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 169,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 170,
+      "post_count_30d_delta": 22
     },
     "miyao385": {
       "post_ids": [
@@ -4542,8 +4542,8 @@
       ],
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
-      "post_count_at_build": 14,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 15,
+      "post_count_30d_delta": 1
     },
     "xiaotianxia": {
       "post_ids": [
