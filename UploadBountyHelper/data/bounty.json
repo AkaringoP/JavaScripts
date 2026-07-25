@@ -750,8 +750,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1014,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 1015,
+      "post_count_30d_delta": 3
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1167,8 +1167,8 @@
       ],
       "registered_at_utc": "2025-05-31T12:03:26.347Z",
       "completed": false,
-      "post_count_at_build": 330,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 332,
+      "post_count_30d_delta": 5
     },
     "hanamaru_sensei": {
       "post_ids": [
@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1884,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1885,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1326,8 +1326,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 650,
-      "post_count_30d_delta": 22
+      "post_count_at_build": 651,
+      "post_count_30d_delta": 23
     },
     "hiranko": {
       "post_ids": [
@@ -1760,8 +1760,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 211,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 213,
+      "post_count_30d_delta": 15
     },
     "kangg": {
       "post_ids": [
@@ -2863,8 +2863,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 171,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 173,
+      "post_count_30d_delta": 3
     },
     "nagare750": {
       "post_ids": [
@@ -3050,8 +3050,8 @@
       ],
       "registered_at_utc": "2026-06-16T03:43:18.443Z",
       "completed": false,
-      "post_count_at_build": 87,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 88,
+      "post_count_30d_delta": 7
     },
     "ny1n_49": {
       "post_ids": [
@@ -4434,8 +4434,8 @@
       ],
       "registered_at_utc": "2026-05-24T00:31:33.125Z",
       "completed": false,
-      "post_count_at_build": 2,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 3,
+      "post_count_30d_delta": 1
     },
     "warabi_tama": {
       "post_ids": [
