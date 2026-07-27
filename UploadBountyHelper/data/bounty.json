@@ -750,8 +750,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1015,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 1016,
+      "post_count_30d_delta": 4
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1886,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1887,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -3398,8 +3398,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 440,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 441,
+      "post_count_30d_delta": 8
     },
     "q_(ed69)": {
       "post_ids": [
@@ -4058,8 +4058,8 @@
       ],
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
-      "post_count_at_build": 40,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 42,
+      "post_count_30d_delta": 5
     },
     "ta_u_la": {
       "post_ids": [
@@ -4337,17 +4337,19 @@
       "pixiv_user_ids": [
         "113039017",
         "26835234",
+        "2876768",
         "93860299"
       ],
       "x_handles": [
         "copeputti",
         "kakuwashi59489",
+        "shad_ne",
         "tutugano"
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 331,
-      "post_count_30d_delta": 24
+      "post_count_at_build": 351,
+      "post_count_30d_delta": 26
     },
     "untsuku": {
       "post_ids": [
@@ -4965,6 +4967,7 @@
     "2470162": "fuyudori_yukino",
     "2739958": "akai_takami",
     "2870982": "rizu_(rizunm)",
+    "2876768": "tsutsugano",
     "2915498": "21_ke",
     "3004637": "riuichi",
     "3092207": "moca_(mooooca)",
@@ -5407,6 +5410,7 @@
     "samunepon": "suya_(jzup2735)",
     "senn10000": "senn10000",
     "sensei_hanamaru": "hanamaru_sensei",
+    "shad_ne": "tsutsugano",
     "shiguretau": "shiguretau",
     "shiiiiimamike": "shiiiiimamike",
     "shimejimee": "shimejimee",
