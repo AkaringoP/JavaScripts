@@ -507,8 +507,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5791,
-      "post_count_30d_delta": 49
+      "post_count_at_build": 5794,
+      "post_count_30d_delta": 52
     },
     "bomhat": {
       "post_ids": [
@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1887,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1888,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1227,8 +1227,8 @@
       ],
       "registered_at_utc": "2024-05-18T23:27:25.211Z",
       "completed": false,
-      "post_count_at_build": 525,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 526,
+      "post_count_30d_delta": 6
     },
     "himajin_(fd_jin)": {
       "post_ids": [
@@ -1909,8 +1909,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 79,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 80,
+      "post_count_30d_delta": 4
     },
     "kikomo": {
       "post_ids": [
@@ -3219,8 +3219,8 @@
       ],
       "registered_at_utc": "2025-06-09T00:20:00.638Z",
       "completed": true,
-      "post_count_at_build": 186,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 188,
+      "post_count_30d_delta": 2
     },
     "oniku_kui_tai": {
       "post_ids": [
@@ -4348,8 +4348,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 351,
-      "post_count_30d_delta": 26
+      "post_count_at_build": 352,
+      "post_count_30d_delta": 27
     },
     "untsuku": {
       "post_ids": [
