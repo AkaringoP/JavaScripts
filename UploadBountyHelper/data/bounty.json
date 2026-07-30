@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1889,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1890,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2577,8 +2577,8 @@
       ],
       "registered_at_utc": "2026-07-26T17:52:47.571Z",
       "completed": false,
-      "post_count_at_build": 24,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 33,
+      "post_count_30d_delta": 15
     },
     "mgmg_g_zzz": {
       "post_ids": [
@@ -3735,8 +3735,8 @@
       ],
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
-      "post_count_at_build": 60,
-      "post_count_30d_delta": 44
+      "post_count_at_build": 61,
+      "post_count_30d_delta": 45
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
