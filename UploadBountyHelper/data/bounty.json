@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1891,
-      "post_count_30d_delta": 61
+      "post_count_at_build": 1892,
+      "post_count_30d_delta": 62
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2577,8 +2577,8 @@
       ],
       "registered_at_utc": "2026-07-26T17:52:47.571Z",
       "completed": false,
-      "post_count_at_build": 47,
-      "post_count_30d_delta": 29
+      "post_count_at_build": 60,
+      "post_count_30d_delta": 42
     },
     "mgmg_g_zzz": {
       "post_ids": [
@@ -3274,8 +3274,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 68,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 69,
+      "post_count_30d_delta": 1
     },
     "otamashimai": {
       "post_ids": [
@@ -3942,8 +3942,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 356,
-      "post_count_30d_delta": 24
+      "post_count_at_build": 357,
+      "post_count_30d_delta": 25
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4060,6 +4060,25 @@
       "completed": false,
       "post_count_at_build": 45,
       "post_count_30d_delta": 8
+    },
+    "syurikenmaru": {
+      "post_ids": [
+        457554
+      ],
+      "approvers": [
+        "CommentaryRequest"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "103172649"
+      ],
+      "x_handles": [
+        "syurikenmaru"
+      ],
+      "registered_at_utc": "2026-07-31T15:47:52.538Z",
+      "completed": false,
+      "post_count_at_build": 130,
+      "post_count_30d_delta": 81
     },
     "ta_u_la": {
       "post_ids": [
@@ -5115,6 +5134,7 @@
     "99627885": "ta_u_la",
     "99721105": "inutora08",
     "100935137": "bigchaping",
+    "103172649": "syurikenmaru",
     "107988579": "hit_by_hit",
     "108151239": "tomoja_rs",
     "108788322": "lao_tan_huacai",
@@ -5436,6 +5456,7 @@
     "svlkyri": "shirashura",
     "syotamimi": "bkub",
     "syr_ooo_p": "syrop_(syr_ooo_p)",
+    "syurikenmaru": "syurikenmaru",
     "ta_u_la": "ta_u_la",
     "tahraart": "tahra",
     "takosuke4chan": "takosuke_(gyzp7373)",
