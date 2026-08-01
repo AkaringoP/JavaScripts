@@ -507,8 +507,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5795,
-      "post_count_30d_delta": 53
+      "post_count_at_build": 5797,
+      "post_count_30d_delta": 55
     },
     "bomhat": {
       "post_ids": [
@@ -1205,8 +1205,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1892,
-      "post_count_30d_delta": 35
+      "post_count_at_build": 1893,
+      "post_count_30d_delta": 36
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1227,8 +1227,8 @@
       ],
       "registered_at_utc": "2024-05-18T23:27:25.211Z",
       "completed": false,
-      "post_count_at_build": 528,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 529,
+      "post_count_30d_delta": 8
     },
     "himajin_(fd_jin)": {
       "post_ids": [
@@ -1760,8 +1760,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 215,
-      "post_count_30d_delta": 15
+      "post_count_at_build": 222,
+      "post_count_30d_delta": 22
     },
     "kangg": {
       "post_ids": [
@@ -1909,8 +1909,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 80,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 81,
+      "post_count_30d_delta": 5
     },
     "kikomo": {
       "post_ids": [
@@ -2577,8 +2577,8 @@
       ],
       "registered_at_utc": "2026-07-26T17:52:47.571Z",
       "completed": false,
-      "post_count_at_build": 73,
-      "post_count_30d_delta": 55
+      "post_count_at_build": 127,
+      "post_count_30d_delta": 109
     },
     "mgmg_g_zzz": {
       "post_ids": [
@@ -3942,8 +3942,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 357,
-      "post_count_30d_delta": 25
+      "post_count_at_build": 358,
+      "post_count_30d_delta": 26
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4077,8 +4077,8 @@
       ],
       "registered_at_utc": "2026-07-31T15:47:52.538Z",
       "completed": false,
-      "post_count_at_build": 135,
-      "post_count_30d_delta": 84
+      "post_count_at_build": 260,
+      "post_count_30d_delta": 209
     },
     "ta_u_la": {
       "post_ids": [
