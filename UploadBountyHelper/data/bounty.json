@@ -546,6 +546,27 @@
       "post_count_at_build": 404,
       "post_count_30d_delta": 0
     },
+    "bonsichi": {
+      "post_ids": [
+        458385
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "74986428"
+      ],
+      "x_handles": [
+        "5cpwqatelptl1sp",
+        "bon_sichi_laika",
+        "tuki_mori_zha"
+      ],
+      "registered_at_utc": "2026-08-04T13:31:24.294Z",
+      "completed": false,
+      "post_count_at_build": 28,
+      "post_count_30d_delta": 1
+    },
     "boro^2": {
       "post_ids": [
         357489
@@ -1068,8 +1089,8 @@
       ],
       "registered_at_utc": "2026-08-03T20:56:14.629Z",
       "completed": false,
-      "post_count_at_build": 279,
-      "post_count_30d_delta": 32
+      "post_count_at_build": 336,
+      "post_count_30d_delta": 89
     },
     "gloggy": {
       "post_ids": [
@@ -1256,8 +1277,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1920,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1921,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1884,8 +1905,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 24,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 29,
+      "post_count_30d_delta": 9
     },
     "karintoun": {
       "post_ids": [
@@ -2036,8 +2057,8 @@
       ],
       "registered_at_utc": "2024-09-23T21:17:03.810Z",
       "completed": false,
-      "post_count_at_build": 69,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 70,
+      "post_count_30d_delta": 1
     },
     "kinoshita_aki": {
       "post_ids": [
@@ -4405,6 +4426,25 @@
       "post_count_at_build": 29,
       "post_count_30d_delta": 2
     },
+    "takurada": {
+      "post_ids": [
+        458385
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "61748675"
+      ],
+      "x_handles": [
+        "takurada1001"
+      ],
+      "registered_at_utc": "2026-08-04T13:31:24.294Z",
+      "completed": false,
+      "post_count_at_build": 178,
+      "post_count_30d_delta": 3
+    },
     "tatamaoekaki": {
       "post_ids": [
         451950
@@ -4635,8 +4675,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 354,
-      "post_count_30d_delta": 28
+      "post_count_at_build": 355,
+      "post_count_30d_delta": 29
     },
     "untsuku": {
       "post_ids": [
@@ -5138,8 +5178,8 @@
       ],
       "registered_at_utc": "2025-08-11T05:41:45.766Z",
       "completed": false,
-      "post_count_at_build": 33,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 34,
+      "post_count_30d_delta": 2
     },
     "zeriko": {
       "post_ids": [
@@ -5445,6 +5485,7 @@
     "59379007": "kototomari",
     "60620384": "emo37337640",
     "60800905": "zaenathi",
+    "61748675": "takurada",
     "63044749": "hyny",
     "64998246": "shimogamo_(shimomo_12)",
     "65709885": "otamashimai",
@@ -5454,6 +5495,7 @@
     "70644253": "minimilieu",
     "73403048": "kabe43",
     "74924798": "raisakaki01",
+    "74986428": "bonsichi",
     "75650632": "oh_gong05",
     "75905724": "senn10000",
     "75984999": "kuroussa",
@@ -5512,6 +5554,7 @@
     "2_saco212": "sk_yn0901",
     "37kuki770": "37kuki770",
     "510_gotoudayo": "510_gotoudayo",
+    "5cpwqatelptl1sp": "bonsichi",
     "6k29v995": "bizan_zan",
     "7783__": "amane_(7783)",
     "789illust": "789illust",
@@ -5558,6 +5601,7 @@
     "blackenterski": "luminous_slime",
     "blackistat2": "oka_yuuri",
     "bomhat": "bomhat",
+    "bon_sichi_laika": "bonsichi",
     "ca_gemini_": "ca_(ca_gemini)",
     "chikoritamoon": "mew_mew_chikorita_moon",
     "chokueji": "chokueji",
@@ -5820,6 +5864,7 @@
     "ta_u_la": "ta_u_la",
     "tahraart": "tahra",
     "takosuke4chan": "takosuke_(gyzp7373)",
+    "takurada1001": "takurada",
     "tatamaoekaki": "tatamaoekaki",
     "temariame14": "temariame14",
     "tenoo12": "tenohira_(tenoo)",
@@ -5835,6 +5880,7 @@
     "toumxbcsp7mxgkr": "kitsunebi44410",
     "toyhamu": "ru_(toyhamu)",
     "tukaasa20180121": "tsukaasa",
+    "tuki_mori_zha": "bonsichi",
     "turuko_turuta": "tsuruko_turuta",
     "tutugano": "tsutsugano",
     "uku3h": "0_ebj",
