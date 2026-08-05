@@ -1277,8 +1277,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1921,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1922,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1888,8 +1888,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 222,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 223,
+      "post_count_30d_delta": 22
     },
     "kangg": {
       "post_ids": [
@@ -2510,8 +2510,8 @@
       ],
       "registered_at_utc": "2026-03-29T00:45:08.793Z",
       "completed": false,
-      "post_count_at_build": 534,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 537,
+      "post_count_30d_delta": 3
     },
     "lumo_1121": {
       "post_ids": [
@@ -3804,8 +3804,8 @@
       ],
       "registered_at_utc": "2026-04-26T14:03:37.005Z",
       "completed": false,
-      "post_count_at_build": 838,
-      "post_count_30d_delta": 13
+      "post_count_at_build": 839,
+      "post_count_30d_delta": 14
     },
     "rokktober": {
       "post_ids": [
