@@ -1416,8 +1416,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 652,
-      "post_count_30d_delta": 23
+      "post_count_at_build": 653,
+      "post_count_30d_delta": 24
     },
     "hiranko": {
       "post_ids": [
@@ -2171,8 +2171,8 @@
       ],
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
-      "post_count_at_build": 184,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 187,
+      "post_count_30d_delta": 4
     },
     "kiyoshi_st": {
       "post_ids": [
