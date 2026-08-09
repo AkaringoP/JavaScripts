@@ -636,8 +636,8 @@
       ],
       "registered_at_utc": "2026-01-13T12:30:11.479Z",
       "completed": false,
-      "post_count_at_build": 134,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 135,
+      "post_count_30d_delta": 8
     },
     "chokueji": {
       "post_ids": [
@@ -2488,8 +2488,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 54,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 55,
+      "post_count_30d_delta": 1
     },
     "louyang_zhang": {
       "post_ids": [
@@ -5231,8 +5231,8 @@
       ],
       "registered_at_utc": "2025-08-11T05:41:45.766Z",
       "completed": false,
-      "post_count_at_build": 34,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 35,
+      "post_count_30d_delta": 2
     },
     "zeriko": {
       "post_ids": [
