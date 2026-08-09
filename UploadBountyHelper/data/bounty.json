@@ -524,8 +524,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5811,
-      "post_count_30d_delta": 53
+      "post_count_at_build": 5814,
+      "post_count_30d_delta": 56
     },
     "bomhat": {
       "post_ids": [
@@ -1292,8 +1292,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1925,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 1926,
+      "post_count_30d_delta": 61
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1605,8 +1605,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 95,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 96,
+      "post_count_30d_delta": 6
     },
     "i0723ris": {
       "post_ids": [
@@ -2905,8 +2905,8 @@
       ],
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
-      "post_count_at_build": 68,
-      "post_count_30d_delta": 9
+      "post_count_at_build": 69,
+      "post_count_30d_delta": 10
     },
     "mko_(artist)": {
       "post_ids": [
