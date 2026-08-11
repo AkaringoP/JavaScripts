@@ -524,8 +524,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5817,
-      "post_count_30d_delta": 55
+      "post_count_at_build": 5818,
+      "post_count_30d_delta": 56
     },
     "bomhat": {
       "post_ids": [
@@ -818,8 +818,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1019,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 1020,
+      "post_count_30d_delta": 6
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1292,8 +1292,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1928,
-      "post_count_30d_delta": 61
+      "post_count_at_build": 1929,
+      "post_count_30d_delta": 62
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2679,8 +2679,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 267,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 268,
+      "post_count_30d_delta": 7
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -2718,8 +2718,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 98,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 99,
+      "post_count_30d_delta": 5
     },
     "matanukisuna": {
       "post_ids": [
@@ -4531,8 +4531,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 185,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 196,
+      "post_count_30d_delta": 21
     },
     "tatamaoekaki": {
       "post_ids": [
