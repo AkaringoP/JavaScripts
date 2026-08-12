@@ -1821,8 +1821,8 @@
       ],
       "registered_at_utc": "2026-08-04T17:47:25.170Z",
       "completed": false,
-      "post_count_at_build": 286,
-      "post_count_30d_delta": 186
+      "post_count_at_build": 293,
+      "post_count_30d_delta": 193
     },
     "jinx88_(jinx)": {
       "post_ids": [
@@ -2502,8 +2502,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T08:10:48.253Z",
       "completed": false,
-      "post_count_at_build": 91,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 93,
+      "post_count_30d_delta": 2
     },
     "llllwewewe": {
       "post_ids": [
@@ -3945,6 +3945,27 @@
       "post_count_at_build": 17,
       "post_count_30d_delta": 0
     },
+    "ryota_tentei": {
+      "post_ids": [
+        459645
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "232408"
+      ],
+      "x_handles": [
+        "10tei87",
+        "ryota_tentei",
+        "tentei87"
+      ],
+      "registered_at_utc": "2026-08-09T21:10:10.077Z",
+      "completed": false,
+      "post_count_at_build": 170,
+      "post_count_30d_delta": 2
+    },
     "sachinyopo": {
       "post_ids": [
         432469
@@ -4943,8 +4964,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 177,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 178,
+      "post_count_30d_delta": 7
     },
     "womb_74": {
       "post_ids": [
@@ -5069,8 +5090,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": false,
-      "post_count_at_build": 157,
-      "post_count_30d_delta": 20
+      "post_count_at_build": 158,
+      "post_count_30d_delta": 21
     },
     "xun_lin_(pixiv_93392103)": {
       "post_ids": [
@@ -5477,6 +5498,7 @@
     "175955": "layer_(reishuu)",
     "202910": "asato04",
     "230759": "sumisu_(rinsumi)",
+    "232408": "ryota_tentei",
     "273986": "e20",
     "278079": "kyouko_(roughplus)",
     "297791": "q_(ed69)",
@@ -5686,6 +5708,7 @@
     "0_ebj": "0_ebj",
     "0iycpa7o5pjgliw": "ojipyon",
     "0t0_yoshikawa": "yoshikawa_tatsuya",
+    "10tei87": "ryota_tentei",
     "123456789qaqaqa": "789illust",
     "15cha_hira": "hira_icigocha",
     "15yukichan": "hira_icigocha",
@@ -5974,6 +5997,7 @@
     "rottencrow_": "rottencrow",
     "rpg_turubmi661": "awoito_(tsurubami_jiguro)",
     "rumarumachi": "furumachi_(_trisannkaku)",
+    "ryota_tentei": "ryota_tentei",
     "s73d": "suna_(s73d)",
     "s8aki": "suna_(s73d)",
     "sachi_nyoki": "sachinyopo",
@@ -6019,6 +6043,7 @@
     "temariame14": "temariame14",
     "tenoo12": "tenohira_(tenoo)",
     "tentacleluver": "tentacleluver",
+    "tentei87": "ryota_tentei",
     "tigu_0": "chigu",
     "tigu_na": "chigu",
     "tigu_ri7": "chigu",
