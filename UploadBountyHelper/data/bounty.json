@@ -558,8 +558,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5819,
-      "post_count_30d_delta": 51
+      "post_count_at_build": 5823,
+      "post_count_30d_delta": 55
     },
     "bomhat": {
       "post_ids": [
@@ -1326,8 +1326,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1930,
-      "post_count_30d_delta": 61
+      "post_count_at_build": 1931,
+      "post_count_30d_delta": 62
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -5090,8 +5090,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": false,
-      "post_count_at_build": 159,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 161,
+      "post_count_30d_delta": 23
     },
     "xun_lin_(pixiv_93392103)": {
       "post_ids": [
