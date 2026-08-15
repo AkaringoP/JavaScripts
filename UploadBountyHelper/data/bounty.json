@@ -67,6 +67,24 @@
       "post_count_at_build": 74,
       "post_count_30d_delta": 0
     },
+    "2525nicc": {
+      "post_ids": [
+        315327
+      ],
+      "approvers": [
+        "ZetsubouHime"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "2255nicc",
+        "2525nicc"
+      ],
+      "registered_at_utc": "2024-10-27T06:06:38.288Z",
+      "completed": false,
+      "post_count_at_build": 74,
+      "post_count_30d_delta": 3
+    },
     "37kuki770": {
       "post_ids": [
         347980
@@ -530,8 +548,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 51,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 53,
+      "post_count_30d_delta": 8
     },
     "bizan_zan": {
       "post_ids": [
@@ -1341,8 +1359,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1932,
-      "post_count_30d_delta": 59
+      "post_count_at_build": 1933,
+      "post_count_30d_delta": 60
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1654,8 +1672,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 97,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 98,
+      "post_count_30d_delta": 6
     },
     "i0723ris": {
       "post_ids": [
@@ -3865,8 +3883,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 57,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 58,
+      "post_count_30d_delta": 5
     },
     "riuichi": {
       "post_ids": [
@@ -4411,8 +4429,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 359,
-      "post_count_30d_delta": 16
+      "post_count_at_build": 360,
+      "post_count_30d_delta": 17
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4622,8 +4640,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 196,
-      "post_count_30d_delta": 20
+      "post_count_at_build": 202,
+      "post_count_30d_delta": 26
     },
     "tatamaoekaki": {
       "post_ids": [
@@ -5754,6 +5772,8 @@
     "1a4zrk": "024_(1a41a4)",
     "1no_ont": "ichino_(1no)",
     "1no_wone": "ichino_(1no)",
+    "2255nicc": "2525nicc",
+    "2525nicc": "2525nicc",
     "27duva": "lan_(ngtblan)",
     "29tangasuki": "oniku_kui_tai",
     "2_saco212": "sk_yn0901",
