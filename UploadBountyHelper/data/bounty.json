@@ -212,8 +212,8 @@
       ],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": false,
-      "post_count_at_build": 71,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 73,
+      "post_count_30d_delta": 8
     },
     "ama0805": {
       "post_ids": [
@@ -1079,8 +1079,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 242,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 243,
+      "post_count_30d_delta": 6
     },
     "gamgyul": {
       "post_ids": [
@@ -2971,8 +2971,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 179,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 180,
+      "post_count_30d_delta": 11
     },
     "miyao385": {
       "post_ids": [
@@ -3366,8 +3366,8 @@
       ],
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
-      "post_count_at_build": 47,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 51,
+      "post_count_30d_delta": 6
     },
     "nopal_garpu": {
       "post_ids": [
@@ -3865,8 +3865,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 53,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 57,
+      "post_count_30d_delta": 4
     },
     "riuichi": {
       "post_ids": [
@@ -4016,6 +4016,27 @@
       "completed": false,
       "post_count_at_build": 504,
       "post_count_30d_delta": 2
+    },
+    "sana_(sanamaru_0w0)": {
+      "post_ids": [
+        460942
+      ],
+      "approvers": [
+        "pjoy"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "101067768"
+      ],
+      "x_handles": [
+        "aluluca_",
+        "sanamaru_0w0",
+        "sn_37_alu"
+      ],
+      "registered_at_utc": "2026-08-15T04:35:09.513Z",
+      "completed": false,
+      "post_count_at_build": 323,
+      "post_count_30d_delta": 3
     },
     "seinikuten": {
       "post_ids": [
@@ -5703,6 +5724,7 @@
     "99627885": "ta_u_la",
     "99721105": "inutora08",
     "100935137": "bigchaping",
+    "101067768": "sana_(sanamaru_0w0)",
     "103172649": "syurikenmaru",
     "107988579": "hit_by_hit",
     "108151239": "tomoja_rs",
@@ -5760,6 +5782,7 @@
     "akai_takami": "akai_takami",
     "akiyama_cz4a": "akiyama_cz4a",
     "akuma_amatou": "amatou_akuma",
+    "aluluca_": "sana_(sanamaru_0w0)",
     "ama_kao": "hachi78b",
     "amatou_akuma": "amatou_akuma",
     "amber_nomura": "kyouko_(roughplus)",
@@ -6018,6 +6041,7 @@
     "sachi_nyoki": "sachinyopo",
     "samdoesarts": "sam_yang",
     "samunepon": "suya_(jzup2735)",
+    "sanamaru_0w0": "sana_(sanamaru_0w0)",
     "senn10000": "senn10000",
     "sensei_hanamaru": "hanamaru_sensei",
     "shad_ne": "tsutsugano",
@@ -6035,6 +6059,7 @@
     "sk__yn0901": "sk_yn0901",
     "sleepy_meltan": "zero_(sleepy_meltan)",
     "smyecc": "smyecc",
+    "sn_37_alu": "sana_(sanamaru_0w0)",
     "soleilmtfbwy03": "soleil_(soleilmtfbwy03)",
     "somartist": "philipp_urlich",
     "somartist2": "philipp_urlich",
