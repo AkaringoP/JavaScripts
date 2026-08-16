@@ -11,6 +11,11 @@ This script adds a **"Next random post"** button to the post options sidebar and
 
 ## 📝 Update Notes
 
+### v2.3
+* **Banned Post Escape (Mobile):** Banned (takedown) posts appear as a blank page for users below Approver level. On such pages the script now shows a subtle `»` hint on the right side of the screen — **double-tap** that area to jump to the next random post. Detection combines the page DOM with an `is_banned` API cross-check. The keyboard shortcut keeps working on these pages as well.
+* **Hardening:** API-returned post IDs are validated, and the keyboard shortcut now ignores Ctrl/Meta combinations and focused select boxes.
+* **Robustness:** Whitespace in API queries is normalized, and the query string is omitted when navigating without tags.
+
 ### v2.0
 * **Smart Pre-fetching:** Implemented background pre-fetching for instant navigation.
 * **Input Detection:** The script now prioritizes the search bar input over URL parameters.
@@ -44,6 +49,9 @@ Click the **"Next random post"** link located in the **Options** sidebar on any 
 Press **`Alt` + `Shift` + `Right Arrow (→)`** to instantly jump to the next random image.
 
 *Note: The shortcut is disabled while typing in the search bar or comment box to prevent accidental navigation.*
+
+### Method 3: Double-Tap on Banned Posts (Touch Devices)
+If a random jump lands on a banned post ("This page has been removed because of a takedown request."), the page is blank for users below Approver level and has no sidebar. On touch devices, **double-tap the right side of the screen** (marked by a subtle `»` hint) to move on to the next random post. On desktop, the keyboard shortcut also works on these pages.
 
 ## 📜 License
 
