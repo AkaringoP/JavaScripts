@@ -791,8 +791,8 @@
       ],
       "registered_at_utc": "2025-06-15T22:24:56.359Z",
       "completed": true,
-      "post_count_at_build": 18768,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 18783,
+      "post_count_30d_delta": 15
     },
     "dav-19": {
       "post_ids": [
@@ -2119,8 +2119,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 83,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 84,
+      "post_count_30d_delta": 7
     },
     "kikomo": {
       "post_ids": [
