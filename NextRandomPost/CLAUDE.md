@@ -16,4 +16,5 @@ Adds a "Next random post" link to the post sidebar. Uses a prefetch strategy to 
 - Strips `order:*` tags before API calls to avoid conflicts with `random=true`
 - Maintains search context (tags) across navigation via URL params (`q` or `tags`)
 - Handles bfcache (back/forward cache) restoration via `pageshow` event
-- Keyboard shortcut: `Alt + Shift + Right Arrow`
+- Keyboard shortcut: `Alt + Shift + Right Arrow` (ignored when Ctrl/Meta is held or an input/select is focused)
+- Banned post escape: when the current post is hidden for the user (takedown blank page), a double-tap zone with a subtle hint is injected on the right third of the viewport; double-tap triggers the same navigation. Detection order: normal post UI absent (`#image-container`/`#post-options`) → `is_banned` API cross-check (`/posts/{id}.json?only=id,is_banned`) → takedown-message text fallback. Approvers see the normal page, so they are never affected. CSS lives in the `GLOBAL_CSS` constant and is injected only on detected pages.
