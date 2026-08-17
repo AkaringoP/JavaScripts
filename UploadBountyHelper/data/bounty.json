@@ -1360,7 +1360,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1959,
-      "post_count_30d_delta": 85
+      "post_count_30d_delta": 84
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1499,7 +1499,7 @@
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
       "post_count_at_build": 658,
-      "post_count_30d_delta": 24
+      "post_count_30d_delta": 23
     },
     "hiranko": {
       "post_ids": [
@@ -1783,7 +1783,7 @@
       "registered_at_utc": "2026-06-30T22:13:04.905Z",
       "completed": false,
       "post_count_at_build": 28,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 3
     },
     "inutora08": {
       "post_ids": [
@@ -2045,7 +2045,7 @@
       "registered_at_utc": "2023-09-02T12:56:21.690Z",
       "completed": true,
       "post_count_at_build": 148,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "katahira_masashi": {
       "post_ids": [
@@ -3009,7 +3009,7 @@
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
       "post_count_at_build": 69,
-      "post_count_30d_delta": 8
+      "post_count_30d_delta": 7
     },
     "mko_(artist)": {
       "post_ids": [
@@ -4054,7 +4054,7 @@
       "registered_at_utc": "2026-08-15T04:35:09.513Z",
       "completed": false,
       "post_count_at_build": 323,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "seinikuten": {
       "post_ids": [
@@ -4167,7 +4167,7 @@
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
       "post_count_at_build": 63,
-      "post_count_30d_delta": 6
+      "post_count_30d_delta": 5
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
@@ -4410,8 +4410,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 162,
-      "post_count_30d_delta": 39
+      "post_count_at_build": 164,
+      "post_count_30d_delta": 41
     },
     "sukepmonster": {
       "post_ids": [
@@ -4429,7 +4429,7 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 360,
+      "post_count_at_build": 361,
       "post_count_30d_delta": 17
     },
     "sumisu_(rinsumi)": {
@@ -4641,7 +4641,7 @@
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
       "post_count_at_build": 202,
-      "post_count_30d_delta": 26
+      "post_count_30d_delta": 25
     },
     "tatamaoekaki": {
       "post_ids": [
@@ -5144,8 +5144,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": true,
-      "post_count_at_build": 175,
-      "post_count_30d_delta": 35
+      "post_count_at_build": 176,
+      "post_count_30d_delta": 34
     },
     "xun_lin_(pixiv_93392103)": {
       "post_ids": [
