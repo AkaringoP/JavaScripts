@@ -806,8 +806,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-05-08T23:14:05.291Z",
       "completed": false,
-      "post_count_at_build": 408,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 409,
+      "post_count_30d_delta": 1
     },
     "dido_(di_do_di_do)": {
       "post_ids": [
@@ -2348,8 +2348,8 @@
       ],
       "registered_at_utc": "2026-03-31T15:32:37.455Z",
       "completed": true,
-      "post_count_at_build": 99,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 100,
+      "post_count_30d_delta": 1
     },
     "kuroussa": {
       "post_ids": [
@@ -2669,8 +2669,8 @@
       ],
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
-      "post_count_at_build": 39,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 40,
+      "post_count_30d_delta": 19
     },
     "macbail": {
       "post_ids": [
