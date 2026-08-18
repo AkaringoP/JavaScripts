@@ -82,8 +82,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 74,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 76,
+      "post_count_30d_delta": 5
     },
     "37kuki770": {
       "post_ids": [
@@ -1359,8 +1359,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1960,
-      "post_count_30d_delta": 83
+      "post_count_at_build": 1962,
+      "post_count_30d_delta": 85
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1835,8 +1835,8 @@
       ],
       "registered_at_utc": "2026-08-17T16:39:51.424Z",
       "completed": false,
-      "post_count_at_build": 60,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 61,
+      "post_count_30d_delta": 5
     },
     "japtangtang2": {
       "post_ids": [
@@ -4028,12 +4028,13 @@
         "31430927"
       ],
       "x_handles": [
+        "elitenekounko",
         "sachi_nyoki"
       ],
       "registered_at_utc": "2026-04-09T16:05:13.863Z",
       "completed": false,
-      "post_count_at_build": 144,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 145,
+      "post_count_30d_delta": 1
     },
     "sam_yang": {
       "post_ids": [
@@ -4446,8 +4447,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 361,
-      "post_count_30d_delta": 17
+      "post_count_at_build": 362,
+      "post_count_30d_delta": 18
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -5914,6 +5915,7 @@
     "egakaf0801": "memori_(egachachachan)",
     "eianmudi": "amd_aoneko",
     "elaine84843322": "elaine-didaea",
+    "elitenekounko": "sachinyopo",
     "elizafox_art": "eliza_fox",
     "emo37337640": "emo37337640",
     "enelous": "marulka",
