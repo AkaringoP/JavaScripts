@@ -591,8 +591,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5828,
-      "post_count_30d_delta": 47
+      "post_count_at_build": 5829,
+      "post_count_30d_delta": 48
     },
     "bomhat": {
       "post_ids": [
@@ -1498,8 +1498,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 659,
-      "post_count_30d_delta": 24
+      "post_count_at_build": 661,
+      "post_count_30d_delta": 26
     },
     "hiranko": {
       "post_ids": [
@@ -1559,8 +1559,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 128,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 129,
+      "post_count_30d_delta": 2
     },
     "hitoto": {
       "post_ids": [
@@ -2686,8 +2686,8 @@
       ],
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
-      "post_count_at_build": 40,
-      "post_count_30d_delta": 18
+      "post_count_at_build": 41,
+      "post_count_30d_delta": 19
     },
     "macbail": {
       "post_ids": [
@@ -4466,8 +4466,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 129,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 130,
+      "post_count_30d_delta": 2
     },
     "summernight_12": {
       "post_ids": [
