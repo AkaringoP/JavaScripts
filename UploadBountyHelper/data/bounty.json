@@ -2686,8 +2686,8 @@
       ],
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
-      "post_count_at_build": 41,
-      "post_count_30d_delta": 19
+      "post_count_at_build": 42,
+      "post_count_30d_delta": 20
     },
     "macbail": {
       "post_ids": [
@@ -2838,8 +2838,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 105,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 106,
+      "post_count_30d_delta": 3
     },
     "megasus": {
       "post_ids": [
@@ -4409,8 +4409,8 @@
       ],
       "registered_at_utc": "2025-05-08T17:34:47.880Z",
       "completed": false,
-      "post_count_at_build": 234,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 235,
+      "post_count_30d_delta": 3
     },
     "sugajyun": {
       "post_ids": [
