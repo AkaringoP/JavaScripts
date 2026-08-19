@@ -1359,8 +1359,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1962,
-      "post_count_30d_delta": 83
+      "post_count_at_build": 1963,
+      "post_count_30d_delta": 84
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -2327,8 +2327,8 @@
       ],
       "registered_at_utc": "2024-11-15T09:55:16.626Z",
       "completed": true,
-      "post_count_at_build": 166,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 167,
+      "post_count_30d_delta": 2
     },
     "kototomari": {
       "post_ids": [
@@ -2462,8 +2462,8 @@
       ],
       "registered_at_utc": "2024-04-29T20:06:44.462Z",
       "completed": false,
-      "post_count_at_build": 110,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 111,
+      "post_count_30d_delta": 6
     },
     "lao_tan_huacai": {
       "post_ids": [
@@ -4911,8 +4911,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 360,
-      "post_count_30d_delta": 34
+      "post_count_at_build": 361,
+      "post_count_30d_delta": 35
     },
     "ufu_fluffy": {
       "post_ids": [
