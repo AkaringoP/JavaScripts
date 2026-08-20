@@ -885,8 +885,8 @@
       ],
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
-      "post_count_at_build": 1024,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 1025,
+      "post_count_30d_delta": 11
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1116,8 +1116,8 @@
       ],
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": false,
-      "post_count_at_build": 33,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 34,
+      "post_count_30d_delta": 2
     },
     "gaoling_gangqin": {
       "post_ids": [
@@ -1359,8 +1359,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1963,
-      "post_count_30d_delta": 83
+      "post_count_at_build": 1964,
+      "post_count_30d_delta": 84
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
