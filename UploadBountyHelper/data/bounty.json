@@ -741,8 +741,8 @@
       ],
       "registered_at_utc": "2023-08-27T03:09:13.206Z",
       "completed": true,
-      "post_count_at_build": 92,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 93,
+      "post_count_30d_delta": 1
     },
     "cjjcha": {
       "post_ids": [
@@ -1785,8 +1785,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 308,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 310,
+      "post_count_30d_delta": 2
     },
     "im_honeybread": {
       "post_ids": [
@@ -3029,6 +3029,23 @@
       "post_count_at_build": 170,
       "post_count_30d_delta": 0
     },
+    "misopimaru": {
+      "post_ids": [
+        462290
+      ],
+      "approvers": [
+        "CommentaryRequest"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "misopimaru"
+      ],
+      "registered_at_utc": "2026-08-21T07:12:14.038Z",
+      "completed": false,
+      "post_count_at_build": 1,
+      "post_count_30d_delta": 1
+    },
     "miy_001": {
       "post_ids": [
         443475
@@ -3995,8 +4012,8 @@
       ],
       "registered_at_utc": "2025-10-17T14:22:39.616Z",
       "completed": false,
-      "post_count_at_build": 55,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 57,
+      "post_count_30d_delta": 13
     },
     "rottencrow": {
       "post_ids": [
@@ -6089,6 +6106,7 @@
     "mgmg_g_zzz": "mgmg_g_zzz",
     "miagawari011128": "miagawari011128",
     "minimilieu": "minimilieu",
+    "misopimaru": "misopimaru",
     "miy_001": "miy_001",
     "miyao385": "miyao385",
     "mo10_shi": "shimogamo_(shimomo_12)",
