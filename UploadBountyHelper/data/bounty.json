@@ -194,8 +194,8 @@
       ],
       "registered_at_utc": "2026-08-21T00:40:40.192Z",
       "completed": false,
-      "post_count_at_build": 352,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 357,
+      "post_count_30d_delta": 10
     },
     "akai_takami": {
       "post_ids": [
@@ -741,8 +741,8 @@
       ],
       "registered_at_utc": "2023-08-27T03:09:13.206Z",
       "completed": true,
-      "post_count_at_build": 99,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 102,
+      "post_count_30d_delta": 10
     },
     "cjjcha": {
       "post_ids": [
@@ -3705,7 +3705,7 @@
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
       "post_count_at_build": 345,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "orphaneater_io": {
       "post_ids": [
@@ -4089,7 +4089,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 170,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "sachinyopo": {
       "post_ids": [
@@ -4109,7 +4109,7 @@
       "registered_at_utc": "2026-04-09T16:05:13.863Z",
       "completed": false,
       "post_count_at_build": 145,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "sam_yang": {
       "post_ids": [
@@ -4126,7 +4126,7 @@
       "registered_at_utc": "2025-05-27T16:55:10.425Z",
       "completed": false,
       "post_count_at_build": 504,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "sana_(sanamaru_0w0)": {
       "post_ids": [
@@ -4147,7 +4147,7 @@
       "registered_at_utc": "2026-08-15T04:35:09.513Z",
       "completed": false,
       "post_count_at_build": 324,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 3
     },
     "seinikuten": {
       "post_ids": [
