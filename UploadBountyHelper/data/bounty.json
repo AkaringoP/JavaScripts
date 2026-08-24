@@ -610,8 +610,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5835,
-      "post_count_30d_delta": 46
+      "post_count_at_build": 5840,
+      "post_count_30d_delta": 51
     },
     "bomhat": {
       "post_ids": [
@@ -741,8 +741,8 @@
       ],
       "registered_at_utc": "2023-08-27T03:09:13.206Z",
       "completed": true,
-      "post_count_at_build": 104,
-      "post_count_30d_delta": 12
+      "post_count_at_build": 105,
+      "post_count_30d_delta": 13
     },
     "cjjcha": {
       "post_ids": [
@@ -1434,8 +1434,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1967,
-      "post_count_30d_delta": 83
+      "post_count_at_build": 1969,
+      "post_count_30d_delta": 85
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -3079,7 +3079,7 @@
       ],
       "registered_at_utc": "2026-08-21T07:12:14.038Z",
       "completed": false,
-      "post_count_at_build": 21,
+      "post_count_at_build": 24,
       "post_count_30d_delta": 0
     },
     "miy_001": {
@@ -3494,7 +3494,7 @@
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
       "post_count_at_build": 52,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 7
     },
     "nopal_garpu": {
       "post_ids": [
@@ -4485,14 +4485,16 @@
       "post_count_at_build": 3,
       "post_count_30d_delta": 0
     },
-    "spindle_(aidenr0)": {
+    "spindlesong": {
       "post_ids": [
         462406
       ],
       "approvers": [
         "Haruuspex"
       ],
-      "aliased_from": [],
+      "aliased_from": [
+        "spindle_(aidenr0)"
+      ],
       "pixiv_user_ids": [
         "28187428",
         "78675837"
@@ -5878,7 +5880,7 @@
     "25411721": "momoh_jiyucho",
     "26835234": "tsutsugano",
     "28065329": "suna_(s73d)",
-    "28187428": "spindle_(aidenr0)",
+    "28187428": "spindlesong",
     "28244739": "asagi_(banzoku210)",
     "29696285": "syrop_(syr_ooo_p)",
     "31346780": "suya_(jzup2735)",
@@ -5939,7 +5941,7 @@
     "76730688": "tentacleluver",
     "77455219": "miagawari011128",
     "77840061": "nojob_hiro",
-    "78675837": "spindle_(aidenr0)",
+    "78675837": "spindlesong",
     "78712368": "takosuke_(gyzp7373)",
     "79328843": "89_(8989_99)",
     "80089619": "ringein",
@@ -6018,7 +6020,7 @@
     "_mika_0_0": "mika_030",
     "_mooooca": "moca_(mooooca)",
     "_trisannkaku": "furumachi_(_trisannkaku)",
-    "aidenr0": "spindle_(aidenr0)",
+    "aidenr0": "spindlesong",
     "akai_takami": "akai_takami",
     "akiyama_cz4a": "akiyama_cz4a",
     "akuma_amatou": "amatou_akuma",
@@ -6050,7 +6052,7 @@
     "blackistat2": "oka_yuuri",
     "bomhat": "bomhat",
     "bon_sichi_laika": "bonsichi",
-    "bubbbling_bub": "spindle_(aidenr0)",
+    "bubbbling_bub": "spindlesong",
     "ca_gemini_": "ca_(ca_gemini)",
     "chikoritamoon": "mew_mew_chikorita_moon",
     "chokueji": "chokueji",
@@ -6312,7 +6314,7 @@
     "soleilmtfbwy03": "soleil_(soleilmtfbwy03)",
     "somartist": "philipp_urlich",
     "somartist2": "philipp_urlich",
-    "spindlesong": "spindle_(aidenr0)",
+    "spindlesong": "spindlesong",
     "stechpalme0": "mame_nabe_donko",
     "subsumune0324": "suya_(jzup2735)",
     "sugagsugag0524": "sugajyun",
