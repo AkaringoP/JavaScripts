@@ -723,7 +723,7 @@
       "registered_at_utc": "2026-01-13T12:30:11.479Z",
       "completed": false,
       "post_count_at_build": 136,
-      "post_count_30d_delta": 8
+      "post_count_30d_delta": 2
     },
     "chokueji": {
       "post_ids": [
@@ -941,7 +941,7 @@
       "registered_at_utc": "2024-07-25T04:59:45.773Z",
       "completed": false,
       "post_count_at_build": 1025,
-      "post_count_30d_delta": 11
+      "post_count_30d_delta": 10
     },
     "easel_(dam0628)": {
       "post_ids": [
@@ -1113,7 +1113,7 @@
       "registered_at_utc": "2025-06-29T20:02:46.049Z",
       "completed": false,
       "post_count_at_build": 206,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "furim": {
       "post_ids": [
@@ -1397,7 +1397,7 @@
       "registered_at_utc": "2025-05-31T12:03:26.347Z",
       "completed": false,
       "post_count_at_build": 336,
-      "post_count_30d_delta": 6
+      "post_count_30d_delta": 4
     },
     "hanamaru_sensei": {
       "post_ids": [
@@ -1435,7 +1435,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 1969,
-      "post_count_30d_delta": 85
+      "post_count_30d_delta": 84
     },
     "hibana_(hibana_ztlv)": {
       "post_ids": [
@@ -1574,7 +1574,7 @@
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
       "post_count_at_build": 661,
-      "post_count_30d_delta": 11
+      "post_count_30d_delta": 10
     },
     "hiranko": {
       "post_ids": [
@@ -1594,7 +1594,7 @@
       "registered_at_utc": "2023-06-13T15:21:34.593Z",
       "completed": false,
       "post_count_at_build": 390,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "hisakata_(hisa_nn)": {
       "post_ids": [
@@ -2063,7 +2063,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 226,
-      "post_count_30d_delta": 15
+      "post_count_30d_delta": 13
     },
     "kangg": {
       "post_ids": [
@@ -3494,7 +3494,7 @@
       "registered_at_utc": "2025-07-31T16:50:21.675Z",
       "completed": false,
       "post_count_at_build": 52,
-      "post_count_30d_delta": 7
+      "post_count_30d_delta": 0
     },
     "nopal_garpu": {
       "post_ids": [
@@ -3863,7 +3863,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 446,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 6
     },
     "q_(ed69)": {
       "post_ids": [
@@ -3955,7 +3955,7 @@
       "registered_at_utc": "2025-10-17T14:22:39.616Z",
       "completed": false,
       "post_count_at_build": 29,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "renren_(ah_renren)": {
       "post_ids": [
@@ -3974,7 +3974,7 @@
       "registered_at_utc": "2026-07-14T10:48:16.502Z",
       "completed": false,
       "post_count_at_build": 184,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 8
     },
     "ringein": {
       "post_ids": [
@@ -4564,7 +4564,7 @@
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
       "post_count_at_build": 363,
-      "post_count_30d_delta": 10
+      "post_count_30d_delta": 9
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -4756,7 +4756,7 @@
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
       "post_count_at_build": 32,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 4
     },
     "takurada": {
       "post_ids": [
@@ -5192,7 +5192,7 @@
       "registered_at_utc": "2026-05-24T00:31:33.125Z",
       "completed": false,
       "post_count_at_build": 3,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "warabi_tama": {
       "post_ids": [
@@ -5355,8 +5355,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": true,
-      "post_count_at_build": 176,
-      "post_count_30d_delta": 27
+      "post_count_at_build": 186,
+      "post_count_30d_delta": 37
     },
     "xun_lin_(pixiv_93392103)": {
       "post_ids": [
