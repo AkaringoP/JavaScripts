@@ -610,8 +610,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5843,
-      "post_count_30d_delta": 54
+      "post_count_at_build": 5844,
+      "post_count_30d_delta": 55
     },
     "bomhat": {
       "post_ids": [
@@ -1132,8 +1132,8 @@
       ],
       "registered_at_utc": "2026-08-20T16:38:42.625Z",
       "completed": false,
-      "post_count_at_build": 204,
-      "post_count_30d_delta": 84
+      "post_count_at_build": 205,
+      "post_count_30d_delta": 85
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
@@ -1434,8 +1434,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 1971,
-      "post_count_30d_delta": 84
+      "post_count_at_build": 1972,
+      "post_count_30d_delta": 85
     },
     "hightguy": {
       "post_ids": [
@@ -2739,8 +2739,8 @@
       ],
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
-      "post_count_at_build": 42,
-      "post_count_30d_delta": 20
+      "post_count_at_build": 43,
+      "post_count_30d_delta": 21
     },
     "macbail": {
       "post_ids": [
@@ -2856,7 +2856,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 100,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "matanukisuna": {
       "post_ids": [
@@ -2891,8 +2891,8 @@
       ],
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
-      "post_count_at_build": 106,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 107,
+      "post_count_30d_delta": 2
     },
     "megasus": {
       "post_ids": [
@@ -2948,7 +2948,7 @@
       "registered_at_utc": "2026-07-26T17:52:47.571Z",
       "completed": false,
       "post_count_at_build": 147,
-      "post_count_30d_delta": 127
+      "post_count_30d_delta": 0
     },
     "mgmg_g_zzz": {
       "post_ids": [
@@ -2984,7 +2984,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 21,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "mika_030": {
       "post_ids": [
@@ -3024,7 +3024,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 133,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "mioda_xi": {
       "post_ids": [
@@ -3112,8 +3112,8 @@
       "x_handles": [],
       "registered_at_utc": "2025-09-22T17:17:40.538Z",
       "completed": false,
-      "post_count_at_build": 96,
-      "post_count_30d_delta": 30
+      "post_count_at_build": 114,
+      "post_count_30d_delta": 48
     },
     "moca_(mooooca)": {
       "post_ids": [
@@ -5276,8 +5276,8 @@
       "x_handles": [],
       "registered_at_utc": "2026-08-11T20:46:35.488Z",
       "completed": true,
-      "post_count_at_build": 186,
-      "post_count_30d_delta": 35
+      "post_count_at_build": 191,
+      "post_count_30d_delta": 40
     },
     "xun_lin_(pixiv_93392103)": {
       "post_ids": [
@@ -5509,8 +5509,8 @@
       ],
       "registered_at_utc": "2026-08-27T03:34:34.739Z",
       "completed": false,
-      "post_count_at_build": 36,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 39,
+      "post_count_30d_delta": 6
     },
     "zaenathi": {
       "post_ids": [
