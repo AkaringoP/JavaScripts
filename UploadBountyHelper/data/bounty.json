@@ -879,8 +879,8 @@
       ],
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
-      "post_count_at_build": 231,
-      "post_count_30d_delta": 37
+      "post_count_at_build": 232,
+      "post_count_30d_delta": 38
     },
     "dousha0101": {
       "post_ids": [
@@ -1032,8 +1032,8 @@
       ],
       "registered_at_utc": "2024-03-19T08:23:53.163Z",
       "completed": false,
-      "post_count_at_build": 65,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 66,
+      "post_count_30d_delta": 1
     },
     "erhuazi917": {
       "post_ids": [
@@ -1547,8 +1547,8 @@
       ],
       "registered_at_utc": "2024-11-19T02:29:43.961Z",
       "completed": false,
-      "post_count_at_build": 662,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 663,
+      "post_count_30d_delta": 12
     },
     "hiranko": {
       "post_ids": [
@@ -2735,8 +2735,8 @@
       ],
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
-      "post_count_at_build": 43,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 44,
+      "post_count_30d_delta": 22
     },
     "macbail": {
       "post_ids": [
@@ -3108,8 +3108,8 @@
       "x_handles": [],
       "registered_at_utc": "2025-09-22T17:17:40.538Z",
       "completed": false,
-      "post_count_at_build": 128,
-      "post_count_30d_delta": 62
+      "post_count_at_build": 135,
+      "post_count_30d_delta": 69
     },
     "moca_(mooooca)": {
       "post_ids": [
@@ -3203,7 +3203,7 @@
       "registered_at_utc": "2025-08-28T23:29:32.999Z",
       "completed": true,
       "post_count_at_build": 65,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "mudou_eichi": {
       "post_ids": [
@@ -3810,6 +3810,27 @@
       "post_count_at_build": 154,
       "post_count_30d_delta": 2
     },
+    "piki_(zuru-pikio)": {
+      "post_ids": [
+        462406
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "13066066"
+      ],
+      "x_handles": [
+        "pii_kemo",
+        "piki_kemo",
+        "zuruo1"
+      ],
+      "registered_at_utc": "2026-08-21T21:12:12.468Z",
+      "completed": false,
+      "post_count_at_build": 38,
+      "post_count_30d_delta": 2
+    },
     "pongldr": {
       "post_ids": [
         244548
@@ -4079,6 +4100,25 @@
       "completed": false,
       "post_count_at_build": 171,
       "post_count_30d_delta": 3
+    },
+    "ryuusui_arumo": {
+      "post_ids": [
+        462406
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "10404190"
+      ],
+      "x_handles": [
+        "mofumofumachine"
+      ],
+      "registered_at_utc": "2026-08-21T21:12:12.468Z",
+      "completed": false,
+      "post_count_at_build": 201,
+      "post_count_30d_delta": 1
     },
     "sachinyopo": {
       "post_ids": [
@@ -5782,6 +5822,7 @@
     "9304404": "touchika",
     "9523557": "ufu_fluffy",
     "10370864": "yukmomo",
+    "10404190": "ryuusui_arumo",
     "10891699": "tsuruko_turuta",
     "10894255": "kakaobataa",
     "11250310": "pongldr",
@@ -5792,6 +5833,7 @@
     "12630199": "marine_(confeitokobo)",
     "12678039": "kuro_tsubasa",
     "12780795": "lluyss",
+    "13066066": "piki_(zuru-pikio)",
     "13246840": "himajin_(fd_jin)",
     "13251352": "mioda_xi",
     "13453710": "hori_wo",
@@ -6166,6 +6208,7 @@
     "miyao385": "miyao385",
     "mo10_shi": "shimogamo_(shimomo_12)",
     "mochanokono": "mochako_(motyako_1005)",
+    "mofumofumachine": "ryuusui_arumo",
     "momoh_jiyucho": "momoh_jiyucho",
     "momoyuk2": "yukmomo",
     "monaka_0326_": "omochi_monaka",
@@ -6207,6 +6250,8 @@
     "pazzi_00": "pazzi_(zzxh2354)",
     "petasweetie": "fuyudori_yukino",
     "petasweety": "fuyudori_yukino",
+    "pii_kemo": "piki_(zuru-pikio)",
+    "piki_kemo": "piki_(zuru-pikio)",
     "pon_cutest": "pongldr",
     "pon_never_dies": "pongldr",
     "pon_sfw": "pongldr",
@@ -6342,6 +6387,7 @@
     "zexliqiu": "zexli_qiu",
     "znnnnnnnnz": "tenohira_(tenoo)",
     "zongil_salryeo": "zongil_salryeo",
-    "zunda_e_damame": "zunda_e_damame"
+    "zunda_e_damame": "zunda_e_damame",
+    "zuruo1": "piki_(zuru-pikio)"
   }
 }
