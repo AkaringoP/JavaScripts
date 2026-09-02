@@ -685,8 +685,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 42,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 43,
+      "post_count_30d_delta": 1
     },
     "bzzzzzr": {
       "post_ids": [
@@ -2204,8 +2204,8 @@
       ],
       "registered_at_utc": "2024-04-02T05:05:55.509Z",
       "completed": false,
-      "post_count_at_build": 84,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 86,
+      "post_count_30d_delta": 4
     },
     "kikomo": {
       "post_ids": [
