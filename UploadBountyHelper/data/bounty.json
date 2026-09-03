@@ -628,8 +628,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5848,
-      "post_count_30d_delta": 50
+      "post_count_at_build": 5849,
+      "post_count_30d_delta": 51
     },
     "bomhat": {
       "post_ids": [
@@ -3056,7 +3056,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 133,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "mioda_xi": {
       "post_ids": [
@@ -3090,7 +3090,7 @@
       "registered_at_utc": "2026-08-21T07:12:14.038Z",
       "completed": false,
       "post_count_at_build": 37,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 37
     },
     "miy_001": {
       "post_ids": [
@@ -3108,8 +3108,8 @@
       ],
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
-      "post_count_at_build": 183,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 184,
+      "post_count_30d_delta": 8
     },
     "miyao385": {
       "post_ids": [
@@ -4744,8 +4744,8 @@
       ],
       "registered_at_utc": "2026-07-31T15:47:52.538Z",
       "completed": false,
-      "post_count_at_build": 600,
-      "post_count_30d_delta": 11
+      "post_count_at_build": 601,
+      "post_count_30d_delta": 12
     },
     "ta_u_la": {
       "post_ids": [
