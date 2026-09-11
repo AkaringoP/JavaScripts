@@ -1430,8 +1430,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2016,
-      "post_count_30d_delta": 87
+      "post_count_at_build": 2017,
+      "post_count_30d_delta": 88
     },
     "hightguy": {
       "post_ids": [
@@ -2053,8 +2053,8 @@
       "x_handles": [],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 18,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 19,
+      "post_count_30d_delta": 1
     },
     "kanoir": {
       "post_ids": [
@@ -3145,7 +3145,7 @@
       "registered_at_utc": "2025-09-22T17:17:40.538Z",
       "completed": false,
       "post_count_at_build": 144,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 78
     },
     "moca_(mooooca)": {
       "post_ids": [
@@ -5689,8 +5689,8 @@
       ],
       "registered_at_utc": "2025-10-17T14:22:39.616Z",
       "completed": false,
-      "post_count_at_build": 146,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 147,
+      "post_count_30d_delta": 2
     },
     "zero_(sleepy_meltan)": {
       "post_ids": [
