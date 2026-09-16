@@ -974,8 +974,8 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 82,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 83,
+      "post_count_30d_delta": 2
     },
     "ecomoesty": {
       "post_ids": [
@@ -2905,7 +2905,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 104,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 5
     },
     "matanukisuna": {
       "post_ids": [
@@ -2941,7 +2941,7 @@
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
       "post_count_at_build": 107,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "megasus": {
       "post_ids": [
@@ -5109,8 +5109,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 365,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 366,
+      "post_count_30d_delta": 6
     },
     "twowontwo": {
       "post_ids": [
