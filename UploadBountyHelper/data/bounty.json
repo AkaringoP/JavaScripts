@@ -1164,8 +1164,8 @@
       ],
       "registered_at_utc": "2026-08-20T16:38:42.625Z",
       "completed": false,
-      "post_count_at_build": 206,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 208,
+      "post_count_30d_delta": 4
     },
     "furumachi_(_trisannkaku)": {
       "post_ids": [
@@ -3994,7 +3994,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 23,
-      "post_count_30d_delta": 8
+      "post_count_30d_delta": 0
     },
     "pazzi_(zzxh2354)": {
       "post_ids": [
@@ -4099,7 +4099,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 454,
-      "post_count_30d_delta": 9
+      "post_count_30d_delta": 0
     },
     "q_(ed69)": {
       "post_ids": [
@@ -4361,7 +4361,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 203,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 0
     },
     "sachinyopo": {
       "post_ids": [
