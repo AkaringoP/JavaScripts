@@ -1481,8 +1481,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2027,
-      "post_count_30d_delta": 61
+      "post_count_at_build": 2028,
+      "post_count_30d_delta": 62
     },
     "hightguy": {
       "post_ids": [
@@ -3079,7 +3079,7 @@
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
       "post_count_at_build": 107,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "megasus": {
       "post_ids": [
@@ -3226,7 +3226,7 @@
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
       "post_count_at_build": 133,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "mioda_xi": {
       "post_ids": [
@@ -3260,7 +3260,7 @@
       "registered_at_utc": "2026-08-21T07:12:14.038Z",
       "completed": false,
       "post_count_at_build": 38,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 23
     },
     "miy_001": {
       "post_ids": [
@@ -3279,7 +3279,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 188,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 8
     },
     "miyao385": {
       "post_ids": [
@@ -4831,8 +4831,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 372,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 373,
+      "post_count_30d_delta": 11
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
@@ -5655,7 +5655,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 50,
-      "post_count_30d_delta": 4
+      "post_count_30d_delta": 0
     },
     "y_koichi": {
       "post_ids": [
@@ -5691,7 +5691,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 56,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "yerm": {
       "post_ids": [
@@ -5739,8 +5739,8 @@
       ],
       "registered_at_utc": "2026-09-20T13:57:32.121Z",
       "completed": false,
-      "post_count_at_build": 19,
-      "post_count_30d_delta": 4
+      "post_count_at_build": 20,
+      "post_count_30d_delta": 5
     },
     "yokayoka_(derm0g)": {
       "post_ids": [
