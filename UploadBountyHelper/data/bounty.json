@@ -1500,8 +1500,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2029,
-      "post_count_30d_delta": 60
+      "post_count_at_build": 2053,
+      "post_count_30d_delta": 84
     },
     "hightguy": {
       "post_ids": [
@@ -2874,7 +2874,7 @@
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": true,
       "post_count_at_build": 556,
-      "post_count_30d_delta": 2
+      "post_count_30d_delta": 0
     },
     "lunaticotat": {
       "post_ids": [
@@ -2929,7 +2929,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 47,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 0
     },
     "macbail": {
       "post_ids": [
@@ -3006,7 +3006,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 271,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "mangmuze": {
       "post_ids": [
@@ -4831,8 +4831,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 167,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 168,
+      "post_count_30d_delta": 4
     },
     "sukepmonster": {
       "post_ids": [
