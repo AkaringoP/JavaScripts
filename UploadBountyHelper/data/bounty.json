@@ -2948,7 +2948,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 47,
-      "post_count_30d_delta": 5
+      "post_count_30d_delta": 0
     },
     "macbail": {
       "post_ids": [
@@ -3080,7 +3080,7 @@
       ],
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
-      "post_count_at_build": 104,
+      "post_count_at_build": 105,
       "post_count_30d_delta": 0
     },
     "matanukisuna": {
@@ -4136,8 +4136,8 @@
       ],
       "registered_at_utc": "2023-06-13T10:22:42.886Z",
       "completed": false,
-      "post_count_at_build": 454,
-      "post_count_30d_delta": 7
+      "post_count_at_build": 455,
+      "post_count_30d_delta": 8
     },
     "q_(ed69)": {
       "post_ids": [
@@ -4869,8 +4869,8 @@
       ],
       "registered_at_utc": "2025-09-22T11:34:36.767Z",
       "completed": false,
-      "post_count_at_build": 373,
-      "post_count_30d_delta": 10
+      "post_count_at_build": 374,
+      "post_count_30d_delta": 11
     },
     "sumisu_(rinsumi)": {
       "post_ids": [
