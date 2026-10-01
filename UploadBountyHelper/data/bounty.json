@@ -197,8 +197,8 @@
       ],
       "registered_at_utc": "2026-08-21T00:40:40.192Z",
       "completed": true,
-      "post_count_at_build": 404,
-      "post_count_30d_delta": 38
+      "post_count_at_build": 405,
+      "post_count_30d_delta": 39
     },
     "akai_takami": {
       "post_ids": [
@@ -1501,7 +1501,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 2061,
-      "post_count_30d_delta": 85
+      "post_count_30d_delta": 83
     },
     "hightguy": {
       "post_ids": [
@@ -2324,7 +2324,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 152,
-      "post_count_30d_delta": 13
+      "post_count_30d_delta": 0
     },
     "kharu11": {
       "post_ids": [
@@ -2722,7 +2722,7 @@
       "registered_at_utc": "2026-08-31T07:20:22.758Z",
       "completed": false,
       "post_count_at_build": 25,
-      "post_count_30d_delta": 23
+      "post_count_30d_delta": 14
     },
     "layer_(reishuu)": {
       "post_ids": [
@@ -3317,7 +3317,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 188,
-      "post_count_30d_delta": 7
+      "post_count_30d_delta": 5
     },
     "miyao385": {
       "post_ids": [
@@ -3353,7 +3353,7 @@
       "registered_at_utc": "2025-09-22T17:17:40.538Z",
       "completed": false,
       "post_count_at_build": 144,
-      "post_count_30d_delta": 9
+      "post_count_30d_delta": 0
     },
     "moca_(mooooca)": {
       "post_ids": [
@@ -4871,8 +4871,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 171,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 172,
+      "post_count_30d_delta": 7
     },
     "sukepmonster": {
       "post_ids": [
@@ -5122,7 +5122,7 @@
       "registered_at_utc": "2026-08-17T16:39:51.424Z",
       "completed": false,
       "post_count_at_build": 180,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "tatamaoekaki": {
       "post_ids": [
