@@ -1952,8 +1952,8 @@
       ],
       "registered_at_utc": "2024-11-15T09:55:16.626Z",
       "completed": true,
-      "post_count_at_build": 48,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 50,
+      "post_count_30d_delta": 2
     },
     "jajimalgeol": {
       "post_ids": [
@@ -1969,8 +1969,8 @@
       ],
       "registered_at_utc": "2026-08-17T16:39:51.424Z",
       "completed": false,
-      "post_count_at_build": 68,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 69,
+      "post_count_30d_delta": 7
     },
     "japtangtang2": {
       "post_ids": [
@@ -2949,7 +2949,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 52,
-      "post_count_30d_delta": 7
+      "post_count_30d_delta": 0
     },
     "macbail": {
       "post_ids": [
