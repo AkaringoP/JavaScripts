@@ -701,8 +701,8 @@
       ],
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
-      "post_count_at_build": 5894,
-      "post_count_30d_delta": 27
+      "post_count_at_build": 5899,
+      "post_count_30d_delta": 32
     },
     "bomhat": {
       "post_ids": [
@@ -1241,8 +1241,8 @@
       ],
       "registered_at_utc": "2026-05-28T07:59:33.930Z",
       "completed": false,
-      "post_count_at_build": 247,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 250,
+      "post_count_30d_delta": 4
     },
     "gamgyul": {
       "post_ids": [
@@ -1518,8 +1518,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2074,
-      "post_count_30d_delta": 56
+      "post_count_at_build": 2075,
+      "post_count_30d_delta": 57
     },
     "hightguy": {
       "post_ids": [
@@ -2135,8 +2135,8 @@
       ],
       "registered_at_utc": "2025-06-09T00:20:00.638Z",
       "completed": true,
-      "post_count_at_build": 140,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 141,
+      "post_count_30d_delta": 1
     },
     "kamisato_sora": {
       "post_ids": [
@@ -4852,8 +4852,8 @@
       ],
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
-      "post_count_at_build": 731,
-      "post_count_30d_delta": 22
+      "post_count_at_build": 733,
+      "post_count_30d_delta": 24
     },
     "suaman": {
       "post_ids": [
@@ -5120,8 +5120,8 @@
       ],
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
-      "post_count_at_build": 205,
-      "post_count_30d_delta": 2
+      "post_count_at_build": 206,
+      "post_count_30d_delta": 3
     },
     "tanakano_(tn_kn1000)": {
       "post_ids": [
@@ -5887,8 +5887,8 @@
       ],
       "registered_at_utc": "2026-08-03T20:56:14.629Z",
       "completed": false,
-      "post_count_at_build": 162,
-      "post_count_30d_delta": 52
+      "post_count_at_build": 163,
+      "post_count_30d_delta": 53
     },
     "yu_cheng_hong": {
       "post_ids": [
