@@ -328,8 +328,8 @@
       ],
       "registered_at_utc": "2026-04-09T20:02:23.465Z",
       "completed": false,
-      "post_count_at_build": 55,
-      "post_count_30d_delta": 8
+      "post_count_at_build": 56,
+      "post_count_30d_delta": 9
     },
     "amd_aoneko": {
       "post_ids": [
@@ -1575,8 +1575,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2091,
-      "post_count_30d_delta": 65
+      "post_count_at_build": 2092,
+      "post_count_30d_delta": 66
     },
     "hightguy": {
       "post_ids": [
@@ -3113,12 +3113,13 @@
       "aliased_from": [],
       "pixiv_user_ids": [],
       "x_handles": [
+        "mangmangfangmu",
         "mizu1202001"
       ],
       "registered_at_utc": "2026-09-16T21:22:11.189Z",
       "completed": false,
-      "post_count_at_build": 50,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 62,
+      "post_count_30d_delta": 6
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -3864,8 +3865,8 @@
       ],
       "registered_at_utc": "2026-09-29T07:21:38.061Z",
       "completed": false,
-      "post_count_at_build": 222,
-      "post_count_30d_delta": 114
+      "post_count_at_build": 228,
+      "post_count_30d_delta": 120
     },
     "ny1n_49": {
       "post_ids": [
@@ -4948,7 +4949,7 @@
       "registered_at_utc": "2026-08-04T13:31:24.294Z",
       "completed": false,
       "post_count_at_build": 184,
-      "post_count_30d_delta": 18
+      "post_count_30d_delta": 0
     },
     "sukepmonster": {
       "post_ids": [
@@ -5617,7 +5618,7 @@
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
       "post_count_at_build": 403,
-      "post_count_30d_delta": 215
+      "post_count_30d_delta": 0
     },
     "womb_74": {
       "post_ids": [
@@ -6089,7 +6090,7 @@
       "registered_at_utc": "2026-08-27T03:34:34.739Z",
       "completed": false,
       "post_count_at_build": 46,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "zaenathi": {
       "post_ids": [
@@ -6783,6 +6784,7 @@
     "magical_princes": "magical_princes",
     "maisonevangelin": "maisonlovely",
     "maisonlovely": "maisonlovely",
+    "mangmangfangmu": "mangmuze",
     "marebitochka": "touchika",
     "marukata": "katahira_masashi",
     "matsuhago": "matsuhago",
