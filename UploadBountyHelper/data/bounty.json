@@ -1575,8 +1575,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2095,
-      "post_count_30d_delta": 68
+      "post_count_at_build": 2096,
+      "post_count_30d_delta": 69
     },
     "hightguy": {
       "post_ids": [
@@ -3394,7 +3394,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 192,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 4
     },
     "miyao385": {
       "post_ids": [
@@ -3413,7 +3413,7 @@
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
       "post_count_at_build": 86,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 11
     },
     "mko_(artist)": {
       "post_ids": [
@@ -3547,7 +3547,7 @@
       "registered_at_utc": "2025-08-28T20:13:30.576Z",
       "completed": false,
       "post_count_at_build": 1187,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "muds": {
       "post_ids": [
@@ -3565,7 +3565,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 192,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 3
     },
     "muffin_(loveenanag)": {
       "post_ids": [
@@ -3639,7 +3639,7 @@
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
       "post_count_at_build": 174,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "nagare750": {
       "post_ids": [
@@ -3658,7 +3658,7 @@
       "registered_at_utc": "2026-04-17T05:55:46.115Z",
       "completed": false,
       "post_count_at_build": 91,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "nanakami_mana": {
       "post_ids": [
@@ -3715,7 +3715,7 @@
       "registered_at_utc": "2023-10-10T15:28:54.128Z",
       "completed": false,
       "post_count_at_build": 212,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 4
     },
     "nani_(artofnani)": {
       "post_ids": [
@@ -5617,8 +5617,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 430,
-      "post_count_30d_delta": 242
+      "post_count_at_build": 432,
+      "post_count_30d_delta": 244
     },
     "womb_74": {
       "post_ids": [
@@ -6125,8 +6125,8 @@
       ],
       "registered_at_utc": "2025-08-11T05:41:45.766Z",
       "completed": false,
-      "post_count_at_build": 35,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 36,
+      "post_count_30d_delta": 1
     },
     "zeriko": {
       "post_ids": [
