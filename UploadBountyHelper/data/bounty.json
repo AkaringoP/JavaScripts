@@ -661,8 +661,8 @@
       ],
       "registered_at_utc": "2025-05-20T01:59:35.829Z",
       "completed": false,
-      "post_count_at_build": 61,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 62,
+      "post_count_30d_delta": 6
     },
     "billdadinosaur": {
       "post_ids": [
@@ -1575,8 +1575,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2121,
-      "post_count_30d_delta": 93
+      "post_count_at_build": 2122,
+      "post_count_30d_delta": 94
     },
     "hightguy": {
       "post_ids": [
@@ -3154,8 +3154,8 @@
       ],
       "registered_at_utc": "2025-12-30T21:18:51.102Z",
       "completed": false,
-      "post_count_at_build": 120,
-      "post_count_30d_delta": 5
+      "post_count_at_build": 178,
+      "post_count_30d_delta": 63
     },
     "marulka": {
       "post_ids": [
@@ -3411,7 +3411,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 192,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 4
     },
     "miyao385": {
       "post_ids": [
@@ -3430,7 +3430,7 @@
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
       "post_count_at_build": 86,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 11
     },
     "mko_(artist)": {
       "post_ids": [
@@ -5160,14 +5160,16 @@
       "post_count_at_build": 180,
       "post_count_30d_delta": 1
     },
-    "takosuke_(gyzp7373)": {
+    "takosuke4chan": {
       "post_ids": [
         442511
       ],
       "approvers": [
         "Haruuspex"
       ],
-      "aliased_from": [],
+      "aliased_from": [
+        "takosuke_(gyzp7373)"
+      ],
       "pixiv_user_ids": [
         "78712368"
       ],
@@ -5176,8 +5178,8 @@
       ],
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
-      "post_count_at_build": 33,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 63,
+      "post_count_30d_delta": 30
     },
     "takurada": {
       "post_ids": [
@@ -6525,7 +6527,7 @@
     "77455219": "miagawari011128",
     "77840061": "nojob_hiro",
     "78675837": "spindlesong",
-    "78712368": "takosuke_(gyzp7373)",
+    "78712368": "takosuke4chan",
     "79328843": "89_(8989_99)",
     "80089619": "ringein",
     "80739969": "pazzi_(zzxh2354)",
@@ -6945,7 +6947,7 @@
     "syurikenmaru": "syurikenmaru",
     "ta_u_la": "ta_u_la",
     "tahraart": "tahra",
-    "takosuke4chan": "takosuke_(gyzp7373)",
+    "takosuke4chan": "takosuke4chan",
     "takurada1001": "takurada",
     "tatamaoekaki": "tatamaoekaki",
     "temariame14": "temariame14",
