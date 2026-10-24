@@ -621,8 +621,8 @@
       ],
       "registered_at_utc": "2026-09-23T16:48:56.783Z",
       "completed": false,
-      "post_count_at_build": 211,
-      "post_count_30d_delta": 21
+      "post_count_at_build": 219,
+      "post_count_30d_delta": 29
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -1575,8 +1575,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2122,
-      "post_count_30d_delta": 93
+      "post_count_at_build": 2123,
+      "post_count_30d_delta": 94
     },
     "hightguy": {
       "post_ids": [
@@ -5251,8 +5251,8 @@
       ],
       "registered_at_utc": "2025-04-11T14:39:43.331Z",
       "completed": false,
-      "post_count_at_build": 170,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 171,
+      "post_count_30d_delta": 1
     },
     "tenohira_(tenoo)": {
       "post_ids": [
@@ -5451,8 +5451,8 @@
       ],
       "registered_at_utc": "2025-06-21T11:43:13.580Z",
       "completed": false,
-      "post_count_at_build": 370,
-      "post_count_30d_delta": 3
+      "post_count_at_build": 371,
+      "post_count_30d_delta": 4
     },
     "twowontwo": {
       "post_ids": [
@@ -5948,7 +5948,7 @@
       "registered_at_utc": "2025-03-07T18:34:08.298Z",
       "completed": false,
       "post_count_at_build": 150,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "youmeng33": {
       "post_ids": [
