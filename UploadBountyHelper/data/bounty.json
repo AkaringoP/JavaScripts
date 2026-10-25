@@ -621,8 +621,8 @@
       ],
       "registered_at_utc": "2026-09-23T16:48:56.783Z",
       "completed": false,
-      "post_count_at_build": 219,
-      "post_count_30d_delta": 29
+      "post_count_at_build": 223,
+      "post_count_30d_delta": 33
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -1575,8 +1575,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2123,
-      "post_count_30d_delta": 70
+      "post_count_at_build": 2124,
+      "post_count_30d_delta": 71
     },
     "hightguy": {
       "post_ids": [
@@ -2986,7 +2986,7 @@
       "registered_at_utc": "2025-09-22T13:59:00.090Z",
       "completed": true,
       "post_count_at_build": 558,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "lunaticotat": {
       "post_ids": [
@@ -3041,7 +3041,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 53,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 6
     },
     "macbail": {
       "post_ids": [
@@ -3248,7 +3248,7 @@
       "registered_at_utc": "2023-06-13T15:21:34.593Z",
       "completed": false,
       "post_count_at_build": 105,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "mew_mew_chikorita_moon": {
       "post_ids": [
@@ -3303,7 +3303,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 22,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "miao_xiaoxing": {
       "post_ids": [
@@ -5119,8 +5119,8 @@
       ],
       "registered_at_utc": "2026-07-31T15:47:52.538Z",
       "completed": false,
-      "post_count_at_build": 633,
-      "post_count_30d_delta": 19
+      "post_count_at_build": 634,
+      "post_count_30d_delta": 20
     },
     "ta_u_la": {
       "post_ids": [
@@ -5636,8 +5636,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 489,
-      "post_count_30d_delta": 301
+      "post_count_at_build": 494,
+      "post_count_30d_delta": 306
     },
     "womb_74": {
       "post_ids": [
