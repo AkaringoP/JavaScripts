@@ -3248,7 +3248,7 @@
       "registered_at_utc": "2023-06-13T15:21:34.593Z",
       "completed": false,
       "post_count_at_build": 105,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "mew_mew_chikorita_moon": {
       "post_ids": [
@@ -3303,7 +3303,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 22,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "miao_xiaoxing": {
       "post_ids": [
@@ -4927,8 +4927,8 @@
       ],
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
-      "post_count_at_build": 742,
-      "post_count_30d_delta": 28
+      "post_count_at_build": 744,
+      "post_count_30d_delta": 30
     },
     "suaman": {
       "post_ids": [
@@ -5636,8 +5636,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 494,
-      "post_count_30d_delta": 306
+      "post_count_at_build": 502,
+      "post_count_30d_delta": 314
     },
     "womb_74": {
       "post_ids": [
