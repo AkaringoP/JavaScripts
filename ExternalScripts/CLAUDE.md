@@ -51,6 +51,9 @@ Only what must not break. One subsection per script.
 - Sync attach computes the href once; `asyncClick` attach has no href and opens
   the tab from the click handler via `GM_openInTab` (needed for the Firefox
   container option).
+- Fantia post and image lookups go through `memoizeAsync()`, which forgets a
+  rejected result; keep that, or one failed request blocks every click until
+  reload.
 - pixiv main image: its src flips from a placeholder to i.pximg.net after
   insertion, which element queries cannot see, so `scanMainArtwork()` polls
   every second on every page and attaches to the largest unmarked pximg

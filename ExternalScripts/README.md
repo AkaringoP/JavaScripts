@@ -77,6 +77,7 @@ Changes from the original:
 - pixiv: the main-artwork button skips other artworks' thumbnails and profile images.
 - pixiv: the main-artwork button also appears after in-page navigation to an artwork.
 - No button, and a console warning, when no source URL can be determined (was a link with `url=undefined`).
+- Fantia: a failed post API request is retried on the next click instead of failing until reload.
 
 Full history: `git log -- ExternalScripts/upload-to-danbooru.user.js`
 

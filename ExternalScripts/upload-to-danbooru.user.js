@@ -152,6 +152,21 @@ function createButton(classes) {
 
 const locationToRef = async _el => window.location.href;
 
+// Memoize a parameterless async function. A rejected result is dropped so the
+// next call retries instead of replaying the failure until the page reloads.
+function memoizeAsync(fn) {
+  let promise;
+  return () => {
+    if (promise === undefined) {
+      promise = fn().catch((err) => {
+        promise = undefined;
+        throw err;
+      });
+    }
+    return promise;
+  };
+}
+
 function generateUploadUrl(url, ref) {
   const booru = GM_config.get('booru');
   const uploadUrl = new URL('uploads/new', booru);
@@ -300,8 +315,7 @@ function initializeFantia() {
   if (postUrlMatch) {
     const postId = postUrlMatch[1];
 
-    let _post;
-    const _fetchPost = async () => {
+    const fetchPost = memoizeAsync(async () => {
       const csrfToken = $('meta[name="csrf-token"]').attr('content');
       const url = `https://fantia.jp/api/v1/posts/${postId}`;
       const response = await fetch(url, {
@@ -310,18 +324,14 @@ function initializeFantia() {
           'X-Requested-With': 'XMLHttpRequest',
         },
       });
+      if (!response.ok) {
+        throw new Error(`Fantia post API responded with ${response.status}`);
+      }
       const post = await response.json();
       return post.post;
-    };
-    const fetchPost = () => {
-      if (_post === undefined) {
-        _post = _fetchPost();
-      }
-      return _post;
-    };
+    });
 
-    let _images;
-    const _fetchImages = async () => {
+    const fetchImages = memoizeAsync(async () => {
       const post = await fetchPost();
 
       const images = {
@@ -354,13 +364,7 @@ function initializeFantia() {
         }
       }
       return images;
-    };
-    const fetchImages = () => {
-      if (_images === undefined) {
-        _images = _fetchImages();
-      }
-      return _images;
-    };
+    });
 
     const ref = new URL(postUrlMatch[0], window.location).href;
     const toRef = async () => ref;
