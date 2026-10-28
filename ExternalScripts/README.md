@@ -27,6 +27,7 @@ root MIT license does not cover them.
 | Installed name | File | Origin | Based on |
 | :--- | :--- | :--- | :--- |
 | [Pixiv Image Searches and Stuff (Mod)](#pixiv-image-searches-and-stuff-mod) | [`Pixiv_Image_Searches_and_Stuff.user.js`](./Pixiv_Image_Searches_and_Stuff.user.js) | nottalulah/userscripts | [2026.04.16](./archives/Pixiv_Image_Searches_and_Stuff-2026.04.16.user.js) |
+| [Upload To Danbooru (Mod)](#upload-to-danbooru-mod) | [`upload-to-danbooru.user.js`](./upload-to-danbooru.user.js) | hdk5/danbooru.user.js | [20251213184813](./archives/upload-to-danbooru-20251213184813.user.js) |
 
 ## Pixiv Image Searches and Stuff (Mod)
 
@@ -51,6 +52,29 @@ Changes from the original:
 - The "new layout" check matches only `/` and `/en/` (was any path ending in `/`).
 
 Full history: `git log -- ExternalScripts/Pixiv_Image_Searches_and_Stuff.user.js`
+
+## Upload To Danbooru (Mod)
+
+Adds an "Upload to Danbooru" button next to images and posts on pixiv,
+Twitter/X, fanbox, Fantia, Bluesky, Mastodon instances and other supported
+sites. The button opens `/uploads/new` on the configured Danbooru with the
+source URL filled in.
+
+- **Runs on:** fantia.jp, misskey.io, www.pixiv.net, `*.fanbox.cc`, nijie.info,
+  twitter.com, x.com, ci-en.net, ci-en.dlsite.com, seiga.nicovideo.jp,
+  pawoo.net, baraag.net, inkbunny.net, xfolio.jp, bsky.app, gall.dcinside.com
+- **Install notes:** Disable the original "Upload To Danbooru". Updates are
+  manual; the upstream repository (hdk5/danbooru.user.js) is no longer
+  available. The archived baseline is not the pristine upstream build: pixiv
+  mobile support had already been added locally before it was archived.
+
+Changes from the original:
+
+- Header: `(Mod)` name, `@downloadURL none`, `@updateURL none`.
+- pixiv mobile: upload buttons on thumbnails and on the main artwork image (added locally before the baseline was archived).
+- Cleanup with no behavior change: shared button helper, one code style, dead code and shadowed names removed, attach failures logged, Fantia redirect lookups no longer download the file.
+
+Full history: `git log -- ExternalScripts/upload-to-danbooru.user.js`
 
 ## Section template
 

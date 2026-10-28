@@ -38,3 +38,19 @@ Only what must not break. One subsection per script.
   `reconcileExistingBars()`, and `releaseThumb()`. Never remove a bar owned by
   another live image, and record the key for skipped images so they are not
   re-queued every poll.
+
+### upload-to-danbooru.user.js
+- `findAndAttach()` marks handled elements with the `ex-utb` attribute, and the
+  mark is shared by every call. Fantia "1 - original" (sync) and "1 - thumbnail"
+  (async) use the same predicate and differ only by call order: images present
+  at load get the direct link, images added later go through the API. Keep the
+  order.
+- `selector` must stay a plain tag/attribute selector: MutationSummary element
+  queries accept no combinators or pseudo-classes. Finer matching goes in
+  `predicate`.
+- Sync attach computes the href once; `asyncClick` attach has no href and opens
+  the tab from the click handler via `GM_openInTab` (needed for the Firefox
+  container option).
+- pixiv main image: its src flips from a placeholder to i.pximg.net after
+  insertion, which element queries cannot see, so `scanMainArtwork()` polls
+  every second and attaches to the largest unmarked pximg image.
