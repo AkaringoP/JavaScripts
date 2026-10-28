@@ -567,6 +567,9 @@ function initializePixiv() {
     // Page URL without query/hash, used to detect SPA navigation between artworks
     const canonicalLocation = () => window.location.href.replace(/[?#].*$/, '');
 
+    // Buttons installed by the scanner, so SPA navigation can remove exactly those
+    let mainButtons = [];
+
     const attachMainArtworkBtn = (img) => {
       if (img.hasAttribute('ex-utb')) {
         return;
@@ -594,6 +597,7 @@ function initializePixiv() {
 
       ensureRelativeParent($el);
       $btn.insertBefore($el);
+      mainButtons.push({ img, $btn });
     };
 
     // Track the URL at the time we installed a button, so we can detect SPA navigation
@@ -604,11 +608,16 @@ function initializePixiv() {
         return;
       }
 
-      // If URL changed (SPA navigation to another artwork), remove old buttons + reset marks
+      // If URL changed (SPA navigation to another artwork), drop the scanner's own
+      // buttons and marks. Thumbnail buttons from findAndAttach above must stay:
+      // their anchors keep the ex-utb mark and would never be attached again.
       const canonicalUrl = canonicalLocation();
       if (_currentArtworkUrl && _currentArtworkUrl !== canonicalUrl) {
-        document.querySelectorAll('a.ex-utb-upload-button').forEach(el => el.remove());
-        document.querySelectorAll('img[ex-utb]').forEach(el => el.removeAttribute('ex-utb'));
+        for (const { img, $btn } of mainButtons) {
+          $btn.remove();
+          img.removeAttribute('ex-utb');
+        }
+        mainButtons = [];
       }
       _currentArtworkUrl = canonicalUrl;
 

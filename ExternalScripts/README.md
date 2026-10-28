@@ -73,6 +73,7 @@ Changes from the original:
 - Header: `(Mod)` name, `@downloadURL none`, `@updateURL none`.
 - pixiv mobile: upload buttons on thumbnails and on the main artwork image (added locally before the baseline was archived).
 - Cleanup with no behavior change: shared button helper, one code style, dead code and shadowed names removed, attach failures logged, Fantia redirect lookups no longer download the file.
+- pixiv: moving between artworks in-page no longer removes the thumbnail buttons.
 
 Full history: `git log -- ExternalScripts/upload-to-danbooru.user.js`
 
