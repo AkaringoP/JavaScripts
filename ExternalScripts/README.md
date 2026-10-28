@@ -35,8 +35,9 @@ Bug fixes:
 - **Retries no longer multiply.** A failed request used to be retried twice, once
   by `onerror` and once by the 20-second timer, so a Danbooru outage produced an
   exponential number of requests. Requests now use the `GM_xmlhttpRequest`
-  timeout and retry exactly once per attempt. A response slower than
-  20 seconds is now dropped and retried instead of being processed late.
+  timeout, with a fallback timer for managers that ignore it, and retry
+  exactly once per attempt. A response slower than 20 seconds is now dropped
+  and retried instead of being processed late.
 - **Main artwork bar shows errors.** A failed request used to leave the bar grey
   forever; it now turns the error color.
 - **Added `@connect donmai.us`** so Tampermonkey does not ask for cross-origin
@@ -45,7 +46,8 @@ Bug fixes:
 - **One bad thumbnail no longer breaks the batch.** Each thumbnail is processed
   in its own `try`/`catch`, and the polling loop isolates the thumbnail and
   main-artwork steps. An `<img>` with an empty `src` on an artwork page used to
-  throw and leave every later thumbnail in that batch unsearched.
+  throw and leave every later thumbnail in that batch unsearched. Such a
+  thumbnail now matches posts for any page of the work.
 - **Layout is fixed per batch.** Crossing the 768px breakpoint between a request
   and its retry used to throw and leave the bars grey.
 - **Late pixiv IDs are picked up.** A thumbnail whose ID can't be read yet is

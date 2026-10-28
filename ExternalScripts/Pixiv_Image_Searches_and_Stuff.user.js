@@ -200,7 +200,12 @@ function pageNumber(thumbImg, hasExpandedView) {
     if (link && link.classList.contains("gtm-illust-recommend-thumbnail-link")) {
         return -1;
     }
-    return pixivPageNumber(thumbImg.src || thumbImg.href);
+    const url = thumbImg.src || thumbImg.href;
+    // No URL to read the page from (e.g. empty src): match posts for any page.
+    if (!url) {
+        return -1;
+    }
+    return pixivPageNumber(url);
 }
 
 function pixivIllustID(url) {
@@ -220,16 +225,27 @@ function pixivPageNumber(url) {
 // network error, abort, or timeout, so every request settles exactly once.
 function GM_fetch(url) {
     return new Promise((resolve, reject) => {
-        const fail = (kind) => () => reject(new Error("GM_xmlhttpRequest " + kind + ": " + url));
-        GM_xmlhttpRequest({
+        const timeoutMs = sourceTimeout * 1000;
+        let watchdog = null;
+        const settle = (fn) => (arg) => {
+            clearTimeout(watchdog);
+            fn(arg);
+        };
+        const fail = (kind) => settle(() => reject(new Error("GM_xmlhttpRequest " + kind + ": " + url)));
+        const request = GM_xmlhttpRequest({
             url: url,
             method: "GET",
-            timeout: sourceTimeout * 1000,
-            onload: resolve,
+            timeout: timeoutMs,
+            onload: settle(resolve),
             onerror: fail("error"),
             onabort: fail("abort"),
             ontimeout: fail("timeout"),
         });
+        // Fallback for script managers that ignore `timeout`.
+        watchdog = setTimeout(() => {
+            reject(new Error("GM_xmlhttpRequest timeout (watchdog): " + url));
+            if (request && typeof request.abort === "function") request.abort();
+        }, timeoutMs + 1000);
     });
 }
 
