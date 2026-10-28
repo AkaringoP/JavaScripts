@@ -1,104 +1,70 @@
 # External Scripts
 
-Third-party userscripts that are kept and maintained in this repository.
-They were not written by AkaringoP. Each script keeps its original author's
-license; the repository's root MIT license does not cover them.
+Third-party userscripts kept here for personal use. They were not written by
+AkaringoP. Each script keeps its original author's license; the repository's
+root MIT license does not cover them.
 
-## Layout
+## Rules
 
-| Path | Purpose |
-| :--- | :--- |
-| `*.user.js` | Working copy. Local fixes go here. |
-| `archives/<Name>-<version>.user.js` | The file exactly as it was received. Never edited. |
-
-When a new upstream version is imported, add it to `archives/` unchanged first,
-then port it into the working copy in a separate commit so the diff shows the
-local changes.
+- **Layout.** Working copies sit directly in this folder next to this README.
+  `archives/` holds each original exactly as received and is never edited.
+  There are no other folders.
+- **File names.** A working copy keeps the upstream file name. An archived
+  original is named `<upstream file name without .user.js>-<@version>.user.js`.
+- **Importing.** For a new script or a new upstream version, commit the
+  original to `archives/` unchanged first. Then add or update the working copy
+  in a separate commit, so the diff shows exactly what changed locally.
+- **Headers.** Unless decided otherwise for a script, a working copy appends
+  `(Mod)` to its `@name` and sets `@downloadURL none`. It then never collides
+  with, or gets overwritten by, the upstream script. Disable the upstream
+  script when installing the working copy.
+- **Documentation.** Each script gets a row in the table below and a section
+  that follows the [template](#section-template). Changes are one-line bullets,
+  eight at most. Reasons and details belong in commit messages.
 
 ## Scripts
 
-| Script | Origin | Archived original |
-| :--- | :--- | :--- |
-| [Pixiv Image Searches and Stuff](./Pixiv_Image_Searches_and_Stuff.user.js) | `nottalulah/userscripts` (per its `@downloadURL`) | [`2026.04.16`](./archives/Pixiv_Image_Searches_and_Stuff-2026.04.16.user.js) |
+| Installed name | File | Origin | Based on |
+| :--- | :--- | :--- | :--- |
+| [Pixiv Image Searches and Stuff (Mod)](#pixiv-image-searches-and-stuff-mod) | [`Pixiv_Image_Searches_and_Stuff.user.js`](./Pixiv_Image_Searches_and_Stuff.user.js) | nottalulah/userscripts | [2026.04.16](./archives/Pixiv_Image_Searches_and_Stuff-2026.04.16.user.js) |
 
-## Pixiv Image Searches and Stuff
+## Pixiv Image Searches and Stuff (Mod)
 
-Runs on pixiv. Looks up each artwork thumbnail on Danbooru and marks it as
-found, source mismatch, bad revision, or missing. Desktop shows a status link
-plus IQDB/SauceNAO search links; mobile shows a colored bar under each
-thumbnail and one under the main artwork.
+Looks up pixiv thumbnails on Danbooru and marks each one as found, source
+mismatch, bad revision, or missing. Desktop shows a status link with IQDB and
+SauceNAO search links; mobile shows a colored bar.
 
-### Local changes from the archived 2026.04.16
+- **Runs on:** `www.pixiv.net`
+- **Install notes:** Disable the original "Pixiv Image Searches and Stuff", or
+  both run and split the thumbnails between them. Updates are manual; on
+  script managers other than Tampermonkey, also turn off update checks.
 
-Bug fixes:
+Changes from the original:
 
-- **Retries no longer multiply.** A failed request used to be retried twice, once
-  by `onerror` and once by the 20-second timer, so a Danbooru outage produced an
-  exponential number of requests. Requests now use the `GM_xmlhttpRequest`
-  timeout, with a fallback timer for managers that ignore it, and retry
-  exactly once per attempt. A response slower than 20 seconds is now dropped
-  and retried instead of being processed late.
-- **Main artwork bar shows errors.** A failed request used to leave the bar grey
-  forever; it now turns the error color.
-- **Added `@connect donmai.us`** so Tampermonkey does not ask for cross-origin
-  permission on the first request. It also covers Danbooru mirrors on
-  `donmai.us`.
-- **One bad thumbnail no longer breaks the batch.** Each thumbnail is processed
-  in its own `try`/`catch`, and the polling loop isolates the thumbnail and
-  main-artwork steps. An `<img>` with an empty `src` on an artwork page used to
-  throw and leave every later thumbnail in that batch unsearched. Such a
-  thumbnail now matches posts for any page of the work.
-- **Layout is fixed per batch.** Crossing the 768px breakpoint between a request
-  and its retry used to throw and leave the bars grey.
-- **Late pixiv IDs are picked up.** A thumbnail whose ID can't be read yet is
-  checked again on later polls, up to `maxIdAttempts` times.
-- **Main artwork bar is restored** if a page re-render removes it.
-- **Thumbnails reused by pixiv get a fresh status.** pixiv reuses thumbnail
-  elements when moving between pages, so a bar could keep showing the previous
-  artwork's result. The script now remembers which artwork each bar was made
-  for and replaces the bar when the thumbnail starts showing another one,
-  including a restricted-work placeholder. This also stops a duplicate bar on
-  the home page when an image is re-created.
-- **Placeholder thumbnails on expanded-view pages are matched.** A thumbnail
-  whose image is still a `data:`/`blob:` placeholder used to show
-  "(no sources)" there even when the post existed; it now matches posts for any
-  page of the work.
+- Failed requests retry once per attempt instead of multiplying; requests time out after 20 s.
+- The status refreshes when pixiv reuses a thumbnail for another artwork.
+- One failing thumbnail no longer stops the rest of its batch.
+- The mobile main artwork bar shows errors and returns after re-renders.
+- Placeholder, empty-src, and late-loading thumbnails are matched correctly.
+- Faster: CSS selectors, no jQuery, smaller API responses, debug work only when enabled.
+- Header: `(Mod)` name, `@downloadURL none`, `@connect donmai.us`, `@noframes`.
+- The "new layout" check matches only `/` and `/en/` (was any path ending in `/`).
 
-Performance:
+Full history: `git log -- ExternalScripts/Pixiv_Image_Searches_and_Stuff.user.js`
 
-- The debug-only DOM dump and layout reads now run only when `PISAS_DEBUG` is on.
-  The dump used to run every second on pages with no new thumbnails.
-- XPath lookups were replaced with equivalent CSS selectors (`querySelectorAll`).
-- The like-button scan checks child count before reading `textContent`.
-- API calls request only the fields used (`only=`).
-- Result matching uses a map keyed by pixiv ID instead of a nested scan.
-- Retries stop for thumbnails that are no longer on the page.
-- jQuery (`@require` 3.2.1) was removed.
+## Section template
 
-Cleanup:
+```markdown
+## <Installed name>
 
-- Removed unused options (`addIQDBSearch`, `thumbCheckPeriod`,
-  `pixivTransparentSrc`), unused grants (`GM_getValue`, `GM_setValue`,
-  `GM_deleteValue`), and two unused selectors.
-- Selectors are referenced by name instead of by index.
-- Added `@noframes`.
-- Renamed to `Pixiv Image Searches and Stuff (Mod)` so it is never mistaken
-  for, or replaced by, the upstream script.
-- `@downloadURL none` turns off automatic update checks, so an upstream
-  release can't overwrite the local changes.
-- IQDB and SauceNAO links URL-encode the image URL.
-- `var` → `const`/`let`, `==` → `===`.
+<One or two sentences on what the script does.>
 
-Behavior change:
+- **Runs on:** <sites>
+- **Install notes:** <what to disable or set first, or "None">
 
-- The "new layout" check now matches only `/` and `/en/` (plus request pages).
-  It used to match any path ending in `/`.
+Changes from the original:
 
-### Notes
+- <one line per change, eight at most>
 
-- Because of the new name, the script manager installs this as a separate
-  script. Disable or delete the original "Pixiv Image Searches and Stuff",
-  otherwise both run on the same page and split the thumbnails between them.
-- `@downloadURL none` is honored by Tampermonkey. On other script managers,
-  turn off update checks for this script in its settings.
-- `@version` is still `2026.04.16`. Updates are installed by hand.
+Full history: `git log -- ExternalScripts/<file name>.user.js`
+```
