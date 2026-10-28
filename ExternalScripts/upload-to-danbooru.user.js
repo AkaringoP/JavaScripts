@@ -555,6 +555,9 @@ function initializePixiv() {
   });
 
   // Mobile: main artwork image on /artworks/:id pages.
+  // The scanner is installed on every page: pixiv is a single-page app, so an
+  // artwork page is usually reached without a page load. scanMainArtwork()
+  // returns early anywhere else.
   // Uses polling rather than findAndAttach because:
   //  - MutationSummary only fires on element ADDITION, not attribute changes
   //  - Main images often start with a data URL placeholder and only get the real
@@ -566,105 +569,103 @@ function initializePixiv() {
   // Images that cannot be the artwork are skipped up front: avatars and profile
   // backgrounds, and thumbnails that link to a different artwork (those get
   // their own button from the thumbnail handlers above).
-  if (/\/artworks\/\d+/.test(window.location.pathname)) {
-    // Page URL without query/hash, used to detect SPA navigation between artworks
-    const canonicalLocation = () => window.location.href.replace(/[?#].*$/, '');
-    const artworkId = url => /\/artworks\/(\d+)/.exec(url)?.[1];
+  // Page URL without query/hash, used to detect SPA navigation between artworks
+  const canonicalLocation = () => window.location.href.replace(/[?#].*$/, '');
+  const artworkId = url => /\/artworks\/(\d+)/.exec(url)?.[1];
 
-    // Buttons installed by the scanner, so SPA navigation can remove exactly those
-    let mainButtons = [];
+  // Buttons installed by the scanner, so SPA navigation can remove exactly those
+  let mainButtons = [];
 
-    const attachMainArtworkBtn = (img) => {
+  const attachMainArtworkBtn = (img) => {
+    if (img.hasAttribute('ex-utb')) {
+      return;
+    }
+    img.setAttribute('ex-utb', '');
+
+    const $el = $(img);
+    const $btn = createButton([
+      'ex-utb-upload-button-absolute',
+      'ex-utb-upload-button-bottom-left',
+    ]);
+    $btn.attr('target', '_blank');
+    // Set href dynamically on interaction to avoid stale URLs after SPA navigation.
+    // Keep href fresh for middle-click and also handle regular click manually.
+    const refreshHref = () => {
+      $btn.attr('href', generateUploadUrl(canonicalLocation(), null));
+    };
+    refreshHref();
+    $btn.on('mouseenter touchstart focus', refreshHref);
+    $btn.on('click auxclick', (ev) => {
+      refreshHref();
+      ev.stopPropagation();
+    });
+    $btn.on('mousedown', e => e.stopPropagation());
+
+    ensureRelativeParent($el);
+    $btn.insertBefore($el);
+    mainButtons.push({ img, $btn });
+  };
+
+  // Track the URL at the time we installed a button, so we can detect SPA navigation
+  let _currentArtworkUrl = null;
+
+  const scanMainArtwork = () => {
+    if (!/\/artworks\/\d+/.test(window.location.pathname)) {
+      return;
+    }
+
+    // If URL changed (SPA navigation to another artwork), drop the scanner's own
+    // buttons and marks. Thumbnail buttons from findAndAttach above must stay:
+    // their anchors keep the ex-utb mark and would never be attached again.
+    const canonicalUrl = canonicalLocation();
+    if (_currentArtworkUrl && _currentArtworkUrl !== canonicalUrl) {
+      for (const { img, $btn } of mainButtons) {
+        $btn.remove();
+        img.removeAttribute('ex-utb');
+      }
+      mainButtons = [];
+    }
+    _currentArtworkUrl = canonicalUrl;
+
+    // Find all pixiv-hosted imgs, pick the largest one that doesn't already have a button
+    const pageArtworkId = artworkId(window.location.pathname);
+    let best = null;
+    let bestArea = 0;
+    document.querySelectorAll('img').forEach((img) => {
       if (img.hasAttribute('ex-utb')) {
         return;
       }
-      img.setAttribute('ex-utb', '');
-
-      const $el = $(img);
-      const $btn = createButton([
-        'ex-utb-upload-button-absolute',
-        'ex-utb-upload-button-bottom-left',
-      ]);
-      $btn.attr('target', '_blank');
-      // Set href dynamically on interaction to avoid stale URLs after SPA navigation.
-      // Keep href fresh for middle-click and also handle regular click manually.
-      const refreshHref = () => {
-        $btn.attr('href', generateUploadUrl(canonicalLocation(), null));
-      };
-      refreshHref();
-      $btn.on('mouseenter touchstart focus', refreshHref);
-      $btn.on('click auxclick', (ev) => {
-        refreshHref();
-        ev.stopPropagation();
-      });
-      $btn.on('mousedown', e => e.stopPropagation());
-
-      ensureRelativeParent($el);
-      $btn.insertBefore($el);
-      mainButtons.push({ img, $btn });
-    };
-
-    // Track the URL at the time we installed a button, so we can detect SPA navigation
-    let _currentArtworkUrl = null;
-
-    const scanMainArtwork = () => {
-      if (!/\/artworks\/\d+/.test(window.location.pathname)) {
+      if (!img.src || !img.src.includes('i.pximg.net')) {
         return;
       }
-
-      // If URL changed (SPA navigation to another artwork), drop the scanner's own
-      // buttons and marks. Thumbnail buttons from findAndAttach above must stay:
-      // their anchors keep the ex-utb mark and would never be attached again.
-      const canonicalUrl = canonicalLocation();
-      if (_currentArtworkUrl && _currentArtworkUrl !== canonicalUrl) {
-        for (const { img, $btn } of mainButtons) {
-          $btn.remove();
-          img.removeAttribute('ex-utb');
-        }
-        mainButtons = [];
+      // Avatars and profile backgrounds are never the artwork
+      if (/\/(user-profile|background)\//.test(img.src)) {
+        return;
       }
-      _currentArtworkUrl = canonicalUrl;
-
-      // Find all pixiv-hosted imgs, pick the largest one that doesn't already have a button
-      const pageArtworkId = artworkId(window.location.pathname);
-      let best = null;
-      let bestArea = 0;
-      document.querySelectorAll('img').forEach((img) => {
-        if (img.hasAttribute('ex-utb')) {
-          return;
-        }
-        if (!img.src || !img.src.includes('i.pximg.net')) {
-          return;
-        }
-        // Avatars and profile backgrounds are never the artwork
-        if (/\/(user-profile|background)\//.test(img.src)) {
-          return;
-        }
-        // Thumbnails of other artworks belong to the thumbnail handlers above
-        const link = img.closest('a[href*="/artworks/"]');
-        if (link && artworkId(link.href) !== pageArtworkId) {
-          return;
-        }
-        const rect = img.getBoundingClientRect();
-        const area = rect.width * rect.height;
-        // Too small even for a preview
-        if (area < 150 * 150) {
-          return;
-        }
-        if (area > bestArea) {
-          best = img;
-          bestArea = area;
-        }
-      });
-      if (best) {
-        attachMainArtworkBtn(best);
+      // Thumbnails of other artworks belong to the thumbnail handlers above
+      const link = img.closest('a[href*="/artworks/"]');
+      if (link && artworkId(link.href) !== pageArtworkId) {
+        return;
       }
-    };
+      const rect = img.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      // Too small even for a preview
+      if (area < 150 * 150) {
+        return;
+      }
+      if (area > bestArea) {
+        best = img;
+        bestArea = area;
+      }
+    });
+    if (best) {
+      attachMainArtworkBtn(best);
+    }
+  };
 
-    // Initial scan + periodic re-scan to catch late-loaded src attributes and view changes
-    scanMainArtwork();
-    setInterval(scanMainArtwork, 1000);
-  }
+  // Initial scan + periodic re-scan to catch late-loaded src attributes and view changes
+  scanMainArtwork();
+  setInterval(scanMainArtwork, 1000);
 }
 
 function initializeFanbox() {

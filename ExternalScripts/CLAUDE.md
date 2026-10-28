@@ -53,7 +53,7 @@ Only what must not break. One subsection per script.
   container option).
 - pixiv main image: its src flips from a placeholder to i.pximg.net after
   insertion, which element queries cannot see, so `scanMainArtwork()` polls
-  every second and attaches to the largest unmarked pximg image. It records
+  every second on every page and attaches to the largest unmarked pximg image. It records
   its own buttons in `mainButtons` and removes only those on navigation;
   thumbnail buttons must survive, since their anchors keep `ex-utb` and are
   never attached again.
