@@ -207,8 +207,13 @@ function findAndAttach(options) {
     const $el = $(el);
     const $btn = createButton(fullOptions.classes);
 
+    // Resolves to null when the element yields no source URL
     const fetchUploadUrl = async () => {
       const url = await fullOptions.toUrl(el);
+      if (!url) {
+        console.warn('[UtD] no source URL for', el);
+        return null;
+      }
       const ref = await fullOptions.toRef(el);
       return generateUploadUrl(url, ref);
     };
@@ -227,11 +232,14 @@ function findAndAttach(options) {
         $btn.css('cursor', 'wait');
 
         try {
-          GM_openInTab(await fetchUploadUrl(), {
-            active: ev.button === 0 && !ev.ctrlKey,
-            setParent: true,
-            container: GM_config.get('container_enabled') ? GM_config.get('container_id') : null,
-          });
+          const uploadUrl = await fetchUploadUrl();
+          if (uploadUrl) {
+            GM_openInTab(uploadUrl, {
+              active: ev.button === 0 && !ev.ctrlKey,
+              setParent: true,
+              container: GM_config.get('container_enabled') ? GM_config.get('container_id') : null,
+            });
+          }
         }
         catch (err) {
           console.error(err);
@@ -250,7 +258,12 @@ function findAndAttach(options) {
       $btn.on('mousedown', e => e.preventDefault());
     }
     else {
-      $btn.attr('href', await fetchUploadUrl());
+      const uploadUrl = await fetchUploadUrl();
+      if (!uploadUrl) {
+        el.removeAttribute('ex-utb');
+        return;
+      }
+      $btn.attr('href', uploadUrl);
       $btn.attr('target', '_blank');
 
       $btn.on('click', e => e.stopPropagation());
@@ -939,8 +952,7 @@ function initializeDcinside() {
           src = match[1];
         }
       }
-      src = src.replace('viewimagePop.php', 'viewimage.php');
-      return src;
+      return src && src.replace('viewimagePop.php', 'viewimage.php');
     },
     toRef: locationToRef,
     callback: async ($el, $btn) => $el.prepend($btn),
