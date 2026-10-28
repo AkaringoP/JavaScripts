@@ -6,11 +6,13 @@ script list, and one short section per script. Follow it when adding or
 updating a script.
 
 ## Rules
-- `archives/` holds files exactly as received. Never edit them.
+- `archives/` holds files exactly as received, except that Korean comments
+  are translated to English on import. Never edit them after that.
 - No folders other than `archives/`, and no per-script note files. All notes go
   in `README.md`.
-- Import in two commits: (1) the original into `archives/` unchanged, (2) the
-  working copy. Local changes must stay reviewable as a diff.
+- Import in two commits: (1) the original into `archives/`, unchanged apart
+  from the comment translation above, (2) the working copy. Local changes
+  must stay reviewable as a diff.
 - Keep each script's original code style (indentation, quotes) so upstream
   diffs stay readable. Root GJS rules apply only to new code.
 - Header changes (`@name`, `@downloadURL`, `@version`, `@match`, `@grant`) need

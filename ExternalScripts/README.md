@@ -7,13 +7,15 @@ root MIT license does not cover them.
 ## Rules
 
 - **Layout.** Working copies sit directly in this folder next to this README.
-  `archives/` holds each original exactly as received and is never edited.
+  `archives/` holds each original exactly as received and is never edited,
+  except that Korean comments are translated to English on import.
   There are no other folders.
 - **File names.** A working copy keeps the upstream file name. An archived
   original is named `<upstream file name without .user.js>-<@version>.user.js`.
 - **Importing.** For a new script or a new upstream version, commit the
-  original to `archives/` unchanged first. Then add or update the working copy
-  in a separate commit, so the diff shows exactly what changed locally.
+  original to `archives/` first, unchanged apart from translating Korean
+  comments to English. Then add or update the working copy in a separate
+  commit, so the diff shows exactly what changed locally.
 - **Headers.** Unless decided otherwise for a script, a working copy appends
   `(Mod)` to its `@name` and sets `@downloadURL none`. It then never collides
   with, or gets overwritten by, the upstream script. Disable the upstream
