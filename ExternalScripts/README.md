@@ -53,6 +53,15 @@ Bug fixes:
 - **Late pixiv IDs are picked up.** A thumbnail whose ID can't be read yet is
   checked again on later polls, up to `maxIdAttempts` times.
 - **Main artwork bar is restored** if a page re-render removes it.
+- **Thumbnails reused by pixiv get a fresh status.** pixiv reuses thumbnail
+  elements when moving between pages, so a bar could keep showing the previous
+  artwork's result. The script now remembers which artwork each bar was made
+  for and replaces the bar when the thumbnail starts showing another one. This
+  also stops a duplicate bar on the home page when an image is re-created.
+- **Placeholder thumbnails on expanded-view pages are matched.** A thumbnail
+  whose image is still a `data:`/`blob:` placeholder used to show
+  "(no sources)" there even when the post existed; it now matches posts for any
+  page of the work.
 
 Performance:
 

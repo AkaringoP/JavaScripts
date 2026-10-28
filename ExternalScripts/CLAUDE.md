@@ -30,6 +30,11 @@ Single file, `@grant GM_xmlhttpRequest`, no `@require`. Polls every
 
 Key behaviors to preserve:
 - `mobile` is decided once per batch and passed through retries and pages.
+- pixiv reuses thumbnail elements on navigation. `thumbState` (img → anchor,
+  src+href key, bar) and `barInfo` (bar → owner img, pixiv ID) let
+  `resetReusedThumbs()` re-queue changed images and `reconcileExistingBars()`
+  keep same-artwork bars and drop leftovers. A bar whose owner is another live
+  image is never removed.
 - Narrow the thumbnail list only on page 1; later pages must repeat the same
   query or results shift.
 - `thumbSelectors` must stay equivalent to the XPath selectors in the archived

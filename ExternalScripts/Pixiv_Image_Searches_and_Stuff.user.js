@@ -201,8 +201,9 @@ function pageNumber(thumbImg, hasExpandedView) {
         return -1;
     }
     const url = thumbImg.src || thumbImg.href;
-    // No URL to read the page from (e.g. empty src): match posts for any page.
-    if (!url) {
+    // No real image URL to read the page from (empty src, or a data:/blob:
+    // placeholder while lazy loading): match posts for any page.
+    if (!url || /^(data:|blob:)/.test(url)) {
         return -1;
     }
     return pixivPageNumber(url);
@@ -318,6 +319,48 @@ function retryIdLater(thumbImg) {
     }
 }
 
+// pixiv's SPA reuses thumbnail elements when navigating: the same <img> (or a
+// new <img> in the same cell) can start showing another artwork. These track
+// what each thumbnail and bar was made for, so leftovers can be replaced.
+const thumbState = new WeakMap(); // img -> {anchor, key, bar}
+const barInfo = new WeakMap(); // status bar -> {owner: img, pixivId}
+
+function thumbKey(thumbImg, anchorEl) {
+    return thumbImg.src + "\n" + anchorEl.href;
+}
+
+// Clears the `pisas` mark on images whose src/link changed since they were
+// processed, so this poll picks them up again.
+function resetReusedThumbs() {
+    for (const img of document.querySelectorAll("img[pisas]")) {
+        const state = thumbState.get(img);
+        if (!state) continue;
+        if (!state.anchor.contains(img) || thumbKey(img, state.anchor) !== state.key) {
+            img.removeAttribute("pisas");
+            img.removeAttribute("data-pisas-id-tries");
+        }
+    }
+}
+
+// Looks at bars this image or its slot already has. A bar made for the same
+// artwork is kept (returns true: nothing more to do). A bar made for another
+// artwork whose owner image changed or is gone is removed. Bars that belong to
+// another live thumbnail are left for the already-processed check.
+function reconcileExistingBars(thumbImg, pixivId, state, bars) {
+    for (const bar of bars) {
+        const info = barInfo.get(bar);
+        if (!info || (info.owner !== thumbImg && info.owner.isConnected)) continue;
+        if (info.pixivId === pixivId) {
+            info.owner = thumbImg;
+            state.bar = bar;
+            return true;
+        }
+        bar.remove();
+        if (state.bar === bar) state.bar = null;
+    }
+    return false;
+}
+
 let _runCount = 0;
 // Main functions
 async function processThumbs() {
@@ -332,6 +375,7 @@ async function processThumbs() {
     }
     debugLog("path: " + location.pathname + " → selectors: [" + matchedSelectors.keys.join(",") + "]");
 
+    resetReusedThumbs();
     const thumbSearch = document.querySelectorAll(matchedSelectors.selector);
     for (const item of thumbSearch) {
         item.setAttribute("pisas", "done");
@@ -399,6 +443,11 @@ function prepareThumb(thumbImg, t, ctx) {
     }
     if (!anchorEl) return null; // no anchor at all — skip
 
+    // Remember what this image shows now, so a later reuse is noticed.
+    const previous = thumbState.get(thumbImg);
+    const state = { anchor: anchorEl, key: thumbKey(thumbImg, anchorEl), bar: previous ? previous.bar : null };
+    thumbState.set(thumbImg, state);
+
     const thumbCont = anchorEl.parentNode;
 
     // For mobile: walk up to find the thumbnail cell wrapper
@@ -434,6 +483,11 @@ function prepareThumb(thumbImg, t, ctx) {
     }
     // If no pixivId, don't place a bar we can't resolve; look at it again on a later poll.
     if (!pixivId) {
+        // A bar from the artwork this image showed before is no longer valid.
+        if (state.bar && state.bar.isConnected) {
+            state.bar.remove();
+            state.bar = null;
+        }
         retryIdLater(thumbImg);
         return null;
     }
@@ -465,6 +519,20 @@ function prepareThumb(thumbImg, t, ctx) {
         }
     }
 
+    // Bars already here from an earlier pass: this image's own bar and any in its slot.
+    const existingBars = new Set();
+    if (state.bar && state.bar.isConnected) existingBars.add(state.bar);
+    (mobile ? barContainer : thumbCont).querySelectorAll(".pisas-dummydiv").forEach(function(bar) {
+        existingBars.add(bar);
+    });
+    const nextSibling = thumbCont.nextElementSibling;
+    if (!mobile && isNew && nextSibling && nextSibling.classList.contains("pisas-dummydiv")) {
+        existingBars.add(nextSibling);
+    }
+    if (reconcileExistingBars(thumbImg, pixivId, state, existingBars)) {
+        return null;
+    }
+
     // Already-processed check
     if (mobile) {
         if (barContainer.querySelector(".pisas-dummydiv")) {
@@ -480,6 +548,8 @@ function prepareThumb(thumbImg, t, ctx) {
 
     const paddingBottom = (isNew || mobile) ? "" : "1em";
     const dummyDiv = createDummyDiv(thumbImg.src, { paddingBottom: paddingBottom }, mobile);
+    barInfo.set(dummyDiv, { owner: thumbImg, pixivId: pixivId });
+    state.bar = dummyDiv;
 
     if (mobile) {
         dummyDiv.classList.add("pisas-mobile-bar-abs");
