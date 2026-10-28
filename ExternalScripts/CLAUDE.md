@@ -6,11 +6,13 @@ script list, and one short section per script. Follow it when adding or
 updating a script.
 
 ## Rules
-- `archives/` holds files exactly as received. Never edit them.
+- `archives/` holds files exactly as received, except that Korean comments
+  are translated to English on import. Never edit them after that.
 - No folders other than `archives/`, and no per-script note files. All notes go
   in `README.md`.
-- Import in two commits: (1) the original into `archives/` unchanged, (2) the
-  working copy. Local changes must stay reviewable as a diff.
+- Import in two commits: (1) the original into `archives/`, unchanged apart
+  from the comment translation above, (2) the working copy. Local changes
+  must stay reviewable as a diff.
 - Keep each script's original code style (indentation, quotes) so upstream
   diffs stay readable. Root GJS rules apply only to new code.
 - Header changes (`@name`, `@downloadURL`, `@version`, `@match`, `@grant`) need
@@ -38,3 +40,27 @@ Only what must not break. One subsection per script.
   `reconcileExistingBars()`, and `releaseThumb()`. Never remove a bar owned by
   another live image, and record the key for skipped images so they are not
   re-queued every poll.
+
+### upload-to-danbooru.user.js
+- `findAndAttach()` marks handled elements with the `ex-utb` attribute, and the
+  mark is shared by every call. Fantia "1 - original" (sync) and "1 - thumbnail"
+  (async) use the same predicate and differ only by call order: images present
+  at load get the direct link, images added later go through the API. Keep the
+  order.
+- `selector` must stay a plain tag/attribute selector: MutationSummary element
+  queries accept no combinators or pseudo-classes. Finer matching goes in
+  `predicate`.
+- Sync attach sets the href at attach time and recomputes it on hover, press,
+  focus, context menu, and touch (`bindHrefRefresh()`), because pixiv reuses
+  list elements and the anchor's href changes under the button. `asyncClick`
+  attach has no href and opens the tab from the click handler via
+  `GM_openInTab` (needed for the Firefox container option).
+- Fantia post and image lookups go through `memoizeAsync()`, which forgets a
+  rejected result; keep that, or one failed request blocks every click until
+  reload.
+- pixiv main image: its src flips from a placeholder to i.pximg.net after
+  insertion, which element queries cannot see, so `scanMainArtwork()` polls
+  every second on every page and attaches to the largest unmarked pximg
+  image. It records its own buttons in `mainButtons` and removes only those
+  on navigation; thumbnail buttons must survive, since their anchors keep
+  `ex-utb` and are never attached again.

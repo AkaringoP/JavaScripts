@@ -1,0 +1,937 @@
+// ==UserScript==
+// @name         Upload To Danbooru
+// @author       hdk5
+// @version      20251213184813
+// @description  another userscript for uploading to danbooru
+// @namespace    https://github.com/hdk5/danbooru.user.js
+// @homepageURL  https://github.com/hdk5/danbooru.user.js
+// @supportURL   https://github.com/hdk5/danbooru.user.js/issues
+// @updateURL    https://github.com/hdk5/danbooru.user.js/raw/master/dist/upload-to-danbooru.user.js
+// @downloadURL  https://github.com/hdk5/danbooru.user.js/raw/master/dist/upload-to-danbooru.user.js
+// @match        *://fantia.jp/*
+// @match        *://misskey.io/*
+// @match        *://www.pixiv.net/*
+// @match        *://*.fanbox.cc/*
+// @match        *://nijie.info/*
+// @match        *://twitter.com/*
+// @match        *://x.com/*
+// @match        *://ci-en.net/*
+// @match        *://ci-en.dlsite.com/*
+// @match        *://seiga.nicovideo.jp/*
+// @match        *://pawoo.net/*
+// @match        *://baraag.net/*
+// @match        *://inkbunny.net/*
+// @match        *://xfolio.jp/*
+// @match        *://bsky.app/*
+// @match        *://gall.dcinside.com/*
+// @grant        GM_addStyle
+// @grant        GM_getResourceURL
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_openInTab
+// @grant        GM_registerMenuCommand
+// @grant        GM.xmlHttpRequest
+// @inject-into  content
+// @noframes
+// @connect      lohas.nicoseiga.jp
+// @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js
+// @require      https://github.com/rafaelw/mutation-summary/raw/421110f84178aa9e4098b38df83f727e5aea3d97/src/mutation-summary.js
+// @require      https://github.com/sizzlemctwizzle/GM_config/raw/06f2015c04db3aaab9717298394ca4f025802873/gm_config.js
+// @resource     danbooru_icon https://github.com/danbooru/danbooru/raw/0fd95375fac5cc036ff0141c3987abb0a03991b7/public/images/danbooru-logo.png
+// ==/UserScript==
+
+/* globals
+  GM
+  GM_addStyle
+  GM_getResourceURL
+  GM_openInTab
+  GM_registerMenuCommand
+
+  GM_config
+  MutationSummary
+  $
+*/
+
+GM_config.init({
+  id: 'UtdConfig',
+  title: 'Upload-to-Danbooru Settings',
+  fields: {
+    booru: {
+      label: 'Danbooru domain',
+      section: ['General'],
+      type: 'text',
+      default: 'https://danbooru.donmai.us',
+    },
+    container_enabled: {
+      label: 'Enabled',
+      section: ['Container', 'Firefox, Violentmonkey only'],
+      type: 'checkbox',
+      default: false,
+    },
+    container_id: {
+      label: 'Container ID',
+      type: 'int',
+      default: 0,
+    },
+  },
+});
+
+GM_registerMenuCommand('Settings', () => {
+  GM_config.open();
+});
+
+const PROGRAM_CSS = `
+.ex-utb-upload-button {
+  display: inline-flex !important;
+  align-self: center;
+  align-items: center;
+  vertical-align: middle;
+  margin: 5px;
+  padding: 5px !important;
+  cursor: pointer;
+  background: rgba(0,0,0,0.5);
+  text-decoration: none !important;
+  color: white !important;
+  font-family: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
+}
+
+.ex-utb-upload-button:hover {
+  background: rgba(0,0,0,0.75);
+}
+
+.ex-utb-upload-button-absolute {
+  position: absolute;
+  z-index: 1;
+}
+
+.ex-utb-upload-button-bottom-left {
+  bottom: 0;
+  left: 0;
+}
+
+.ex-utb-upload-button-icon {
+  height: 1.2em;
+  vertical-align: middle;
+}
+`;
+
+// Tag function for template literals to remove newlines and leading spaces
+function noIndents(strings, ...values) {
+  // Remove all spaces before/after a tag and leave one in other cases
+  const compactStrings = strings.map(str =>
+    str.replace(/(>)?\n *(<)?/g, (s, lt, gt) => lt && gt ? lt + gt : lt || gt ? lt || gt : ' '),
+  );
+
+  const res = Array.from({ length: values.length * 2 + 1 });
+
+  for (let i = 0; i < values.length; i++) {
+    res[i * 2] = compactStrings[i];
+    res[i * 2 + 1] = values[i];
+  }
+  res[res.length - 1] = compactStrings[compactStrings.length - 1];
+
+  return res.join('');
+}
+
+const locationToRef = async _el => window.location;
+
+function generateUploadUrl(url, ref) {
+  const booru = GM_config.get('booru');
+  const uploadUrl = new URL('uploads/new', booru);
+
+  uploadUrl.searchParams.set('url', url);
+
+  if (ref) {
+    uploadUrl.searchParams.set('ref', ref);
+  }
+
+  return uploadUrl.href;
+}
+
+function parseHtml(text, baseHref) {
+  if (baseHref === undefined) {
+    baseHref = new URL('/', window.location).href;
+  }
+
+  const document = new DOMParser().parseFromString(text, 'text/html');
+  const base = document.createElement('base');
+  base.href = baseHref;
+  document.head.appendChild(base);
+  return document;
+}
+
+function findAndAttach(options) {
+  const fullOptions = {
+    selector: null,
+    asyncAttach: false,
+    asyncClick: false,
+    predicate: _el => true,
+    classes: [],
+    toUrl: async el => $(el).closest('a').prop('href'),
+    toRef: async _el => null,
+    callback: async (_el, _btn) => null,
+    ...options,
+  };
+
+  if (typeof fullOptions.predicate === 'string') {
+    const predicateSelector = fullOptions.predicate;
+    fullOptions.predicate = el => $(el).is(predicateSelector);
+  }
+
+  const attach = async (el) => {
+    if (!fullOptions.predicate(el)) {
+      return;
+    }
+    if (el.hasAttribute('ex-utb')) {
+      return;
+    }
+    el.setAttribute('ex-utb', '');
+
+    const $el = $(el);
+    const $btn = $(noIndents`
+      <a class="ex-utb-upload-button">
+        <img
+          class="ex-utb-upload-button-icon"
+          title="Upload to Danbooru"
+          src="${GM_getResourceURL('danbooru_icon')}">
+      </a>
+    `);
+
+    fullOptions.classes.forEach(clazz => $btn.addClass(clazz));
+
+    const fetchUploadUrl = async () => {
+      const url = await fullOptions.toUrl(el);
+      const ref = await fullOptions.toRef(el);
+      return generateUploadUrl(url, ref);
+    };
+
+    if (fullOptions.asyncClick) {
+      let ready = true;
+      const onclick = async (ev) => {
+        if (!ready) {
+          return;
+        }
+        if (![0, 1].includes(ev.button)) {
+          return;
+        }
+
+        ready = false;
+        $btn.css('cursor', 'wait');
+
+        try {
+          GM_openInTab(await fetchUploadUrl(), {
+            active: ev.button === 0 && !ev.ctrlKey,
+            setParent: true,
+            container: (GM_config.get('container_enabled') || null) && GM_config.get('container_id'),
+          });
+        }
+        catch (err) {
+          console.error(err);
+        }
+
+        $btn.css('cursor', '');
+        ready = true;
+      };
+
+      $btn.on('click', e => e.preventDefault());
+      $btn.on('auxclick', e => e.preventDefault());
+      $btn.on('click', onclick);
+      $btn.on('auxclick', onclick);
+
+      // Prevent middle-click autoscroll
+      $btn.on('mousedown', e => e.preventDefault());
+    }
+    else {
+      $btn.attr('href', await fetchUploadUrl());
+      $btn.attr('target', '_blank');
+
+      $btn.on('click', e => e.stopPropagation());
+      $btn.on('auxclick', e => e.stopPropagation());
+      $btn.on('mousedown', e => e.stopPropagation());
+    }
+
+    await fullOptions.callback($el, $btn);
+  };
+
+  $(fullOptions.selector).each((i, el) => attach(el));
+
+  if (!fullOptions.asyncAttach) {
+    return;
+  }
+
+  // eslint-disable-next-line no-new
+  new MutationSummary({
+    rootNode: document.body,
+    queries: [{ element: fullOptions.selector }],
+    callback: ([summary]) => summary.added.forEach(attach),
+  });
+}
+
+function initializeFantia() {
+  // 1. post_content_photo (e.g. https://fantia.jp/posts/2302310)
+  // 2. album_image (e.g. https://fantia.jp/posts/2293136)
+  // 3. download  (e.g. https://fantia.jp/posts/61560)
+
+  const postUrlMatch = /^\/posts\/(\d+)/.exec(new URL(window.location).pathname);
+  if (postUrlMatch) {
+    const postId = postUrlMatch[1];
+
+    let _post;
+    const _fetchPost = async () => {
+      const csrfToken = $('meta[name="csrf-token"]').attr('content');
+      const url = `https://fantia.jp/api/v1/posts/${postId}`;
+      const response = await fetch(url, {
+        headers: {
+          'X-CSRF-Token': csrfToken,
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      const post = await response.json();
+      return post.post;
+    };
+    const fetchPost = () => {
+      if (_post === undefined) {
+        _post = _fetchPost();
+      }
+      return _post;
+    };
+
+    let _images;
+    const _fetchImages = async () => {
+      const post = await fetchPost();
+
+      const images = {
+        photo: {},
+        file: {},
+        blog: {},
+      };
+
+      for (const content of post.post_contents) {
+        if (content.visible_status !== 'visible') {
+          continue;
+        }
+
+        if (content.category === 'photo_gallery') {
+          for (const photo of content.post_content_photos) {
+            images.photo[photo.id] = photo.url.original;
+          }
+        }
+        else if (content.category === 'file') {
+          images.file[content.id] = new URL(content.download_uri, 'https://fantia.jp').href;
+        }
+        else if (content.category === 'blog' && content.comment) {
+          const comment = JSON.parse(content.comment);
+          for (const node of comment.ops) {
+            const fantiaImage = node.insert?.fantiaImage;
+            if (fantiaImage) {
+              images.blog[fantiaImage.id] = new URL(fantiaImage.original_url, 'https://fantia.jp').href;
+            }
+          }
+        }
+      }
+      return images;
+    };
+    const fetchImages = () => {
+      if (_images === undefined) {
+        _images = _fetchImages();
+      }
+      return _images;
+    };
+
+    const ref = new URL(postUrlMatch[0], window.location).href;
+    const toRef = async () => ref;
+
+    // 1 - original image
+    findAndAttach({
+      selector: 'img',
+      predicate: el =>
+        el.src
+        && /^\/uploads\/post_content_photo\/file\/\d+\//.test(
+          new URL(el.src).pathname,
+        ),
+      classes: ['ex-utb-upload-button-absolute'],
+      toUrl: async el => el.src,
+      toRef,
+      callback: async ($el, $btn) => $btn.insertBefore($el),
+    });
+
+    // 1 - thumbnail
+    findAndAttach({
+      selector: 'img',
+      predicate: el =>
+        el.src
+        && /^\/uploads\/post_content_photo\/file\/\d+\//.test(
+          new URL(el.src).pathname,
+        ),
+      classes: ['ex-utb-upload-button-absolute'],
+      asyncAttach: true,
+      asyncClick: true,
+      toUrl: async (el) => {
+        const match = /\/file\/(\d+)\//.exec(new URL(el.src).pathname);
+        const id = Number.parseInt(match[1], 10);
+        const images = await fetchImages();
+        const url = images.photo[id];
+        if (url) {
+          return url;
+        }
+
+        // Fallback
+        const imagePageUrl = `${ref}/post_content_photo/${id}`;
+        const imagePageResponse = await fetch(imagePageUrl);
+        const imagePageHtml = await imagePageResponse.text();
+        const imagePageDom = parseHtml(imagePageHtml);
+        return $(imagePageDom).find('img').prop('src');
+      },
+      toRef,
+      callback: async ($el, $btn) => $btn.insertBefore($el.closest('.image-container')),
+    });
+
+    // 2
+    findAndAttach({
+      selector: 'a',
+      predicate: el => el.href && /^\/posts\/\d+\/album_image$/.test(new URL(el.href).pathname),
+      classes: ['ex-utb-upload-button-absolute'],
+      asyncAttach: true,
+      asyncClick: true,
+      toUrl: async (el) => {
+        // TODO: url here redirects to the image, but danbooru extractor doesn't handle it
+        // const id = $(el).data('id');
+        // const images = await fetchImages();
+        // const url = images.blog[id];
+        // if (url) {
+        //   return url;
+        // }
+
+        // Fallback
+        return (await fetch(el.href)).url;
+      },
+      toRef,
+      callback: async ($el, $btn) => $el.prepend($btn),
+    });
+
+    // 3
+    findAndAttach({
+      selector: 'a',
+      predicate: el => el.href && /^\/posts\/\d+\/download\/\d+$/.test(new URL(el.href).pathname),
+      classes: ['ex-utb-upload-button-absolute'],
+      asyncAttach: true,
+      asyncClick: true,
+      toUrl: async (el) => {
+        // TODO: same case as (2)
+        // const match = /\/download\/(\d+)$/.exec(new URL(el.href).pathname);
+        // const id = Number.parseInt(match[1], 10);
+        // const images = await fetchImages();
+        // const url = images.file[id];
+        // if (url) {
+        //   return url;
+        // }
+
+        // Fallback
+        return (await fetch(el.href)).url;
+      },
+      toRef,
+      callback: async ($el, $btn) => $btn.insertBefore($el),
+    });
+  }
+}
+
+function initializeMisskey() {
+  // Add the button to reactions row
+  GM_addStyle(`
+    .ex-utb-upload-button-icon {
+      height: 1.5em;
+    }
+    .ex-utb-upload-button {
+      margin: unset;
+      margin-bottom: 3px;
+      margin-right: 10px;
+    }
+  `);
+
+  // Timeline
+  // User notes
+  findAndAttach({
+    selector: 'article.x5yeR',
+    // predicate: '.xvu6Q article.x5yeR',
+    asyncAttach: true,
+    toUrl: async el => $(el).find('.xAtlm a').prop('href'),
+    callback: async ($el, $btn) => $el.find('footer.xhAPG').append($btn),
+  });
+
+  // Note
+  findAndAttach({
+    selector: 'article.xexC6',
+    // predicate: '.xvu6Q article.xexC6',
+    asyncAttach: true,
+    toUrl: async el => $(el).find('.xi1ty a').prop('href'),
+    callback: async ($el, $btn) => $el.find('> footer').append($btn),
+  });
+}
+
+function initializePixiv() {
+  // Desktop: thumbnails via data-gtm-value
+  findAndAttach({
+    selector: 'a',
+    predicate: 'a[data-gtm-value][href*="artworks"]',
+    classes: [
+      'ex-utb-upload-button-absolute',
+      'ex-utb-upload-button-bottom-left',
+    ],
+    asyncAttach: true,
+    callback: async ($el, $btn) => $btn.insertBefore($el),
+  });
+
+  // Mobile: thumbnail anchors that wrap images on various mobile pages.
+  // Uses a function predicate that matches any anchor linking to /artworks/:id
+  // that contains an image and has thumbnail-like dimensions. This covers:
+  //   - search results
+  //   - related works on artwork pages
+  //   - discovery feed
+  //   - bookmarks / rankings / user works
+  // Skips small nav-link anchors, router links at top of page, etc.
+  findAndAttach({
+    selector: 'a',
+    predicate: (el) => {
+      if (!el.href) return false;
+      var hrefMatch = el.href.match(/\/artworks\/(\d+)/);
+      if (!hrefMatch) return false;
+      // Skip the desktop-case anchors already handled (avoid double buttons)
+      if (el.hasAttribute('data-gtm-value')) return false;
+      // On an artwork page, skip anchors that self-link to the current artwork —
+      // these are typically the main image wrapper or self-links, and the main
+      // image handler below takes care of them.
+      var pathMatch = location.pathname.match(/\/artworks\/(\d+)/);
+      if (pathMatch && hrefMatch[1] === pathMatch[1]) return false;
+      // Must be a visual thumbnail — contain an img or figure
+      if (!el.querySelector('img, figure')) return false;
+      // Must have reasonable size (skip nav-prev, tiny header avatars, etc.)
+      var r = el.getBoundingClientRect();
+      if (r.width < 80 || r.height < 80) return false;
+      return true;
+    },
+    classes: [
+      'ex-utb-upload-button-absolute',
+      'ex-utb-upload-button-bottom-left',
+    ],
+    asyncAttach: true,
+    callback: async ($el, $btn) => {
+      // Ensure anchor's parent is position:relative so absolute overlay anchors correctly
+      var $parent = $el.parent();
+      if ($parent.css('position') === 'static' || !$parent.css('position')) {
+        $parent.css('position', 'relative');
+      }
+      $btn.insertBefore($el);
+    },
+  });
+
+  // Mobile: main artwork image on /artworks/:id pages.
+  // Uses polling rather than findAndAttach because:
+  //  - MutationSummary only fires on element ADDITION, not attribute changes
+  //  - Main images often start with a data URL placeholder and only get the real
+  //    i.pximg.net src after the image loads, which MutationSummary misses
+  //
+  // Strategy: on each scan, find the LARGEST <img> with i.pximg.net src on the page
+  // and attach a button to it. This reliably identifies the main artwork (which is
+  // bigger than adjacent thumbnails) regardless of exact preview/fullsize mode.
+  if (/\/artworks\/\d+/.test(location.pathname)) {
+    var attachMainArtworkBtn = (img) => {
+      if (img.hasAttribute('ex-utb')) return;
+      img.setAttribute('ex-utb', '');
+
+      const $el = $(img);
+      const $btn = $(noIndents`
+        <a class="ex-utb-upload-button ex-utb-upload-button-absolute ex-utb-upload-button-bottom-left" target="_blank">
+          <img
+            class="ex-utb-upload-button-icon"
+            title="Upload to Danbooru"
+            src="${GM_getResourceURL('danbooru_icon')}">
+        </a>
+      `);
+      // Set href dynamically on interaction to avoid stale URLs after SPA navigation.
+      // Keep href fresh for middle-click and also handle regular click manually.
+      const refreshHref = () => {
+        $btn.attr('href', generateUploadUrl(location.href.replace(/[?#].*$/, ''), null));
+      };
+      refreshHref();
+      $btn.on('mouseenter touchstart focus', refreshHref);
+      $btn.on('click auxclick', (ev) => {
+        refreshHref();
+        ev.stopPropagation();
+      });
+      $btn.on('mousedown', e => e.stopPropagation());
+
+      const $parent = $el.parent();
+      if ($parent.css('position') === 'static' || !$parent.css('position')) {
+        $parent.css('position', 'relative');
+      }
+      $btn.insertBefore($el);
+    };
+
+    // Track the URL at the time we installed a button, so we can detect SPA navigation
+    let _currentArtworkUrl = null;
+
+    const scanMainArtwork = () => {
+      if (!/\/artworks\/\d+/.test(location.pathname)) return;
+
+      // If URL changed (SPA navigation to another artwork), remove old buttons + reset marks
+      const canonicalUrl = location.href.replace(/[?#].*$/, '');
+      if (_currentArtworkUrl && _currentArtworkUrl !== canonicalUrl) {
+        document.querySelectorAll('a.ex-utb-upload-button').forEach((el) => el.remove());
+        document.querySelectorAll('img[ex-utb]').forEach((el) => el.removeAttribute('ex-utb'));
+      }
+      _currentArtworkUrl = canonicalUrl;
+
+      // Find all pixiv-hosted imgs, pick the largest one that doesn't already have a button
+      let best = null;
+      let bestArea = 0;
+      document.querySelectorAll('img').forEach((img) => {
+        if (img.hasAttribute('ex-utb')) return;
+        if (!img.src || img.src.indexOf('i.pximg.net') < 0) return;
+        if (img.src.indexOf('s.pximg.net') >= 0) return; // UI icon
+        const r = img.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (area < 150 * 150) return; // too small even for preview
+        if (area > bestArea) {
+          best = img;
+          bestArea = area;
+        }
+      });
+      if (best) attachMainArtworkBtn(best);
+    };
+
+    // Initial scan + periodic re-scan to catch late-loaded src attributes and view changes
+    scanMainArtwork();
+    setInterval(scanMainArtwork, 1000);
+  }
+}
+
+function initializeFanbox() {
+  // Post images
+  findAndAttach({
+    selector: 'a',
+    predicate: 'a[class|="PostImage__Anchor"]',
+    classes: [
+      'ex-utb-upload-button-absolute',
+    ],
+    asyncAttach: true,
+    toUrl: async el => el.href,
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $btn.insertBefore($el),
+  });
+
+  // Downloadable attachments
+  findAndAttach({
+    selector: 'a',
+    predicate: 'a[class|="FileContent__DownloadLink"]',
+    asyncAttach: true,
+    toUrl: async el => el.href,
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $el.find('button div').prepend($btn),
+  });
+}
+
+function initializeNijie() {
+  GM_addStyle(`
+    .ex-utb-upload-button-icon {
+      border: unset !important;
+      padding: unset !important;
+    }
+  `);
+
+  // Post thumbnails
+  findAndAttach({
+    selector: '.nijie',
+    classes: ['ex-utb-upload-button-absolute'],
+    asyncAttach: true,
+    toUrl: async el => $(el).find('a').prop('href'),
+    callback: async ($el, $btn) => $el.find('.mozamoza').parent().prepend($btn),
+  });
+}
+
+function initializeTwitter() {
+  GM_addStyle(`
+    .ex-utb-upload-button {
+      padding: unset !important;
+      margin: unset;
+      margin-inline-start: 12px;
+      background: none;
+      position: relative;
+      order: 9999;
+    }
+
+    .ex-utb-upload-button:hover {
+      background: unset;
+    }
+
+    .ex-utb-upload-button-icon {
+      height: 1.25em;
+    }
+
+    /* probably tweet page */
+    article[tabindex="-1"] .ex-utb-upload-button-icon {
+      height: 1.5em;
+    }
+
+    .ex-utb-upload-button-twitter-hover {
+      border-radius: 9999px;
+      position: absolute;
+      top: 0px;
+      bottom: 0px;
+      left: 0px;
+      right: 0px;
+      margin: -8px;
+    }
+
+    .ex-utb-upload-button-twitter-hover:hover {
+      background: rgba(174,137,102,0.15);
+    }
+  `);
+
+  const toRef = async el => $(el).find('time').closest('a').prop('href');
+
+  const toUrl = async (el) => {
+    let url;
+
+    const tweetPhoto = $(el).find('[data-testid="tweetPhoto"]').not('div[role="link"] *');
+    if (tweetPhoto.length === 1) {
+      url = tweetPhoto.find('img, video').not('div[data-testid="previewInterstitial"] *').attr('src');
+    }
+    if (url === undefined) {
+      url = await toRef(el);
+    };
+
+    return url;
+  };
+
+  findAndAttach({
+    selector: 'article',
+    predicate: 'article[data-testid=tweet]',
+    asyncAttach: true,
+    asyncClick: true,
+    toUrl,
+    toRef,
+    callback: async ($el, $btn) => {
+      $btn.append('<div class="ex-utb-upload-button-twitter-hover">');
+      $el.find('div[role=group]').append($btn);
+    },
+  });
+}
+
+function initializeCien() {
+  findAndAttach({
+    selector: 'img.file-player-image',
+    predicate: 'img.file-player-image[data-raw]',
+    classes: ['ex-utb-upload-button-absolute'],
+    asyncAttach: true,
+    toUrl: async el => $(el).attr('data-raw'),
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $btn.insertBefore($el),
+  });
+}
+
+function initializeNicoSeiga() {
+  findAndAttach({
+    selector: 'a#illust_link',
+    classes: ['ex-utb-upload-button-absolute'],
+    asyncClick: true,
+    toUrl: async (el) => {
+      const response = await GM.xmlHttpRequest({
+        url: $(el).prop('href'),
+      });
+      return response.finalUrl.replace(/\/o\//, '/priv/');
+    },
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $btn.insertBefore($el),
+  });
+}
+
+function initializeMastodon() {
+  GM_addStyle(`
+    .ex-utb-upload-button {
+      padding: 2px !important;
+      margin: unset;
+      background: none;
+      border-radius: 4px;
+    }
+
+    .ex-utb-upload-button:hover {
+      background: rgba(174,137,102,0.15);
+    }
+
+    .ex-utb-upload-button-icon {
+      height: 18px;
+    }
+  `);
+
+  findAndAttach({
+    selector: 'div',
+    predicate: 'div.status__action-bar, div.detailed-status__action-bar',
+    asyncAttach: true,
+    toUrl: async el => $(el)
+      .closest('div.status__wrapper, div.detailed-status__wrapper')
+      .find('a.status__relative-time, a.detailed-status__datetime')
+      .prop('href'),
+    callback: async ($el, $btn) => $el.children().last().before($btn),
+  });
+}
+
+function initializeInkbunny() {
+  GM_addStyle(`
+    .ex-utb-upload-button {
+      padding: unset !important;
+      margin: unset;
+      vertical-align: unset;
+    }
+  `);
+
+  findAndAttach({
+    selector: 'div.widget_thumbnailFromSubmission_icons',
+    asyncAttach: true,
+    toUrl: async el => $(el)
+      .parent()
+      .find('div.widget_imageFromSubmission a')
+      .prop('href'),
+    callback: async ($el, $btn) => $el.append($btn),
+  });
+}
+
+function initializeXfolio() {
+  GM_addStyle(`
+    .ex-utb-upload-button {
+      position: absolute;
+      right: 20px;
+      top: 20px;
+      width: 36px;
+    }
+
+    .ex-utb-upload-button-icon {
+      height: auto;
+    }
+  `);
+
+  const toUrl = async (el) => {
+    // TODO: doesn't work on the main danbooru instance
+    let url = $(el).find('img').attr('src');
+
+    const openIcon = $(el).find('.openIcon');
+    if (openIcon.length === 1) {
+      url = openIcon.attr('href');
+    }
+
+    return url;
+  };
+
+  findAndAttach({
+    selector: 'div.article__wrap_img',
+    asyncAttach: true,
+    toUrl,
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $el.append($btn),
+  });
+}
+
+function initializeBluesky() {
+  GM_addStyle(`
+    .ex-utb-upload-button {
+      padding: 5px !important;
+      margin: unset;
+      background: none;
+      border-radius: 9999px;
+    }
+
+    .ex-utb-upload-button:hover {
+      background: rgba(174,137,102,0.15);
+    }
+  `);
+
+  findAndAttach({
+    selector: 'div',
+    predicate: 'div[data-testid^="feedItem-by-"]',
+    asyncAttach: true,
+    toUrl: el => $(el).find('a').filter((i, el) => /\/profile\/[\w.-]+\/post\/\w+/.exec($(el).attr('href'))).prop('href'),
+    callback: async ($el, $btn) => $el.find('[data-testid="postDropdownBtn"]').parent().parent().parent().append($btn),
+  });
+
+  findAndAttach({
+    selector: 'div',
+    predicate: 'div[data-testid^="postThreadItem-by-"]',
+    asyncAttach: true,
+    toUrl: locationToRef,
+    callback: async ($el, $btn) => $el.find('[data-testid="postDropdownBtn"]').parent().parent().parent().append($btn),
+  });
+}
+
+function initializeDcinside() {
+  findAndAttach({
+    selector: 'div.imgwrap',
+    asyncAttach: true,
+    classes: ['ex-utb-upload-button-absolute'],
+    toUrl: (el) => {
+      const mediaElement = $(el).find('img, video');
+      let src = mediaElement.attr('data-src') || mediaElement.attr('src');
+      if (mediaElement.attr('onclick')) {
+        const onclick = mediaElement.attr('onclick');
+        const match = /^javascript:imgPop\('([^']*)'/.exec(onclick);
+        if (match) {
+          src = match[1];
+        }
+      }
+      src = src.replace('viewimagePop.php', 'viewimage.php');
+      return src;
+    },
+    toRef: locationToRef,
+    callback: async ($el, $btn) => $el.prepend($btn),
+  });
+}
+
+function initialize() {
+  GM_addStyle(PROGRAM_CSS);
+
+  switch (window.location.host) {
+    case 'fantia.jp':
+      initializeFantia();
+      break;
+    case 'misskey.io':
+      initializeMisskey();
+      break;
+    case 'www.pixiv.net':
+      initializePixiv();
+      break;
+    case 'nijie.info':
+      initializeNijie();
+      break;
+    case 'twitter.com':
+    case 'x.com':
+      initializeTwitter();
+      break;
+    case 'ci-en.net':
+    case 'ci-en.dlsite.com':
+      initializeCien();
+      break;
+    case 'seiga.nicovideo.jp':
+      initializeNicoSeiga();
+      break;
+    case 'baraag.net':
+    case 'pawoo.net':
+      initializeMastodon();
+      break;
+    case 'inkbunny.net':
+      initializeInkbunny();
+      break;
+    case 'xfolio.jp':
+      initializeXfolio();
+      break;
+    case 'bsky.app':
+      initializeBluesky();
+      break;
+    case 'gall.dcinside.com':
+      initializeDcinside();
+      break;
+    default:
+      if (window.location.host.endsWith('.fanbox.cc')) {
+        initializeFanbox();
+      }
+  }
+}
+
+setTimeout(initialize, 0);
