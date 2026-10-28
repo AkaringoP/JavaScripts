@@ -9,6 +9,7 @@ GitHub repository: `AkaringoP/JavaScripts`
 |---|---|---|---|
 | BottomUpTagRemoval | JS | None (single file) | Confirmation popover that walks implication chains and offers to remove parent tags when a child is removed |
 | DanbooruInsights | TS | Vite + vite-plugin-monkey | Contribution graph & analytics dashboard |
+| ExternalScripts | JS | None (single files) | Third-party userscripts maintained here; originals kept unchanged in `ExternalScripts/archives/` (see `ExternalScripts/CLAUDE.md`) |
 | GroupingTags | TS | Vite + vite-plugin-monkey | Tag grouping |
 | LocateInGallery | JS | None (single file) | Gallery page location finder |
 | MobileNoteAssist | JS | None (single file) | Mobile note assistant *(moved to AkaringoP/Danbooru-Mobile-Note-Assist — `.user.js` retained as transition stub for legacy install URL)* |
