@@ -74,10 +74,10 @@ Changes from the original:
 - pixiv mobile: upload buttons on thumbnails and on the main artwork image (added locally before the baseline was archived).
 - Cleanup with no behavior change: shared button helper, one code style, dead code and shadowed names removed, attach failures logged, Fantia redirect lookups no longer download the file.
 - pixiv: moving between artworks in-page no longer removes the thumbnail buttons.
-- pixiv: the main-artwork button skips other artworks' thumbnails and profile images.
-- pixiv: the main-artwork button also appears after in-page navigation to an artwork.
+- pixiv: the main-artwork button skips other artworks' thumbnails and profile images, and also appears after in-page navigation to an artwork.
 - No button, and a console warning, when no source URL can be determined (was a link with `url=undefined`).
 - Fantia: a failed post API request is retried on the next click instead of failing until reload.
+- Buttons recompute their link on hover, press, or touch, so reused list elements (pixiv) no longer open the previous item.
 
 Full history: `git log -- ExternalScripts/upload-to-danbooru.user.js`
 

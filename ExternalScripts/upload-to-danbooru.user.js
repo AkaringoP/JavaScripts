@@ -135,6 +135,15 @@ function noIndents(strings, ...values) {
 
 const DANBOORU_ICON_URL = GM_getResourceURL('danbooru_icon');
 
+// Recompute a button's href right before anything that can follow or copy it.
+// Sites such as pixiv reuse list elements for other items, so an href computed
+// at attach time can end up pointing at the previous item.
+function bindHrefRefresh($btn, refreshHref) {
+  $btn.on('mouseenter mousedown focus contextmenu', refreshHref);
+  // Passive, so the browser does not wait on it before scrolling
+  $btn[0].addEventListener('touchstart', refreshHref, { passive: true });
+}
+
 function createButton(classes) {
   const $btn = $(noIndents`
     <a class="ex-utb-upload-button">
@@ -273,13 +282,29 @@ function findAndAttach(options) {
       $btn.on('mousedown', e => e.preventDefault());
     }
     else {
-      const uploadUrl = await fetchUploadUrl();
-      if (!uploadUrl) {
+      const refreshHref = async () => {
+        let uploadUrl = null;
+        try {
+          uploadUrl = await fetchUploadUrl();
+        }
+        catch (err) {
+          console.error('[UtD] could not build the upload URL for', el, err);
+        }
+        if (uploadUrl) {
+          $btn.attr('href', uploadUrl);
+        }
+        else {
+          $btn.removeAttr('href');
+        }
+        return uploadUrl;
+      };
+
+      if (!await refreshHref()) {
         el.removeAttribute('ex-utb');
         return;
       }
-      $btn.attr('href', uploadUrl);
       $btn.attr('target', '_blank');
+      bindHrefRefresh($btn, refreshHref);
 
       $btn.on('click', e => e.stopPropagation());
       $btn.on('auxclick', e => e.stopPropagation());
@@ -611,7 +636,7 @@ function initializePixiv() {
       $btn.attr('href', generateUploadUrl(canonicalLocation(), null));
     };
     refreshHref();
-    $btn.on('mouseenter touchstart focus', refreshHref);
+    bindHrefRefresh($btn, refreshHref);
     $btn.on('click auxclick', (ev) => {
       refreshHref();
       ev.stopPropagation();

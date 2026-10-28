@@ -48,9 +48,11 @@ Only what must not break. One subsection per script.
 - `selector` must stay a plain tag/attribute selector: MutationSummary element
   queries accept no combinators or pseudo-classes. Finer matching goes in
   `predicate`.
-- Sync attach computes the href once; `asyncClick` attach has no href and opens
-  the tab from the click handler via `GM_openInTab` (needed for the Firefox
-  container option).
+- Sync attach sets the href at attach time and recomputes it on hover, press,
+  focus, context menu, and touch (`bindHrefRefresh()`), because pixiv reuses
+  list elements and the anchor's href changes under the button. `asyncClick`
+  attach has no href and opens the tab from the click handler via
+  `GM_openInTab` (needed for the Firefox container option).
 - Fantia post and image lookups go through `memoizeAsync()`, which forgets a
   rejected result; keep that, or one failed request blocks every click until
   reload.
