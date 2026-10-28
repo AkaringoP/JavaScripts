@@ -56,8 +56,9 @@ Bug fixes:
 - **Thumbnails reused by pixiv get a fresh status.** pixiv reuses thumbnail
   elements when moving between pages, so a bar could keep showing the previous
   artwork's result. The script now remembers which artwork each bar was made
-  for and replaces the bar when the thumbnail starts showing another one. This
-  also stops a duplicate bar on the home page when an image is re-created.
+  for and replaces the bar when the thumbnail starts showing another one,
+  including a restricted-work placeholder. This also stops a duplicate bar on
+  the home page when an image is re-created.
 - **Placeholder thumbnails on expanded-view pages are matched.** A thumbnail
   whose image is still a `data:`/`blob:` placeholder used to show
   "(no sources)" there even when the post existed; it now matches posts for any

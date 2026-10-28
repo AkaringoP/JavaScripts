@@ -33,8 +33,10 @@ Key behaviors to preserve:
 - pixiv reuses thumbnail elements on navigation. `thumbState` (img → anchor,
   src+href key, bar) and `barInfo` (bar → owner img, pixiv ID) let
   `resetReusedThumbs()` re-queue changed images and `reconcileExistingBars()`
-  keep same-artwork bars and drop leftovers. A bar whose owner is another live
-  image is never removed.
+  keep same-artwork bars and drop leftovers. `releaseThumb()` handles images
+  that show nothing searchable (s.pximg.net icons or placeholders, no link, no
+  ID): it drops their own bar and records the key so they are not re-queued
+  every poll. A bar whose owner is another live image is never removed.
 - Narrow the thumbnail list only on page 1; later pages must repeat the same
   query or results shift.
 - `thumbSelectors` must stay equivalent to the XPath selectors in the archived

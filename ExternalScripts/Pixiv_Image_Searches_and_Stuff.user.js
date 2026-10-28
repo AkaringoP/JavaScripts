@@ -326,7 +326,7 @@ const thumbState = new WeakMap(); // img -> {anchor, key, bar}
 const barInfo = new WeakMap(); // status bar -> {owner: img, pixivId}
 
 function thumbKey(thumbImg, anchorEl) {
-    return thumbImg.src + "\n" + anchorEl.href;
+    return thumbImg.src + "\n" + (anchorEl ? anchorEl.href : "");
 }
 
 // Clears the `pisas` mark on images whose src/link changed since they were
@@ -335,11 +335,25 @@ function resetReusedThumbs() {
     for (const img of document.querySelectorAll("img[pisas]")) {
         const state = thumbState.get(img);
         if (!state) continue;
-        if (!state.anchor.contains(img) || thumbKey(img, state.anchor) !== state.key) {
+        if ((state.anchor && !state.anchor.contains(img)) || thumbKey(img, state.anchor) !== state.key) {
             img.removeAttribute("pisas");
             img.removeAttribute("data-pisas-id-tries");
         }
     }
+}
+
+// This image shows nothing to search right now (UI icon, restricted-work
+// placeholder, no link, or no readable pixiv ID). Drop the bar it still owns from
+// an earlier artwork, and record its current src/href so it is only looked at
+// again when they change.
+function releaseThumb(thumbImg, anchorEl) {
+    const previous = thumbState.get(thumbImg);
+    if (previous && previous.bar) {
+        const info = barInfo.get(previous.bar);
+        if (info && info.owner === thumbImg) previous.bar.remove();
+    }
+    const anchor = anchorEl || (previous ? previous.anchor : null);
+    thumbState.set(thumbImg, { anchor: anchor, key: thumbKey(thumbImg, anchor), bar: null });
 }
 
 // Looks at bars this image or its slot already has. A bar made for the same
@@ -347,18 +361,19 @@ function resetReusedThumbs() {
 // artwork whose owner image changed or is gone is removed. Bars that belong to
 // another live thumbnail are left for the already-processed check.
 function reconcileExistingBars(thumbImg, pixivId, state, bars) {
+    let kept = null;
     for (const bar of bars) {
         const info = barInfo.get(bar);
         if (!info || (info.owner !== thumbImg && info.owner.isConnected)) continue;
-        if (info.pixivId === pixivId) {
-            info.owner = thumbImg;
-            state.bar = bar;
-            return true;
+        if (!kept && info.pixivId === pixivId) {
+            kept = bar;
+            continue;
         }
         bar.remove();
-        if (state.bar === bar) state.bar = null;
     }
-    return false;
+    state.bar = kept;
+    if (kept) barInfo.get(kept).owner = thumbImg;
+    return kept !== null;
 }
 
 let _runCount = 0;
@@ -415,6 +430,7 @@ function prepareThumb(thumbImg, t, ctx) {
     // even though they may be inside an a[thumbnail_link] anchor.
     const imgSrc = thumbImg.src || "";
     if (imgSrc.indexOf("s.pximg.net") >= 0) {
+        releaseThumb(thumbImg, null);
         return null;
     }
 
@@ -441,7 +457,10 @@ function prepareThumb(thumbImg, t, ctx) {
         debugLog("r" + _runCount + " walk: " + walkTrace.slice(0, 8).join(" > "));
         debugLog("r" + _runCount + " anchor: " + (anchorEl ? (anchorEl.tagName + " href=" + (anchorEl.href || "").substring(0, 60)) : "NONE"));
     }
-    if (!anchorEl) return null; // no anchor at all — skip
+    if (!anchorEl) { // no anchor at all — skip
+        releaseThumb(thumbImg, null);
+        return null;
+    }
 
     // Remember what this image shows now, so a later reuse is noticed.
     const previous = thumbState.get(thumbImg);
@@ -483,11 +502,7 @@ function prepareThumb(thumbImg, t, ctx) {
     }
     // If no pixivId, don't place a bar we can't resolve; look at it again on a later poll.
     if (!pixivId) {
-        // A bar from the artwork this image showed before is no longer valid.
-        if (state.bar && state.bar.isConnected) {
-            state.bar.remove();
-            state.bar = null;
-        }
+        releaseThumb(thumbImg, anchorEl);
         retryIdLater(thumbImg);
         return null;
     }
