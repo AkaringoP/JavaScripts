@@ -563,9 +563,13 @@ function initializePixiv() {
   // Strategy: on each scan, find the LARGEST <img> with i.pximg.net src on the page
   // and attach a button to it. This reliably identifies the main artwork (which is
   // bigger than adjacent thumbnails) regardless of exact preview/fullsize mode.
+  // Images that cannot be the artwork are skipped up front: avatars and profile
+  // backgrounds, and thumbnails that link to a different artwork (those get
+  // their own button from the thumbnail handlers above).
   if (/\/artworks\/\d+/.test(window.location.pathname)) {
     // Page URL without query/hash, used to detect SPA navigation between artworks
     const canonicalLocation = () => window.location.href.replace(/[?#].*$/, '');
+    const artworkId = url => /\/artworks\/(\d+)/.exec(url)?.[1];
 
     // Buttons installed by the scanner, so SPA navigation can remove exactly those
     let mainButtons = [];
@@ -622,6 +626,7 @@ function initializePixiv() {
       _currentArtworkUrl = canonicalUrl;
 
       // Find all pixiv-hosted imgs, pick the largest one that doesn't already have a button
+      const pageArtworkId = artworkId(window.location.pathname);
       let best = null;
       let bestArea = 0;
       document.querySelectorAll('img').forEach((img) => {
@@ -629,6 +634,15 @@ function initializePixiv() {
           return;
         }
         if (!img.src || !img.src.includes('i.pximg.net')) {
+          return;
+        }
+        // Avatars and profile backgrounds are never the artwork
+        if (/\/(user-profile|background)\//.test(img.src)) {
+          return;
+        }
+        // Thumbnails of other artworks belong to the thumbnail handlers above
+        const link = img.closest('a[href*="/artworks/"]');
+        if (link && artworkId(link.href) !== pageArtworkId) {
           return;
         }
         const rect = img.getBoundingClientRect();
