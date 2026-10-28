@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name         Pixiv Image Searches and Stuff
+// @name         Pixiv Image Searches and Stuff (Mod)
 // @description  Searches Danbooru for pixiv IDs and source mismatches, adds IQDB image search links, and filters images based on pixiv favorites.
 // @match        *://www.pixiv.net/*
 // @grant        GM_xmlhttpRequest
 // @connect      donmai.us
 // @noframes
-// @downloadURL  https://github.com/nottalulah/userscripts/raw/master/Pixiv_Image_Searches_and_Stuff.user.js
+// @downloadURL  none
 // @version      2026.04.16
 // ==/UserScript==
 

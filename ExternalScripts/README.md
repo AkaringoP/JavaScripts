@@ -70,6 +70,10 @@ Cleanup:
   `GM_deleteValue`), and two unused selectors.
 - Selectors are referenced by name instead of by index.
 - Added `@noframes`.
+- Renamed to `Pixiv Image Searches and Stuff (Mod)` so it is never mistaken
+  for, or replaced by, the upstream script.
+- `@downloadURL none` turns off automatic update checks, so an upstream
+  release can't overwrite the local changes.
 - IQDB and SauceNAO links URL-encode the image URL.
 - `var` → `const`/`let`, `==` → `===`.
 
@@ -80,7 +84,9 @@ Behavior change:
 
 ### Notes
 
-- `@downloadURL` still points to the upstream repository. If the script manager
-  auto-updates from there, a newer upstream version replaces these local
-  changes.
-- `@version` is still `2026.04.16`.
+- Because of the new name, the script manager installs this as a separate
+  script. Disable or delete the original "Pixiv Image Searches and Stuff",
+  otherwise both run on the same page and split the thumbnails between them.
+- `@downloadURL none` is honored by Tampermonkey. On other script managers,
+  turn off update checks for this script in its settings.
+- `@version` is still `2026.04.16`. Updates are installed by hand.
