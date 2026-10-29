@@ -722,7 +722,7 @@
       "registered_at_utc": "2025-12-22T03:37:43.228Z",
       "completed": false,
       "post_count_at_build": 5917,
-      "post_count_30d_delta": 35
+      "post_count_30d_delta": 34
     },
     "bomhat": {
       "post_ids": [
@@ -813,6 +813,25 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 32,
+      "post_count_30d_delta": 0
+    },
+    "cherry_beries": {
+      "post_ids": [
+        472879
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "cherri_saurio",
+        "cherry_beries",
+        "honey_bnuy"
+      ],
+      "registered_at_utc": "2026-10-10T13:43:58.445Z",
+      "completed": false,
+      "post_count_at_build": 21,
       "post_count_30d_delta": 0
     },
     "chigu": {
@@ -1576,7 +1595,7 @@
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
       "post_count_at_build": 2129,
-      "post_count_30d_delta": 71
+      "post_count_30d_delta": 70
     },
     "hightguy": {
       "post_ids": [
@@ -2119,7 +2138,7 @@
         458449
       ],
       "approvers": [
-        "Placeholder1996"
+        "DanbooruAddict"
       ],
       "aliased_from": [],
       "pixiv_user_ids": [
@@ -2823,7 +2842,7 @@
         464353
       ],
       "approvers": [
-        "Placeholder1996"
+        "DanbooruAddict"
       ],
       "aliased_from": [],
       "pixiv_user_ids": [],
@@ -3059,7 +3078,7 @@
       "registered_at_utc": "2026-08-09T21:10:10.077Z",
       "completed": false,
       "post_count_at_build": 53,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 3
     },
     "macbail": {
       "post_ids": [
@@ -3136,7 +3155,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 276,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 5
     },
     "mangmuze": {
       "post_ids": [
@@ -3154,7 +3173,7 @@
       "registered_at_utc": "2026-09-16T21:22:11.189Z",
       "completed": false,
       "post_count_at_build": 62,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 6
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -3173,7 +3192,7 @@
       "registered_at_utc": "2025-12-30T21:18:51.102Z",
       "completed": false,
       "post_count_at_build": 178,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 63
     },
     "marulka": {
       "post_ids": [
@@ -3193,7 +3212,7 @@
       "registered_at_utc": "2025-03-30T08:07:27.418Z",
       "completed": false,
       "post_count_at_build": 108,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 3
     },
     "matanukisuna": {
       "post_ids": [
@@ -3246,7 +3265,7 @@
       "registered_at_utc": "2025-11-06T05:15:53.950Z",
       "completed": false,
       "post_count_at_build": 64,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "memori_(egachachachan)": {
       "post_ids": [
@@ -3266,7 +3285,7 @@
       "registered_at_utc": "2023-06-13T15:21:34.593Z",
       "completed": false,
       "post_count_at_build": 105,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "mew_mew_chikorita_moon": {
       "post_ids": [
@@ -3321,7 +3340,7 @@
       "registered_at_utc": "2025-04-14T23:14:43.005Z",
       "completed": false,
       "post_count_at_build": 22,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "miao_xiaoxing": {
       "post_ids": [
@@ -3429,7 +3448,7 @@
       "registered_at_utc": "2026-06-03T03:39:20.143Z",
       "completed": false,
       "post_count_at_build": 192,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 4
     },
     "miyao385": {
       "post_ids": [
@@ -3448,7 +3467,7 @@
       "registered_at_utc": "2026-05-25T12:59:14.722Z",
       "completed": false,
       "post_count_at_build": 86,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 10
     },
     "mko_(artist)": {
       "post_ids": [
@@ -3465,7 +3484,7 @@
       "registered_at_utc": "2025-09-22T17:17:40.538Z",
       "completed": false,
       "post_count_at_build": 145,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "moca_(mooooca)": {
       "post_ids": [
@@ -3582,7 +3601,7 @@
       "registered_at_utc": "2025-08-28T20:13:30.576Z",
       "completed": false,
       "post_count_at_build": 1187,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "muds": {
       "post_ids": [
@@ -3600,7 +3619,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 200,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 8
     },
     "muffin_(loveenanag)": {
       "post_ids": [
@@ -3674,7 +3693,7 @@
       "registered_at_utc": "2026-05-29T00:17:10.003Z",
       "completed": false,
       "post_count_at_build": 174,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "nagare750": {
       "post_ids": [
@@ -3693,7 +3712,7 @@
       "registered_at_utc": "2026-04-17T05:55:46.115Z",
       "completed": false,
       "post_count_at_build": 91,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 2
     },
     "nanakami_mana": {
       "post_ids": [
@@ -3750,7 +3769,7 @@
       "registered_at_utc": "2023-10-10T15:28:54.128Z",
       "completed": false,
       "post_count_at_build": 212,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 4
     },
     "nani_(artofnani)": {
       "post_ids": [
@@ -3887,7 +3906,7 @@
         470235
       ],
       "approvers": [
-        "Placeholder1996"
+        "DanbooruAddict"
       ],
       "aliased_from": [],
       "pixiv_user_ids": [
@@ -4172,7 +4191,7 @@
         476945
       ],
       "approvers": [
-        "Placeholder1996"
+        "DanbooruAddict"
       ],
       "aliased_from": [],
       "pixiv_user_ids": [
@@ -4381,7 +4400,7 @@
       "registered_at_utc": "2025-10-17T14:22:39.616Z",
       "completed": false,
       "post_count_at_build": 32,
-      "post_count_30d_delta": 3
+      "post_count_30d_delta": 2
     },
     "renren_(ah_renren)": {
       "post_ids": [
@@ -4628,7 +4647,7 @@
       "registered_at_utc": "2024-10-27T06:06:38.288Z",
       "completed": false,
       "post_count_at_build": 80,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "senn10000": {
       "post_ids": [
@@ -4737,7 +4756,7 @@
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
       "post_count_at_build": 65,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
@@ -4965,7 +4984,7 @@
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
       "post_count_at_build": 744,
-      "post_count_30d_delta": 28
+      "post_count_30d_delta": 27
     },
     "suaman": {
       "post_ids": [
@@ -5673,8 +5692,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 592,
-      "post_count_30d_delta": 404
+      "post_count_at_build": 611,
+      "post_count_30d_delta": 423
     },
     "womb_74": {
       "post_ids": [
@@ -5968,7 +5987,7 @@
       "registered_at_utc": "2026-09-29T00:08:20.537Z",
       "completed": false,
       "post_count_at_build": 33,
-      "post_count_30d_delta": 20
+      "post_count_30d_delta": 3
     },
     "yoshikawa_tatsuya": {
       "post_ids": [
@@ -5985,7 +6004,7 @@
       "registered_at_utc": "2025-03-07T18:34:08.298Z",
       "completed": false,
       "post_count_at_build": 150,
-      "post_count_30d_delta": 1
+      "post_count_30d_delta": 0
     },
     "youmeng33": {
       "post_ids": [
@@ -6004,7 +6023,7 @@
       "registered_at_utc": "2026-08-03T20:56:14.629Z",
       "completed": false,
       "post_count_at_build": 168,
-      "post_count_30d_delta": 56
+      "post_count_30d_delta": 18
     },
     "yu_cheng_hong": {
       "post_ids": [
@@ -6181,8 +6200,8 @@
       ],
       "registered_at_utc": "2025-08-11T05:41:45.766Z",
       "completed": false,
-      "post_count_at_build": 36,
-      "post_count_30d_delta": 1
+      "post_count_at_build": 37,
+      "post_count_30d_delta": 2
     },
     "zeriko": {
       "post_ids": [
@@ -6686,6 +6705,8 @@
     "bon_sichi_laika": "bonsichi",
     "bubbbling_bub": "spindlesong",
     "ca_gemini_": "ca_(ca_gemini)",
+    "cherri_saurio": "cherry_beries",
+    "cherry_beries": "cherry_beries",
     "chikoritamoon": "mew_mew_chikorita_moon",
     "chokueji": "chokueji",
     "chyobi256337115": "mika_030",
@@ -6758,6 +6779,7 @@
     "hisa_nn_": "hisakata_(hisa_nn)",
     "hit_by_hit": "hit_by_hit",
     "homo_1121": "lumo_1121",
+    "honey_bnuy": "cherry_beries",
     "hosizora_mikoto": "hosizora_mikoto",
     "hranxy": "somnolence_(hranxy)",
     "hu0dkja": "hu0dkja",
