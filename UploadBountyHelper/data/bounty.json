@@ -621,8 +621,8 @@
       ],
       "registered_at_utc": "2026-09-23T16:48:56.783Z",
       "completed": false,
-      "post_count_at_build": 223,
-      "post_count_30d_delta": 33
+      "post_count_at_build": 230,
+      "post_count_30d_delta": 40
     },
     "bibiri_(r42r98r)": {
       "post_ids": [
@@ -831,8 +831,8 @@
       ],
       "registered_at_utc": "2026-10-10T13:43:58.445Z",
       "completed": false,
-      "post_count_at_build": 21,
-      "post_count_30d_delta": 0
+      "post_count_at_build": 22,
+      "post_count_30d_delta": 1
     },
     "chigu": {
       "post_ids": [
@@ -1594,8 +1594,8 @@
       ],
       "registered_at_utc": "2025-11-11T20:22:04.681Z",
       "completed": false,
-      "post_count_at_build": 2129,
-      "post_count_30d_delta": 70
+      "post_count_at_build": 2130,
+      "post_count_30d_delta": 71
     },
     "hightguy": {
       "post_ids": [
@@ -3172,8 +3172,8 @@
       ],
       "registered_at_utc": "2026-09-16T21:22:11.189Z",
       "completed": false,
-      "post_count_at_build": 62,
-      "post_count_30d_delta": 6
+      "post_count_at_build": 63,
+      "post_count_30d_delta": 7
     },
     "marine_(confeitokobo)": {
       "post_ids": [
@@ -4756,7 +4756,7 @@
       "registered_at_utc": "2026-07-12T02:15:54.041Z",
       "completed": false,
       "post_count_at_build": 65,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "shimogamo_(shimomo_12)": {
       "post_ids": [
@@ -4983,8 +4983,8 @@
       ],
       "registered_at_utc": "2026-08-21T21:12:12.468Z",
       "completed": false,
-      "post_count_at_build": 744,
-      "post_count_30d_delta": 27
+      "post_count_at_build": 745,
+      "post_count_30d_delta": 28
     },
     "suaman": {
       "post_ids": [
@@ -5692,8 +5692,8 @@
       ],
       "registered_at_utc": "2026-06-25T21:44:52.241Z",
       "completed": false,
-      "post_count_at_build": 611,
-      "post_count_30d_delta": 423
+      "post_count_at_build": 619,
+      "post_count_30d_delta": 431
     },
     "womb_74": {
       "post_ids": [
@@ -6004,7 +6004,7 @@
       "registered_at_utc": "2025-03-07T18:34:08.298Z",
       "completed": false,
       "post_count_at_build": 150,
-      "post_count_30d_delta": 0
+      "post_count_30d_delta": 1
     },
     "youmeng33": {
       "post_ids": [
