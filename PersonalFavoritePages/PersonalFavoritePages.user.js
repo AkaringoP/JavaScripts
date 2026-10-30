@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.1.0
+// @version      0.2.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -60,7 +60,12 @@
   // gives one canonical URL per post (Resolved 15).
   const POST_DETAIL_PATTERN = /^\/posts\/\d+$/;
   const DATA_EXTENSION_PATTERN = /\.(?:json|xml|atom)$/;
-  const ACCOUNT_SUBPAGES = 'email|password|totp|backup_codes|api_keys';
+  const ACCOUNT_SUBPAGES =
+      'email|password|totp|backup_codes|api_keys|change_name';
+  // Form pages that stay savable: the upload page and the message composer,
+  // often kept with a prefilled query such as ?url= or ?dmail[to_name]=
+  // (Resolved 19).
+  const SAVABLE_FORM_PATTERN = /^\/(?:uploads|dmails)\/new$/;
   // Matched against the pathname with any data extension removed, so the
   // .json form of a denied page is denied too.
   const DENY_RULES = Object.freeze([
@@ -72,10 +77,17 @@
     },
     {reason: 'account', pattern: /^\/(?:api_keys|password)(?:\/|$)/},
     {reason: 'account', pattern: /^\/users\/(?:\d+\/)?deactivate$/},
+    // Writing and editing forms: Rails' new / edit routes plus the personal
+    // settings page (Resolved 17), except the two that work as tools.
+    {reason: 'form', pattern: /\/(?:new|edit)$/, except: SAVABLE_FORM_PATTERN},
+    {reason: 'form', pattern: /^\/settings$/},
     {reason: 'self', pattern: new RegExp(`^${LIST_PATH}/?$`)},
   ]);
   // body[data-action] values of Danbooru's static error pages (Resolved 15).
   const ERROR_ACTIONS = new Set(['not-found', 'error']);
+  // body[data-action] values of a form page. create / update show up when a
+  // failed submit re-renders the form at the collection URL (Resolved 17).
+  const FORM_ACTIONS = new Set(['new', 'edit', 'create', 'update']);
 
   /** User-facing text for every rejection reason. */
   const REJECT_MESSAGES = Object.freeze({
@@ -84,6 +96,7 @@
     token: 'This page carries a one-time token.',
     auth: 'Login and logout pages are not saved.',
     account: 'Account security pages are not saved.',
+    form: 'Writing and editing forms are not saved.',
     self: 'This is the Favorite Pages list itself.',
     errorPage: 'This is an error page.',
     notHtml: 'Open Favorite Pages and use Add URL to save API addresses.',
@@ -105,6 +118,19 @@
 
   const TITLE_SUFFIX_PATTERN = /\s*\|\s*Danbooru\s*$/;
 
+  // Characters that must stay percent-encoded when a URL part is shown
+  // decoded, because they would change how the text parses back.
+  const PATH_KEEP_ENCODED = /[/?#%\s]/g;
+  const QUERY_KEEP_ENCODED = /[&=#+%\s]/g;
+
+  const STYLE_ID = 'pfp-style';
+  const DIALOG_ID = 'pfp-dialog';
+  const TOAST_ID = 'pfp-toast';
+  const TOAST_MS = 1500;
+  const TOAST_ERROR_MS = 3000;
+  /** Pause after typing before an edited URL is checked against the list. */
+  const URL_CHECK_DELAY_MS = 150;
+
   // Colours always come from Danbooru's semantic variables (PLAN D5), so the
   // UI follows the light / dark / auto themes without detection code. Only
   // layout tokens live here. Never put backticks inside this literal.
@@ -113,6 +139,200 @@
       --pfp-radius: 4px;
       --pfp-gap: 8px;
       --pfp-z-overlay: 10000;
+    }
+
+    /* Save dialog. Only ever on a Danbooru HTML page: no fallbacks. */
+    .pfp-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: var(--pfp-z-overlay);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 16px;
+      padding-top: min(12vh, 96px);
+      overflow-y: auto;
+      /* Washes the page out like Danbooru's own dialog overlay. */
+      background: color-mix(
+        in srgb, var(--body-background-color) 50%, transparent);
+    }
+
+    .pfp-dialog {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      box-sizing: border-box;
+      width: min(480px, 100%);
+      max-height: calc(100vh - min(12vh, 96px) - 16px);
+      max-height: calc(100dvh - min(12vh, 96px) - 16px);
+      margin: 0;
+      padding: 16px;
+      overflow-y: auto;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color);
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .pfp-dialog-heading {
+      margin: 0;
+      color: var(--header-color);
+      font-size: 1.15em;
+      font-weight: bold;
+      line-height: 1.3;
+    }
+
+    .pfp-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+    }
+
+    .pfp-field-label {
+      font-size: 0.85em;
+      font-weight: bold;
+    }
+
+    .pfp-dialog input[type="text"],
+    .pfp-dialog textarea {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0;
+    }
+
+    .pfp-dialog textarea {
+      resize: vertical;
+    }
+
+    .pfp-dialog input[aria-invalid="true"] {
+      border-color: var(--form-input-validation-error-border-color);
+    }
+
+    .pfp-url-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pfp-dialog .pfp-url-row input[type="text"] {
+      flex: 1 1 0%;
+      min-width: 0;
+    }
+
+    /* Fixed URL: wraps instead of scrolling, still selectable. */
+    .pfp-url-text {
+      flex: 1 1 0%;
+      min-width: 0;
+      color: var(--muted-text-color);
+      overflow-wrap: anywhere;
+      user-select: text;
+    }
+
+    .pfp-chip {
+      flex: none;
+      padding: 0 0.6em;
+      border: 1px solid var(--chip-blue-border-color);
+      border-radius: 999px;
+      background: var(--chip-blue-background-color);
+      color: var(--text-color);
+      font-size: 0.8em;
+      line-height: 1.6;
+      white-space: nowrap;
+    }
+
+    .pfp-field-error,
+    .pfp-form-error {
+      margin: 0;
+      color: var(--error-color);
+      font-size: 0.85em;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-dialog [hidden] {
+      display: none !important;
+    }
+
+    .pfp-dialog-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--pfp-gap);
+      margin-top: var(--pfp-gap);
+    }
+
+    .pfp-dialog .pfp-dialog-buttons button {
+      margin: 0;
+    }
+
+    /* Danbooru already draws a global :focus-visible ring; this scoped copy
+       keeps it from being out-cascaded by form-level button rules. */
+    .pfp-dialog :focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    /* Toast. Also shown on JSON documents, where Danbooru's stylesheet and
+       variables are absent, so every colour has a system-colour fallback. */
+    .pfp-toast {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: calc(var(--pfp-z-overlay) + 1);
+      box-sizing: border-box;
+      max-width: min(360px, calc(100vw - 32px));
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--default-border-color, GrayText);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color, Canvas);
+      color: var(--text-color, CanvasText);
+      box-shadow: var(
+        --shadow-lg,
+        0 4px 12px color-mix(in srgb, CanvasText 25%, transparent));
+      font-family: var(--body-font, system-ui, sans-serif);
+      font-size: 14px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+
+    .pfp-toast-error {
+      border-color: var(--error-color, ActiveText);
+      background: var(--error-background-color, Canvas);
+      color: var(--error-color, ActiveText);
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .pfp-toast {
+        animation: pfp-toast-in 160ms ease-out;
+      }
+
+      @keyframes pfp-toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+    }
+
+    /* Danbooru's mobile breakpoint. */
+    @media (max-width: 660px) {
+      .pfp-dialog .pfp-dialog-buttons button {
+        flex: 1 1 auto;
+        box-sizing: border-box;
+        min-height: 44px;
+      }
+
+      .pfp-toast {
+        left: 16px;
+        right: 16px;
+        max-width: none;
+      }
     }
   `;
 
@@ -550,8 +770,12 @@
     if (TOKEN_PARAMS.some((name) => url.searchParams.has(name))) {
       return {ok: false, reason: 'token'};
     }
+    // One canonical path for '/wiki_pages/help:home' and
+    // '/wiki_pages/help%3Ahome' (the setter re-encodes what it must).
+    url.pathname = decodeReadable(url.pathname, PATH_KEEP_ENCODED);
     const path = url.pathname.replace(DATA_EXTENSION_PATTERN, '');
-    const rule = DENY_RULES.find(({pattern}) => pattern.test(path));
+    const rule = DENY_RULES.find(({pattern, except}) =>
+      pattern.test(path) && !(except && except.test(path)));
     if (rule) return {ok: false, reason: rule.reason};
 
     const isPostDetail = POST_DETAIL_PATTERN.test(url.pathname);
@@ -567,6 +791,37 @@
   }
 
   /**
+   * Decodes percent-escapes so a URL part reads naturally, except the
+   * characters in `keepEncoded`.
+   * @param {string} text
+   * @param {!RegExp} keepEncoded A global character-class pattern.
+   * @return {string}
+   */
+  function decodeReadable(text, keepEncoded) {
+    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run)
+            .replace(keepEncoded, (char) => encodeURIComponent(char));
+      } catch (err) {
+        return run;  // Not valid UTF-8: leave it as it was.
+      }
+    });
+  }
+
+  /**
+   * The site-relative "internal link" form of a saved URL, as shown in the
+   * UI (e.g. /posts?tags=user:AkaringoP). Feeding it back to sanitizeUrl
+   * gives the same saved URL.
+   * @param {string} url An absolute same-site URL.
+   * @return {string}
+   */
+  function toSitePath(url) {
+    const {pathname, search} = new URL(url, SITE_ORIGIN);
+    return decodeReadable(pathname, PATH_KEEP_ENCODED) +
+        decodeReadable(search, QUERY_KEEP_ENCODED);
+  }
+
+  /**
    * Whether the page being viewed can be saved, and its URL if so. Adds the
    * checks that only make sense for an open page (PLAN D13-5).
    * @return {!UrlCheck}
@@ -575,7 +830,7 @@
     // JSON / XML documents have no Danbooru body attributes, so the account
     // cannot be confirmed there (PLAN D13). Tampermonkey on Whale does run
     // on them (measured), so this reason does reach the user.
-    if (!document.contentType.includes('html')) {
+    if (!isHtmlDocument()) {
       return {ok: false, reason: 'notHtml'};
     }
     if (!getCurrentUser()) return {ok: false, reason: 'loggedOut'};
@@ -584,6 +839,10 @@
     const {controller, action} = document.body.dataset;
     if (controller === 'static' && ERROR_ACTIONS.has(action)) {
       return {ok: false, reason: 'errorPage'};
+    }
+    if (FORM_ACTIONS.has(action) &&
+        !SAVABLE_FORM_PATTERN.test(new URL(checked.url).pathname)) {
+      return {ok: false, reason: 'form'};
     }
     return checked;
   }
@@ -644,6 +903,11 @@
   // === UI primitives ========================================================
   // ==========================================================================
 
+  /** @return {boolean} False on JSON / XML responses (PLAN D13). */
+  function isHtmlDocument() {
+    return document.contentType.includes('html');
+  }
+
   /**
    * @param {string} id
    * @param {string} css
@@ -653,7 +917,471 @@
     const style = document.createElement('style');
     style.id = id;
     style.textContent = css;
-    document.head.appendChild(style);
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function ensureStyles() {
+    injectStyles(STYLE_ID, GLOBAL_CSS);
+  }
+
+  /**
+   * Builds an element without innerHTML, so saved titles and memos (which
+   * may come from another user's file, PLAN D10) always render as text.
+   * @param {string} tag
+   * @param {!Object=} props `className`, `text`, `on<event>` listeners, or
+   *     attributes (true sets an empty attribute; false and null are skipped).
+   * @param {!Array<?(!Node|string)>=} children Null entries are skipped.
+   * @return {!HTMLElement}
+   */
+  function makeElement(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (value === false || value == null) continue;
+      if (key === 'className') {
+        node.className = value;
+      } else if (key === 'text') {
+        node.textContent = value;
+      } else if (key.startsWith('on')) {
+        node.addEventListener(key.slice(2), value);
+      } else {
+        node.setAttribute(key, value === true ? '' : String(value));
+      }
+    }
+    node.append(...children.filter((child) => child != null));
+    return node;
+  }
+
+  /** @return {boolean} Whether a dialog or popover of ours is open. */
+  function isOverlayOpen() {
+    return document.querySelector('.pfp-overlay') !== null;
+  }
+
+  /**
+   * Keeps Tab inside `container` while a modal is open.
+   * @param {!KeyboardEvent} event
+   * @param {!Element} container
+   */
+  function trapFocus(event, container) {
+    const focusable = [...container.querySelectorAll('input, textarea, button')]
+        .filter((node) => !node.disabled);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  let toastTimer = 0;
+
+  /**
+   * Shows a short message at the top right; a new one replaces the last.
+   * Works on JSON documents too, where Danbooru's styles are absent.
+   * @param {string} message
+   * @param {{error: (boolean|undefined)}=} options
+   */
+  function showToast(message, {error = false} = {}) {
+    ensureStyles();
+    let toast = document.getElementById(TOAST_ID);
+    if (!toast) {
+      toast = makeElement('div', {
+        'id': TOAST_ID,
+        'className': 'pfp-toast',
+        'role': 'status',
+        'aria-live': 'polite',
+        'onclick': hideToast,
+      });
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.toggle('pfp-toast-error', error);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, error ? TOAST_ERROR_MS : TOAST_MS);
+  }
+
+  function hideToast() {
+    clearTimeout(toastTimer);
+    const toast = document.getElementById(TOAST_ID);
+    if (toast) toast.remove();
+  }
+
+  /**
+   * @param {*} err A storage error.
+   * @return {string} What to tell the user about it.
+   */
+  function describeError(err) {
+    const message = String((err && err.message) || '');
+    const rejected = /^url rejected: (\w+)$/.exec(message);
+    if (rejected) return REJECT_MESSAGES[rejected[1]] || message;
+    if (message === 'url already saved') {
+      return 'Another saved page already uses this URL.';
+    }
+    if (message === 'page not found') return 'This page was already removed.';
+    if (err && err.name === 'QuotaExceededError') {
+      return 'Browser storage is full.';
+    }
+    return 'Could not access browser storage.';
+  }
+
+  // ==========================================================================
+  // === Save dialog (PLAN D4) ================================================
+  // ==========================================================================
+
+  /** Set while a dialog is being prepared, so a double press opens one. */
+  let saveDialogPending = false;
+  /** @type {?function()} Tears down the open save dialog. */
+  let activeDialogClose = null;
+
+  function closeSaveDialog() {
+    if (activeDialogClose) activeDialogClose();
+  }
+
+  /**
+   * Opens the save dialog for `url`: edit mode when the account already has
+   * it, otherwise a new entry. The URL is fixed by default, because every
+   * entry point (hotkey, buttons, menus) is about one specific page; only the
+   * list page's Add URL and edit actions pass `editable` (Resolved 20). An
+   * empty `url` with `editable` gives the Add URL form (D5).
+   * @param {{url: (string|undefined), title: (string|undefined),
+   *     editable: (boolean|undefined)}=} options `url` must already be
+   *     sanitized; `title` is the suggested title.
+   * @return {!Promise<void>}
+   */
+  async function openSaveDialog({url = '', title = '', editable = false} = {}) {
+    const user = getCurrentUser();
+    if (!user || saveDialogPending || isOverlayOpen()) return;
+    if (!url && !editable) return;
+    saveDialogPending = true;
+    try {
+      const existing = url ? await getPageByUrl(user.id, url) : null;
+      if (!isOverlayOpen()) {
+        renderSaveDialog(user, {url, title, existing, editable});
+      }
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+    } finally {
+      saveDialogPending = false;
+    }
+  }
+
+  /**
+   * @param {string} tag 'label' around a form control, 'div' around text.
+   * @param {string} label
+   * @param {...?Node} controls
+   * @return {!HTMLElement}
+   */
+  function makeField(tag, label, ...controls) {
+    return makeElement(tag, {className: 'pfp-field'}, [
+      makeElement('span', {className: 'pfp-field-label', text: label}),
+      ...controls,
+    ]);
+  }
+
+  /**
+   * Builds and shows the dialog. Buttons follow Danbooru's order: primary,
+   * then Remove, then Cancel.
+   * @param {{id: number}} user
+   * @param {{url: string, title: string, existing: ?Object,
+   *     editable: boolean}} options
+   */
+  function renderSaveDialog(user, {url, title, existing, editable}) {
+    ensureStyles();
+    const isEdit = existing !== null;
+    const returnFocus = document.activeElement;
+
+    const titleInput = makeElement('input', {
+      type: 'text', name: 'title', maxlength: TITLE_MAX, autocomplete: 'off',
+    });
+    titleInput.value = isEdit ? existing.title : title;
+    const memoInput = makeElement('textarea', {
+      name: 'memo', rows: 3, maxlength: MEMO_MAX,
+    });
+    memoInput.value = isEdit ? existing.memo : '';
+    const shownUrl = isEdit ? existing.url : url;
+    const shownPath = shownUrl ? toSitePath(shownUrl) : '';
+    // A fixed URL is plain wrapped text rather than a disabled input, so a
+    // long link stays fully visible and can still be selected and copied.
+    const urlInput = editable ?
+        makeElement('input', {
+          type: 'text', name: 'url', autocomplete: 'off', spellcheck: 'false',
+          inputmode: 'url', placeholder: '/posts?tags=...',
+          oninput: () => scheduleUrlCheck(),
+        }) :
+        null;
+    if (urlInput) urlInput.value = shownPath;
+    const urlView = urlInput ||
+        makeElement('span', {className: 'pfp-url-text', text: shownPath});
+    const typeChip = makeElement('span', {className: 'pfp-chip'});
+    const urlError = makeElement('p', {className: 'pfp-field-error'});
+    const formError = makeElement('p', {
+      className: 'pfp-form-error', role: 'alert',
+    });
+    const primary = makeElement('button', {
+      type: 'submit',
+      className: 'button-primary',
+      text: isEdit ? 'Update' : 'Save',
+    });
+    const removeButton = isEdit ?
+        makeElement('button', {
+          type: 'button',
+          className: 'button-outline-danger',
+          text: 'Remove',
+          onclick: onRemove,
+        }) :
+        null;
+
+    const form = makeElement('form', {
+      'className': 'pfp-dialog',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'pfp-dialog-heading',
+      'novalidate': true,
+      'onsubmit': onSubmit,
+      'onkeydown': onKeydown,
+    }, [
+      makeElement('h2', {
+        id: 'pfp-dialog-heading',
+        className: 'pfp-dialog-heading',
+        text: isEdit ? 'Edit favorite page' : 'Save to Favorite Pages',
+      }),
+      makeField('label', 'Title', titleInput),
+      makeField('label', 'Memo', memoInput),
+      makeField(
+          urlInput ? 'label' : 'div',
+          'URL',
+          makeElement('span', {className: 'pfp-url-row'}, [urlView, typeChip]),
+          urlError),
+      formError,
+      makeElement('div', {className: 'pfp-dialog-buttons'}, [
+        primary,
+        removeButton,
+        makeElement('button', {type: 'button', text: 'Cancel', onclick: close}),
+      ]),
+    ]);
+    // Close only when a press both starts and ends on the backdrop, so a drag
+    // that leaves the form, or a touch scroll, does not dismiss it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: DIALOG_ID,
+      className: 'pfp-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [form]);
+
+    // The URL is only savable once it passed the gate and no other saved
+    // page holds it. The opening URL is known to qualify (it is the edited
+    // page's own URL, or openSaveDialog found nothing saved under it).
+    let checkedUrl = null;
+    let checkSeq = 0;
+    let checkTimer = 0;
+    let busy = false;
+
+    function setMessage(node, message) {
+      node.textContent = message;
+      node.hidden = !message;
+    }
+
+    function updateButtons() {
+      primary.disabled = busy || checkedUrl === null;
+      if (removeButton) removeButton.disabled = busy;
+    }
+
+    /** @return {?string} The sanitized URL, or null with the reason shown. */
+    function applyGate() {
+      const raw = urlInput ? urlInput.value : shownUrl;
+      const checked = sanitizeUrl(raw);
+      if (!checked.ok) {
+        typeChip.textContent = '?';
+        // An empty Add URL form waits for input before complaining.
+        setMessage(
+            urlError, raw.trim() ? REJECT_MESSAGES[checked.reason] : '');
+        if (urlInput) urlInput.setAttribute('aria-invalid', 'true');
+        return null;
+      }
+      typeChip.textContent = classify(new URL(checked.url).pathname);
+      setMessage(urlError, '');
+      if (urlInput) urlInput.removeAttribute('aria-invalid');
+      return checked.url;
+    }
+
+    function scheduleUrlCheck() {
+      clearTimeout(checkTimer);
+      const seq = ++checkSeq;
+      checkedUrl = null;
+      const candidate = applyGate();
+      updateButtons();
+      if (candidate === null) return;
+      checkTimer = setTimeout(async () => {
+        let message = '';
+        try {
+          const holder = await getPageByUrl(user.id, candidate);
+          if (holder && (!isEdit || holder.id !== existing.id)) {
+            message = `Already saved as "${holder.title}".`;
+          }
+        } catch (err) {
+          message = describeError(err);
+        }
+        if (seq !== checkSeq) return;
+        setMessage(urlError, message);
+        if (!message) checkedUrl = candidate;
+        updateButtons();
+      }, URL_CHECK_DELAY_MS);
+    }
+
+    function setBusy(value) {
+      busy = value;
+      updateButtons();
+    }
+
+    async function onSubmit(event) {
+      event.preventDefault();
+      if (busy || checkedUrl === null) return;
+      setBusy(true);
+      const fields = {
+        url: checkedUrl,
+        title: titleInput.value,
+        memo: memoInput.value,
+      };
+      try {
+        if (isEdit) {
+          await updatePage(user.id, existing.id, fields);
+        } else {
+          await savePage(user.id, fields);
+        }
+        close();
+        showToast(isEdit ? 'Updated.' : 'Saved to Favorite Pages.');
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(formError, describeError(err));
+        setBusy(false);
+      }
+    }
+
+    async function onRemove() {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await deletePage(user.id, existing.id);
+        close();
+        showToast('Removed from Favorite Pages.');
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(formError, describeError(err));
+        setBusy(false);
+      }
+    }
+
+    function onKeydown(event) {
+      // Keep Danbooru's shortcuts (and other scripts) out of the dialog.
+      // This also stops Danbooru's own Ctrl+Enter handler from submitting a
+      // second time.
+      event.stopPropagation();
+      if (event.isComposing) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        form.requestSubmit();
+      } else if (event.key === 'Tab') {
+        trapFocus(event, form);
+      }
+    }
+
+    function close() {
+      clearTimeout(checkTimer);
+      checkSeq++;
+      overlay.remove();
+      activeDialogClose = null;
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    checkedUrl = applyGate();
+    setMessage(urlError, urlError.textContent);
+    setMessage(formError, '');
+    updateButtons();
+    activeDialogClose = close;
+    document.body.appendChild(overlay);
+    titleInput.focus();
+    titleInput.select();
+  }
+
+  // ==========================================================================
+  // === Hotkeys (PLAN D7) ====================================================
+  // ==========================================================================
+
+  /** Settings in effect; replaced once the stored ones have loaded. */
+  let settings = DEFAULT_SETTINGS;
+
+  /** Which setting holds each hotkey, and what it does. */
+  const HOTKEY_ACTIONS = Object.freeze([
+    {settingKey: 'hotkeySave', run: saveCurrentPage},
+  ]);
+
+  /**
+   * Matches by physical key (`code`) so the Korean IME, which reports ㅠ for
+   * Shift+B, still triggers it (Resolved 16).
+   * @param {!KeyboardEvent} event
+   * @param {?{code: string, shiftKey: boolean}} hotkey
+   * @return {boolean}
+   */
+  function matchesHotkey(event, hotkey) {
+    return Boolean(hotkey) && event.code === hotkey.code &&
+        event.shiftKey === hotkey.shiftKey && !event.ctrlKey &&
+        !event.altKey && !event.metaKey;
+  }
+
+  /**
+   * @param {?EventTarget} target
+   * @return {boolean} Whether keys typed there are text input.
+   */
+  function isTypingTarget(target) {
+    return target instanceof Element &&
+        (target.isContentEditable ||
+         target.closest('input, textarea, select') !== null);
+  }
+
+  /** @param {!KeyboardEvent} event */
+  function onGlobalKeydown(event) {
+    if (event.repeat || event.isComposing || event.defaultPrevented) return;
+    if (isTypingTarget(event.target) || isOverlayOpen()) return;
+    const action = HOTKEY_ACTIONS.find(
+        ({settingKey}) => matchesHotkey(event, settings[settingKey]));
+    if (!action) return;
+    event.preventDefault();
+    action.run();
+  }
+
+  /** The save hotkey: opens the dialog for the page being viewed. */
+  function saveCurrentPage() {
+    const checked = checkCurrentPage();
+    if (checked.ok) {
+      openSaveDialog({url: checked.url, title: extractTitle(checked.url)});
+    } else if (checked.reason !== 'loggedOut') {
+      // Logged-out visitors get no reaction at all (PLAN D2-2).
+      showToast(REJECT_MESSAGES[checked.reason], {error: true});
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      settings = await getSettings();
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'settings unavailable, using defaults', err);
+    }
   }
 
   // ==========================================================================
@@ -679,11 +1407,22 @@
     }
   }
 
+  /** Re-syncs every saved-state indicator after the list changed. */
+  function notifyPagesChanged() {
+    runAll(stateRefreshers);
+  }
+
   function init() {
-    if (!document.contentType.includes('html')) return;
-    injectStyles('pfp-style', GLOBAL_CSS);
+    overlayClosers.add(closeSaveDialog);
+    overlayClosers.add(hideToast);
+    // Registered on JSON documents too, so the save key can explain why it
+    // does nothing there.
+    document.addEventListener('keydown', onGlobalKeydown);
+    loadSettings();
+    if (!isHtmlDocument()) return;
+    ensureStyles();
     if (!getCurrentUser()) return;
-    // Entry points and page modules are added from Phase 2 on.
+    // Entry points and page modules hook in here as they are built.
   }
 
   // Close overlays before the page goes into the bfcache, and re-read saved
@@ -699,9 +1438,10 @@
   // Removed before release (Task 7.3).
   window.pfpDebug = {
     getCurrentUser, sanitizeUrl, checkCurrentPage, classify, extractTitle,
-    fallbackTitle, listPages, listAllRecords, getPageByUrl, countPages,
-    savePage, updatePage, deletePage, purgeTombstones, reorderPage,
-    renumberAll, getSettings, saveSettings, REJECT_MESSAGES,
+    fallbackTitle, toSitePath, listPages, listAllRecords, getPageByUrl,
+    countPages, savePage, updatePage, deletePage, purgeTombstones,
+    reorderPage, renumberAll, getSettings, saveSettings, openSaveDialog,
+    REJECT_MESSAGES,
   };
 
   init();
