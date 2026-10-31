@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.6.2
+// @version      0.6.3
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -2917,6 +2917,8 @@
   }
 
   /**
+      // A swipe closes once its slide ends; Back may have closed it first.
+      if (!overlay.isConnected) return;
    * Swiping the phone drawer back to the right closes it (Resolved 46).
    * The drawer follows the finger; let go past a third of its width, or
    * with a flick, and it slides out, otherwise it slides back. Up and down
