@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.6.3
+// @version      0.7.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -180,6 +180,11 @@
   const SWIPE_FLICK_SPEED = 0.5;
   /** The drawer's slide, in and out; matches pfp-drawer-in in GLOBAL_CSS. */
   const DRAWER_SLIDE_MS = 200;
+  // Saving without the dialog (Resolved 47): a second mouse click within
+  // this time, or a touch held this long on the navbar save button. The
+  // hold time also drives the progress fill (--pfp-hold-ms).
+  const DOUBLE_CLICK_MS = 250;
+  const LONG_PRESS_MS = 1500;
   const TOAST_ID = 'pfp-toast';
   const TOAST_MS = 1500;
   const TOAST_ERROR_MS = 3000;
@@ -600,6 +605,33 @@
       background: transparent;
       box-shadow: none;
       color: var(--link-hover-color);
+    }
+
+    /* Held for a quick save: a fill that grows over the hold time. */
+    .pfp-nav-item .pfp-nav-save {
+      position: relative;
+      overflow: hidden;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
+
+    .pfp-nav-item .pfp-nav-save.pfp-pressing::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: currentColor;
+      opacity: 0.25;
+      transform-origin: left;
+      animation: pfp-hold-fill var(--pfp-hold-ms) linear forwards;
+    }
+
+    @keyframes pfp-hold-fill {
+      from {
+        transform: scaleX(0);
+      }
+      to {
+        transform: scaleX(1);
+      }
     }
 
     .pfp-nav-item .pfp-nav-save.pfp-blocked {
@@ -2885,6 +2917,8 @@
      *     page is being left: the drawer's history entry stays as it is.
      */
     function close({leaveHistory = false} = {}) {
+      // A swipe closes once its slide ends; Back may have closed it first.
+      if (!overlay.isConnected) return;
       stopFitting();
       window.removeEventListener('popstate', onPopState);
       overlay.remove();
@@ -2917,8 +2951,6 @@
   }
 
   /**
-      // A swipe closes once its slide ends; Back may have closed it first.
-      if (!overlay.isConnected) return;
    * Swiping the phone drawer back to the right closes it (Resolved 46).
    * The drawer follows the finger; let go past a third of its width, or
    * with a flick, and it slides out, otherwise it slides back. Up and down
@@ -3076,6 +3108,37 @@
       showToast(REJECT_MESSAGES[checked.reason], {error: true});
     }
     return true;
+  }
+
+  /**
+   * Saves the page being viewed without the dialog: title suggested, no
+   * memo, a forum topic opening at its latest page like the dialog's
+   * default. A page that is already saved opens the dialog instead, so a
+   * slip never removes or overwrites anything (Resolved 47).
+   * @return {!Promise<void>}
+   */
+  async function quickSaveCurrentPage() {
+    const checked = checkCurrentPage();
+    if (!checked.ok) {
+      saveCurrentPage();
+      return;
+    }
+    const user = getCurrentUser();
+    if (!user || isOverlayOpen()) return;
+    try {
+      if (await findSavedPage(user.id, checked.url)) {
+        saveCurrentPage();
+        return;
+      }
+      const url = isForumTopicUrl(checked.url) ?
+          withLatestPage(checked.url, true) : checked.url;
+      await savePage(user.id, {url, title: suggestTitle(checked.url)});
+      showToast('Saved to Favorite Pages.');
+      notifyPagesChanged();
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+    }
   }
 
   async function loadSettings() {
@@ -4491,6 +4554,78 @@
   }
 
   /**
+   * Wires the navbar save button: a click opens the dialog; a mouse
+   * double-click (the dialog waits DOUBLE_CLICK_MS to tell) or a touch held
+   * for LONG_PRESS_MS saves at once (Resolved 47). Taps, pens and the
+   * keyboard open the dialog immediately.
+   * @param {!HTMLElement} button
+   */
+  function addQuickSave(button) {
+    let clickTimer = 0;
+    let holdTimer = 0;
+    let pointerType = '';
+    let held = false;
+    let start = null;
+    const stopHold = () => {
+      clearTimeout(holdTimer);
+      holdTimer = 0;
+      button.classList.remove('pfp-pressing');
+      start = null;
+    };
+    button.style.setProperty('--pfp-hold-ms', `${LONG_PRESS_MS}ms`);
+    button.addEventListener('pointerdown', (event) => {
+      pointerType = event.pointerType;
+      held = false;
+      if (event.pointerType !== 'touch') return;
+      stopHold();
+      start = {x: event.clientX, y: event.clientY};
+      button.classList.add('pfp-pressing');
+      holdTimer = setTimeout(() => {
+        stopHold();
+        held = true;
+        if (navigator.vibrate) navigator.vibrate(30);
+        quickSaveCurrentPage();
+      }, LONG_PRESS_MS);
+    });
+    button.addEventListener('pointermove', (event) => {
+      // A finger that wandered off is scrolling, not holding.
+      if (start && Math.hypot(
+          event.clientX - start.x, event.clientY - start.y) > SWIPE_START_PX) {
+        stopHold();
+      }
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+      button.addEventListener(type, stopHold);
+    }
+    // A long touch makes the browser offer its context menu.
+    button.addEventListener('contextmenu', (event) => {
+      if (pointerType === 'touch') event.preventDefault();
+    });
+    button.addEventListener('click', (event) => {
+      if (held) {
+        // The release after a quick save is not a tap.
+        held = false;
+        return;
+      }
+      // Keyboard clicks have detail 0 and no pointer type worth waiting on.
+      if (pointerType !== 'mouse' || event.detail === 0) {
+        saveCurrentPage();
+        return;
+      }
+      if (clickTimer) {
+        clearTimeout(clickTimer);
+        clickTimer = 0;
+        quickSaveCurrentPage();
+        return;
+      }
+      clickTimer = setTimeout(() => {
+        clickTimer = 0;
+        saveCurrentPage();
+      }, DOUBLE_CLICK_MS);
+    });
+  }
+
+  /**
    * The Favorite Pages items in Danbooru's main menu, right after "More »":
    * a button that saves the page being viewed, a button that opens the
    * quick list, and the link to the list page. On a desktop they sit in
@@ -4521,8 +4656,8 @@
       type: 'button',
       id: NAV_SAVE_ID,
       className: 'pfp-nav-button pfp-nav-save',
-      onclick: saveCurrentPage,
     }, [makeIcon('bookmark')]);
+    if (button) addQuickSave(button);
     // How the panel button was pressed: a tap leaves the filter unfocused,
     // so the on-screen keyboard does not cover half the panel.
     let panelPointer = '';
