@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.5.0
+// @version      0.6.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -33,10 +33,11 @@
   const STORE_SETTINGS = 'settings';
   const SETTINGS_KEY = 'global';
 
-  // Character limits, shown as counters in the save dialog (Resolved 29).
-  // Danbooru's own titles for posts and searches stay well under 100.
-  const TITLE_MAX = 100;
-  const MEMO_MAX = 500;
+  // Character limits, shown as counters in the save dialog (Resolved 29,
+  // 36). Forum topic titles run up to 200 (forum_topic.rb), which leaves
+  // room for a message's author after them.
+  const TITLE_MAX = 300;
+  const MEMO_MAX = 1000;
   /** Gap between neighbouring sortOrder values (PLAN D8). */
   const SORT_STEP = 1000;
   /** Tombstones older than this are purged (PLAN D1-6). */
@@ -130,6 +131,17 @@
 
   const TITLE_SUFFIX_PATTERN = /\s*\|\s*Danbooru\s*$/;
 
+  // A forum topic saved as ?page=last opens at its newest page (Resolved
+  // 34). Danbooru itself has no such address: it shows page 1 for it, and
+  // the script moves on to the last page.
+  const FORUM_TOPIC_PATTERN = /^\/forum_topics\/(\d+)$/;
+  const LATEST_PAGE = 'last';
+  // Danbooru.config.posts_per_page, which both the topic page and its
+  // "page N" link in the forum list (ForumTopic#last_page) go by.
+  const FORUM_POSTS_PER_PAGE = 20;
+  // Danbooru's paginate() clamps ?limit= to this.
+  const FORUM_LIMIT_MAX = 1000;
+
   // Characters that must stay percent-encoded when a URL part is shown
   // decoded, because they would change how the text parses back.
   const PATH_KEEP_ENCODED = /[/?#%\s]/g;
@@ -142,11 +154,17 @@
   // never flashes. Keyed to Danbooru's 404 container, so it hides nothing if
   // the route ever becomes a real Danbooru page (Resolved 25).
   const LIST_CLOAK_CSS =
-      '#a-not-found:not(.pfp-ready) > * { display: none; }';
+      '#a-not-found:not(.pfp-ready) > * { display: none !important; }';
+  const LATEST_CLOAK_ID = 'pfp-latest-cloak';
+  // Hides page 1 of a topic opened as ?page=last while the script looks up
+  // its last page, so it does not flash before the move.
+  const LATEST_CLOAK_CSS = '#c-forum-topics { visibility: hidden; }';
   // Danbooru names its main menu links nav-<text> (nav_link_to).
   const NAV_LINK_ID = 'nav-favorite-pages';
   const NAV_SAVE_ID = 'nav-favorite-pages-save';
-  const BOOKMARK_BUTTON_ID = 'pfp-bookmark-btn';
+  const NAV_PANEL_ID = 'nav-favorite-pages-panel';
+  /** Danbooru's phone breakpoint (020_base.scss: width <= 660px). */
+  const MOBILE_QUERY = '(max-width: 660px)';
   // Danbooru names subnav links subnav-<text> (subnav_link_to).
   const SUBNAV_NEW_ID = 'subnav-new';
   const DIALOG_ID = 'pfp-dialog';
@@ -291,6 +309,20 @@
       overflow-wrap: anywhere;
     }
 
+    /* "Open the latest page" under a forum topic's URL. */
+    .pfp-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      font-size: 0.9em;
+      cursor: pointer;
+    }
+
+    .pfp-check input {
+      margin: 0;
+    }
+
     .pfp-dialog [hidden] {
       display: none !important;
     }
@@ -338,9 +370,46 @@
       display: none !important;
     }
 
+    /* The panel itself only holds the focus when opened by a tap. */
+    .pfp-popover:focus {
+      outline: none;
+    }
+
+    /* The same list as a drawer from the right edge, opened by the phone
+       menu's panel button (Resolved 39): full height, a strip of the page
+       left visible to tap away. */
+    .pfp-overlay.pfp-drawer-overlay {
+      justify-content: flex-end;
+      align-items: stretch;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .pfp-popover.pfp-drawer {
+      width: min(420px, 100% - 48px);
+      max-height: none;
+      height: 100%;
+      border-width: 0 0 0 1px;
+      border-radius: 0;
+    }
+
+    /* Filter, then the order picker, on one line (wrapping when narrow). */
+    .pfp-popover-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--pfp-gap);
+    }
+
     .pfp-popover input.pfp-popover-filter {
       box-sizing: border-box;
-      width: 100%;
+      flex: 1 1 12em;
+      min-width: 0;
+      margin: 0;
+    }
+
+    .pfp-popover .pfp-popover-sort,
+    .pfp-popover .pfp-popover-dir {
+      box-sizing: border-box;
       margin: 0;
     }
 
@@ -475,16 +544,16 @@
       color: var(--error-color, ActiveText);
     }
 
-    /* Navbar item. The link wears Danbooru's own menu classes; the save
-       button beside it drops the global button look to read as part of
-       the menu. The wrapper keeps the two on one line when the menu
-       wraps. */
+    /* Navbar items: save button, panel button (a list icon), link. The link
+       wears Danbooru's own menu classes; the buttons drop the global button
+       look to read as part of the menu. The wrapper keeps them on one line
+       when the menu wraps. The phone menu rearranges them (see 660px). */
     .pfp-nav-item {
       display: inline-flex;
       align-items: center;
     }
 
-    .pfp-nav-item .pfp-nav-save {
+    .pfp-nav-item .pfp-nav-button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -501,8 +570,8 @@
       cursor: pointer;
     }
 
-    .pfp-nav-item .pfp-nav-save:hover,
-    .pfp-nav-item .pfp-nav-save:active {
+    .pfp-nav-item .pfp-nav-button:hover,
+    .pfp-nav-item .pfp-nav-button:active {
       background: transparent;
       box-shadow: none;
       color: var(--link-hover-color);
@@ -512,41 +581,15 @@
       color: var(--muted-text-color);
     }
 
-    .pfp-nav-item .pfp-nav-save:focus-visible {
+    .pfp-nav-item .pfp-nav-button:focus-visible {
       outline: 2px solid var(--focus-ring-color);
       outline-offset: -2px;
     }
 
-    .pfp-nav-save .pfp-icon {
+    .pfp-nav-button .pfp-icon {
       display: block;
       width: 1.15em;
       height: 1.15em;
-    }
-
-    /* Post page: the bookmark in a row with the heart (one heart form is
-       always display: none). The button itself keeps Danbooru's button
-       look through the heart's own classes; the icon matches the heart's
-       1em svg-icon, and a saved bookmark turns link blue the way a
-       favorited heart turns red. */
-    .fav-buttons.pfp-fav-buttons {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .pfp-bookmark-btn .pfp-icon {
-      display: inline-block;
-      width: 1em;
-      height: 1em;
-      vertical-align: middle;
-    }
-
-    .pfp-bookmark-btn.pfp-saved {
-      color: var(--link-color);
-    }
-
-    .pfp-bookmark-btn.pfp-blocked {
-      color: var(--muted-text-color);
     }
 
     /* Saved: a filled bookmark without the plus. */
@@ -562,6 +605,19 @@
       .pfp-toast,
       .pfp-popover {
         animation: pfp-toast-in 160ms ease-out;
+      }
+
+      .pfp-popover.pfp-drawer {
+        animation: pfp-drawer-in 200ms ease-out;
+      }
+
+      @keyframes pfp-drawer-in {
+        from {
+          transform: translateX(100%);
+        }
+        to {
+          transform: none;
+        }
       }
 
       @keyframes pfp-toast-in {
@@ -734,6 +790,12 @@
       white-space: nowrap;
     }
 
+    /* No left padding, so the row boxes line up with the select-all box in
+       the count line above the table. */
+    .pfp-table .pfp-col-select {
+      padding-left: 0;
+    }
+
     /* A ticked row, marked like a hovered one. */
     .pfp-table.striped .pfp-row.pfp-row-selected {
       background: var(--table-row-hover-background);
@@ -753,6 +815,12 @@
       overflow-wrap: anywhere;
     }
 
+    /* However narrow the window, the title keeps a readable width; the
+       other columns give way first (see the 900px rules below). */
+    .pfp-table .pfp-col-title {
+      min-width: 12em;
+    }
+
     /* Memo keeps its newlines and shows at most 3 lines. The clamp is on
        the inner span: a table cell loses its table layout under
        -webkit-box, and line-clamp is ignored on table cells. */
@@ -761,6 +829,15 @@
     }
 
     .pfp-table .pfp-memo-text {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+
+    /* Titles take up to 300 characters (Resolved 36); a long one shows 3
+       lines and the rest in its tooltip. */
+    .pfp-table .pfp-col-title > a {
       display: -webkit-box;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 3;
@@ -944,6 +1021,23 @@
       background: var(--default-border-color);
     }
 
+    /* Narrow desktop windows and zoomed pages: drop the date and let Memo
+       size to its content, so Title is not squeezed to a few letters. */
+    @media (max-width: 900px) {
+      .pfp-table .pfp-col-added {
+        display: none;
+      }
+
+      .pfp-table .pfp-col-type,
+      .pfp-table .pfp-col-memo {
+        width: auto;
+      }
+
+      .pfp-table .pfp-col-memo {
+        max-width: 14em;
+      }
+    }
+
     /* Danbooru's mobile breakpoint. */
     @media (max-width: 660px) {
       .pfp-dialog .pfp-dialog-buttons button {
@@ -967,6 +1061,11 @@
       .pfp-popover .pfp-popover-manage {
         display: inline-flex;
         align-items: center;
+        min-height: 44px;
+      }
+
+      .pfp-popover .pfp-popover-sort,
+      .pfp-popover .pfp-popover-dir {
         min-height: 44px;
       }
 
@@ -1009,9 +1108,21 @@
         min-height: 44px;
       }
 
-      .pfp-nav-item .pfp-nav-save {
+      .pfp-nav-item .pfp-nav-button {
         min-width: 44px;
         min-height: 44px;
+      }
+
+      /* Phone menu: [save] Favorite Pages ... [panel]. The row takes the
+         rest of its line and the panel button, which slides the drawer in
+         from that side, goes to the right end (Resolved 39). */
+      .pfp-nav-item {
+        flex: 1 1 auto;
+      }
+
+      .pfp-nav-item .pfp-nav-panel {
+        order: 1;
+        margin-left: auto;
       }
     }
   `;
@@ -1211,6 +1322,21 @@
       const record = await getRecordByUrl(store, userId, url);
       return record && isActive(record) ? record : null;
     });
+  }
+
+  /**
+   * The account's saved entry for `url`. On a forum topic page this falls
+   * back to the topic's latest-page entry, so the topic counts as saved on
+   * whichever page it is open (Resolved 34).
+   * @param {number} userId
+   * @param {string} url A sanitized URL.
+   * @return {!Promise<?Object>}
+   */
+  async function findSavedPage(userId, url) {
+    const exact = await getPageByUrl(userId, url);
+    if (exact || !isForumTopicUrl(url)) return exact;
+    const latest = withLatestPage(url, true);
+    return latest === url ? null : getPageByUrl(userId, latest);
   }
 
   /**
@@ -1658,6 +1784,40 @@
     return clampText(`${base} | ${summary}`, TITLE_MAX);
   }
 
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it is a forum topic's page.
+   */
+  function isForumTopicUrl(url) {
+    return FORUM_TOPIC_PATTERN.test(new URL(url, SITE_ORIGIN).pathname);
+  }
+
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it asks for the newest page (?page=last).
+   */
+  function isLatestPage(url) {
+    return new URL(url, SITE_ORIGIN).searchParams.get('page') === LATEST_PAGE;
+  }
+
+  /**
+   * A forum topic URL set to open at its newest page, or taken off it
+   * (?page=last dropped, which is page 1) (Resolved 34). Other pages are
+   * kept as they are when `on` is false.
+   * @param {string} url A sanitized forum topic URL.
+   * @param {boolean} on
+   * @return {string} Still in sanitizeUrl's canonical form.
+   */
+  function withLatestPage(url, on) {
+    const next = new URL(url);
+    if (on) {
+      next.searchParams.set('page', LATEST_PAGE);
+    } else if (isLatestPage(url)) {
+      next.searchParams.delete('page');
+    }
+    return next.href;
+  }
+
   // ==========================================================================
   // === UI primitives ========================================================
   // ==========================================================================
@@ -1673,11 +1833,17 @@
    */
   function injectStyles(id, css) {
     if (document.getElementById(id)) return;
-    // At document-start even <html> may not exist yet in some managers.
     const parent = document.head || document.documentElement;
     if (!parent) {
-      document.addEventListener(
-          'DOMContentLoaded', () => injectStyles(id, css), {once: true});
+      // At document-start even <html> may not exist yet in some managers.
+      // Waiting for DOMContentLoaded would be after the first paint, so the
+      // style goes in the moment <html> does (Resolved 25).
+      const observer = new MutationObserver(() => {
+        if (!document.documentElement) return;
+        observer.disconnect();
+        injectStyles(id, css);
+      });
+      observer.observe(document, {childList: true});
       return;
     }
     const style = document.createElement('style');
@@ -1717,6 +1883,12 @@
     return node;
   }
 
+  /** @return {boolean} Whether Danbooru shows its phone layout (menu). */
+  function isMobileLayout() {
+    return Boolean(window.matchMedia) &&
+        window.matchMedia(MOBILE_QUERY).matches;
+  }
+
   /** @return {boolean} Whether the viewer asked the OS for less motion. */
   function prefersReducedMotion() {
     return Boolean(window.matchMedia) &&
@@ -1735,7 +1907,7 @@
    */
   function trapFocus(event, container) {
     const focusable = [...container.querySelectorAll(
-        'input, textarea, button, a[href]:not([tabindex="-1"])')]
+        'input, textarea, select, button, a[href]:not([tabindex="-1"])')]
         .filter((node) => !node.disabled);
     if (!focusable.length) return;
     const first = focusable[0];
@@ -1820,19 +1992,21 @@
    * list page's Add URL and edit actions pass `editable` (Resolved 20). An
    * empty `url` with `editable` gives the Add URL form (D5).
    * @param {{url: (string|undefined), title: (string|undefined),
-   *     editable: (boolean|undefined)}=} options `url` must already be
-   *     sanitized; `title` is the suggested title.
+   *     memo: (string|undefined), editable: (boolean|undefined)}=} options
+   *     `url` must already be sanitized; `title` and `memo` are suggestions
+   *     for a new entry.
    * @return {!Promise<void>}
    */
-  async function openSaveDialog({url = '', title = '', editable = false} = {}) {
+  async function openSaveDialog(
+      {url = '', title = '', memo = '', editable = false} = {}) {
     const user = getCurrentUser();
     if (!user || saveDialogPending || isOverlayOpen()) return;
     if (!url && !editable) return;
     saveDialogPending = true;
     try {
-      const existing = url ? await getPageByUrl(user.id, url) : null;
+      const existing = url ? await findSavedPage(user.id, url) : null;
       if (!isOverlayOpen()) {
-        renderSaveDialog(user, {url, title, existing, editable});
+        renderSaveDialog(user, {url, title, memo, existing, editable});
       }
     } catch (err) {
       console.error(LOG_PREFIX, err);
@@ -1880,10 +2054,10 @@
    * Builds and shows the dialog. Buttons follow Danbooru's order: primary,
    * then Remove, then Cancel.
    * @param {{id: number}} user
-   * @param {{url: string, title: string, existing: ?Object,
+   * @param {{url: string, title: string, memo: string, existing: ?Object,
    *     editable: boolean}} options
    */
-  function renderSaveDialog(user, {url, title, existing, editable}) {
+  function renderSaveDialog(user, {url, title, memo, existing, editable}) {
     ensureStyles();
     const isEdit = existing !== null;
     const returnFocus = document.activeElement;
@@ -1895,9 +2069,13 @@
     const memoInput = makeElement('textarea', {
       name: 'memo', rows: 3, maxlength: MEMO_MAX,
     });
-    memoInput.value = isEdit ? existing.memo : '';
-    const shownUrl = isEdit ? existing.url : url;
-    const shownPath = shownUrl ? toSitePath(shownUrl) : '';
+    memoInput.value = isEdit ? existing.memo : memo;
+    // A forum topic page is saved to open at its newest page unless the box
+    // below is unticked (Resolved 34).
+    let fixedUrl = isEdit ? existing.url :
+        url && !editable && isForumTopicUrl(url) ?
+        withLatestPage(url, true) : url;
+    const shownPath = fixedUrl ? toSitePath(fixedUrl) : '';
     // A fixed URL is plain wrapped text rather than a disabled input, so a
     // long link stays fully visible and can still be selected and copied.
     const urlInput = editable ?
@@ -1912,6 +2090,12 @@
         makeElement('span', {className: 'pfp-url-text', text: shownPath});
     const typeChip = makeElement('span', {className: 'pfp-chip'});
     const urlError = makeElement('p', {className: 'pfp-field-error'});
+    // Shown for forum topics only; ticked when the URL asks for ?page=last.
+    const latestBox = makeElement('input', {
+      type: 'checkbox', name: 'latest', onchange: onLatestToggle,
+    });
+    const latestField = makeElement('label', {className: 'pfp-check'},
+        [latestBox, 'Open the latest page']);
     const formError = makeElement('p', {
       className: 'pfp-form-error', role: 'alert',
     });
@@ -1952,6 +2136,8 @@
           'URL',
           makeElement('span', {className: 'pfp-url-row'}, [urlView, typeChip]),
           urlError),
+      // Outside the URL field: an editable one is itself a <label>.
+      latestField,
       formError,
       makeElement('div', {className: 'pfp-dialog-buttons'}, [
         primary,
@@ -1993,8 +2179,11 @@
 
     /** @return {?string} The sanitized URL, or null with the reason shown. */
     function applyGate() {
-      const raw = urlInput ? urlInput.value : shownUrl;
+      const raw = urlInput ? urlInput.value : fixedUrl;
       const checked = sanitizeUrl(raw);
+      const topic = checked.ok && isForumTopicUrl(checked.url);
+      latestField.hidden = !topic;
+      latestBox.checked = topic && isLatestPage(checked.url);
       if (!checked.ok) {
         typeChip.textContent = '?';
         // An empty Add URL form waits for input before complaining.
@@ -2007,6 +2196,23 @@
       setMessage(urlError, '');
       if (urlInput) urlInput.removeAttribute('aria-invalid');
       return checked.url;
+    }
+
+    /**
+     * Writes the latest-page choice into the URL. Unticking a fixed URL goes
+     * back to the page the dialog was opened on.
+     */
+    function onLatestToggle() {
+      if (urlInput) {
+        const checked = sanitizeUrl(urlInput.value);
+        if (!checked.ok) return;
+        urlInput.value =
+            toSitePath(withLatestPage(checked.url, latestBox.checked));
+      } else {
+        fixedUrl = withLatestPage(url, latestBox.checked);
+        urlView.textContent = toSitePath(fixedUrl);
+      }
+      scheduleUrlCheck();
     }
 
     function scheduleUrlCheck() {
@@ -2131,17 +2337,24 @@
    * filters it, the arrow keys pick one, Enter goes there and Shift+Enter
    * opens it in a new tab. The popover opens before the pages are read, so
    * nothing typed in the meantime reaches the page underneath.
+   * @param {{drawer: (boolean|undefined),
+   *     focusFilter: (boolean|undefined)}=} options `drawer` slides the
+   *     same list in from the right (the phone menu, Resolved 39);
+   *     `focusFilter` false keeps a tap from raising the on-screen keyboard.
    * @return {boolean} Whether it opened.
    */
-  function openPopover() {
+  function openPopover({drawer = false, focusFilter = true} = {}) {
     const user = getCurrentUser();
     if (!user || isOverlayOpen()) return false;
-    renderPopover(user);
+    renderPopover(user, {drawer, focusFilter});
     return true;
   }
 
-  /** @param {{id: number}} user */
-  function renderPopover(user) {
+  /**
+   * @param {{id: number}} user
+   * @param {{drawer: boolean, focusFilter: boolean}} options
+   */
+  function renderPopover(user, {drawer, focusFilter}) {
     ensureStyles();
     const returnFocus = document.activeElement;
     /** @type {?Array<!Object>} In the default order; null until loaded. */
@@ -2166,6 +2379,27 @@
       'aria-controls': POPOVER_LIST_ID,
       'oninput': () => render(),
     });
+    // The order the list is in; starts as the remembered one and follows
+    // what is picked here or on the list page (Resolved 37).
+    let {mode, dir} = defaultOrder();
+    const sortSelect = makeElement('select', {
+      'className': 'pfp-popover-sort',
+      'aria-label': 'Sort by',
+      'onchange': () => {
+        mode = sortSelect.value;
+        dir = SORT_MODES.find(({value}) => value === mode).dir;
+        applyOrder();
+      },
+    }, SORT_MODES.map(({value, label}) =>
+      makeElement('option', {value, text: label})));
+    const dirButton = makeElement('button', {
+      type: 'button',
+      className: 'pfp-popover-dir',
+      onclick: () => {
+        dir = dir === 'asc' ? 'desc' : 'asc';
+        applyOrder();
+      },
+    });
     const list = makeElement('div', {
       'id': POPOVER_LIST_ID,
       'className': 'pfp-popover-list',
@@ -2186,18 +2420,24 @@
       ` ${label}`,
     ]);
     const panel = makeElement('div', {
-      'className': 'pfp-popover',
+      'className': drawer ? 'pfp-popover pfp-drawer' : 'pfp-popover',
       'role': 'dialog',
       'aria-modal': 'true',
       'aria-label': 'Favorite Pages',
+      // Holds the focus when the filter is left alone (opened by a tap).
+      'tabindex': -1,
       'onkeydown': onKeydown,
       // Keeps the focus in the filter when an option or the panel itself is
       // pressed; a click on an option still follows its link.
+      // (A select must get its press, or it would never open.)
       'onmousedown': (event) => {
-        if (event.target !== filterInput) event.preventDefault();
+        if (event.target !== filterInput && event.target !== sortSelect) {
+          event.preventDefault();
+        }
       },
     }, [
-      filterInput,
+      makeElement('div', {className: 'pfp-popover-bar'},
+          [filterInput, sortSelect, dirButton]),
       list,
       message,
       makeElement('div', {className: 'pfp-popover-footer'}, [
@@ -2214,7 +2454,8 @@
     let pressedBackdrop = false;
     const overlay = makeElement('div', {
       id: POPOVER_ID,
-      className: 'pfp-overlay pfp-popover-overlay',
+      className: drawer ? 'pfp-overlay pfp-popover-overlay pfp-drawer-overlay' :
+          'pfp-overlay pfp-popover-overlay',
       onpointerdown: (event) => {
         pressedBackdrop = event.target === overlay;
       },
@@ -2231,13 +2472,32 @@
     async function load() {
       try {
         await settingsReady;
-        const {mode, dir} = defaultOrder();
+        ({mode, dir} = defaultOrder());
+        showOrder();
         pages = sortPages(await listPages(user.id), mode, dir);
       } catch (err) {
         console.error(LOG_PREFIX, err);
         setMessage(describeError(err));
         return;
       }
+      render();
+    }
+
+    function showOrder() {
+      sortSelect.value = mode;
+      dirButton.disabled = mode === 'custom';
+      dirButton.textContent = dir === 'asc' ? '↑' : '↓';
+      dirButton.setAttribute('aria-label',
+          dir === 'asc' ? 'Ascending order' : 'Descending order');
+    }
+
+    /** The order was changed here: re-sort, remember it, keep typing. */
+    function applyOrder() {
+      showOrder();
+      rememberOrder(mode, dir);
+      (focusFilter ? filterInput : panel).focus({preventScroll: true});
+      if (pages === null) return;
+      pages = sortPages(pages, mode, dir);
       render();
     }
 
@@ -2381,9 +2641,10 @@
     }
 
     setMessage('');
+    showOrder();
     activePopoverClose = close;
     document.body.appendChild(overlay);
-    filterInput.focus();
+    (focusFilter ? filterInput : panel).focus({preventScroll: true});
     load();
   }
 
@@ -2496,6 +2757,13 @@
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
     prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
+    // Bulleted lines: the navbar's panel button.
+    list: [
+      ['path', {d: 'M9 6h11M9 12h11M9 18h11'}],
+      ['circle', {cx: 4.5, cy: 6, r: 1.3}],
+      ['circle', {cx: 4.5, cy: 12, r: 1.3}],
+      ['circle', {cx: 4.5, cy: 18, r: 1.3}],
+    ],
     next: [['path', {d: 'M9 5l7 7-7 7'}]],
     more: [
       ['circle', {cx: 5, cy: 12, r: 1.8}], ['circle', {cx: 12, cy: 12, r: 1.8}],
@@ -2583,6 +2851,19 @@
     const known = SORT_MODES.some(({value}) => value === settings.defaultSort);
     const mode = known ? settings.defaultSort : SORT_MODES[0].value;
     return {mode, dir: mode === 'custom' ? 'asc' : settings.defaultSortDir};
+  }
+
+  /**
+   * Remembers the order last picked, on the list page or in the popover, as
+   * the one both start in next time (Resolved 37). A failed write only means
+   * the choice lasts until the page is left.
+   * @param {string} mode A SORT_MODES value.
+   * @param {string} dir 'asc' or 'desc'.
+   */
+  function rememberOrder(mode, dir) {
+    settings = {...settings, defaultSort: mode, defaultSortDir: dir};
+    saveSettings({defaultSort: mode, defaultSortDir: dir}).catch(
+        (err) => console.warn(LOG_PREFIX, 'could not save the order', err));
   }
 
   /** @return {string} What an account with no saved pages is told. */
@@ -2791,6 +3072,7 @@
       'onchange': () => {
         mode = sortSelect.value;
         dir = SORT_MODES.find(({value}) => value === mode).dir;
+        rememberOrder(mode, dir);
         resetPage();
       },
     }, SORT_MODES.map(({value, label}) =>
@@ -2801,6 +3083,7 @@
       className: 'pfp-sort-dir',
       onclick: () => {
         dir = dir === 'asc' ? 'desc' : 'asc';
+        rememberOrder(mode, dir);
         resetPage();
       },
     });
@@ -3139,7 +3422,9 @@
               makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
               '',
           makeElement('td', {className: 'pfp-col-title'}, [
-            makeElement('a', {href: page.url, text: page.title}),
+            makeElement('a', {
+              href: page.url, title: page.title, text: page.title,
+            }),
             makeElement('span', {
               className: 'pfp-row-url', text: toSitePath(page.url),
             }),
@@ -3750,18 +4035,17 @@
   // ==========================================================================
 
   /**
-   * Shows on a save button whether its page is saved: a filled bookmark and
-   * an edit label once it is, the reason when the page cannot be saved
-   * (PLAN D9-A3). The click still runs, so touch users see the reason too.
+   * Shows on the save button whether the page is saved: a filled bookmark
+   * and an edit label once it is, the reason when the page cannot be saved.
+   * The click still runs, so touch users see the reason too.
    * @param {!HTMLElement} button
    * @param {boolean} saved
    * @param {?string} blockedReason A REJECT_MESSAGES key.
-   * @param {string} noun What the button saves: 'page' or 'post'.
    */
-  function showSavedState(button, saved, blockedReason, noun) {
+  function showSavedState(button, saved, blockedReason) {
     const label = blockedReason ? REJECT_MESSAGES[blockedReason] :
-        saved ? `Edit this ${noun} in Favorite Pages` :
-        `Save this ${noun} to Favorite Pages`;
+        saved ? 'Edit this page in Favorite Pages' :
+        'Save this page to Favorite Pages';
     button.classList.toggle('pfp-saved', saved);
     button.classList.toggle('pfp-blocked', blockedReason !== null);
     button.title = label;
@@ -3769,33 +4053,36 @@
   }
 
   /**
-   * Keeps a button that saves the page being viewed in step with the list:
-   * now, and after every save, removal or bfcache restore.
+   * Keeps the save button in step with the list: now, and after every
+   * save, removal or bfcache restore.
    * @param {{id: number}} user
    * @param {!HTMLElement} button
-   * @param {string} noun 'page' or 'post', for its labels.
    */
-  function trackCurrentPage(user, button, noun) {
+  function trackCurrentPage(user, button) {
     const update = async () => {
       const checked = checkCurrentPage();
       let saved = false;
       if (checked.ok) {
         try {
-          saved = (await getPageByUrl(user.id, checked.url)) !== null;
+          saved = (await findSavedPage(user.id, checked.url)) !== null;
         } catch (err) {
           console.error(LOG_PREFIX, err);
         }
       }
-      showSavedState(button, saved, checked.ok ? null : checked.reason, noun);
+      showSavedState(button, saved, checked.ok ? null : checked.reason);
     };
     stateRefreshers.add(update);
     update();
   }
 
   /**
-   * "Favorite Pages" in Danbooru's main menu right after "More »", with a
-   * button that saves the page being viewed. The mobile menu shows the same
-   * #main-menu, so this one insertion covers both (Resolved 13).
+   * The Favorite Pages items in Danbooru's main menu, right after "More »":
+   * a button that saves the page being viewed, a button that opens the
+   * quick list, and the link to the list page. On a desktop they sit in
+   * that order; the phone menu puts the panel button at the row's right end
+   * and slides the list in from the right (Resolved 38, 39). The phone menu
+   * shows the same #main-menu, so this one insertion covers both
+   * (Resolved 13).
    * @param {{id: number}} user
    */
   function initNavItem(user) {
@@ -3818,11 +4105,40 @@
     const button = onList ? null : makeElement('button', {
       type: 'button',
       id: NAV_SAVE_ID,
-      className: 'pfp-nav-save',
+      className: 'pfp-nav-button pfp-nav-save',
       onclick: saveCurrentPage,
     }, [makeIcon('bookmark')]);
-    const item =
-        makeElement('span', {className: 'pfp-nav-item'}, [link, button]);
+    // How the panel button was pressed: a tap leaves the filter unfocused,
+    // so the on-screen keyboard does not cover half the panel.
+    let panelPointer = '';
+    const panelButton = makeElement('button', {
+      'type': 'button',
+      'id': NAV_PANEL_ID,
+      'className': 'pfp-nav-button pfp-nav-panel',
+      'title': 'Open the Favorite Pages panel',
+      'aria-label': 'Open the Favorite Pages panel',
+      'aria-haspopup': 'dialog',
+      'onpointerdown': (event) => {
+        panelPointer = event.pointerType;
+      },
+      'onclick': () => {
+        // In the phone menu it slides in from the right; on a desktop it is
+        // the same popover as the hotkey's.
+        openPopover({
+          drawer: isMobileLayout(),
+          focusFilter: panelPointer !== 'touch',
+        });
+        panelPointer = '';
+      },
+    }, [makeIcon('list')]);
+    settingsReady.then(() => {
+      panelButton.title = 'Open the Favorite Pages panel ' +
+          `(${formatHotkey(settings.hotkeyList)})`;
+    });
+    // Desktop: save, panel, link (Resolved 38, 39). The phone menu moves the
+    // panel button to the row's right end with CSS order.
+    const item = makeElement('span', {className: 'pfp-nav-item'},
+        [button, panelButton, link]);
     const more = document.getElementById('nav-more');
     if (more) {
       more.after(item);
@@ -3833,40 +4149,291 @@
       console.warn(LOG_PREFIX, 'navbar "More »" not found');
       menu.appendChild(item);
     }
-    if (button) trackCurrentPage(user, button, 'page');
+    if (button) trackCurrentPage(user, button);
   }
 
   // ==========================================================================
-  // === Post bookmark button (PLAN D9-A) =====================================
+  // === Message menu item (PLAN D9-C) ========================================
+  // ==========================================================================
+  // Forum posts and comments each have a "…" menu (Danbooru's
+  // PopupMenuComponent: div.popup-menu > a.popup-menu-button +
+  // ul.popup-menu-content). Its tippy, delegated from <body>, takes that very
+  // <ul> as its content when the menu first opens and keeps it from then on,
+  // so an item added to the <ul> before then is part of the menu. Adding it
+  // as the button is pressed also covers messages that arrive or get
+  // re-rendered later (Show more comments, votes, edits) without watching
+  // the DOM (Resolved 13).
+
+  /** The "…" button of a forum post's or a comment's menu. */
+  const MESSAGE_MENU_BUTTON = 'article.forum-post a.popup-menu-button, ' +
+      'article.comment a.popup-menu-button';
+  const MESSAGE_SAVE_LABEL = 'Save to Favorite Pages';
+  const MESSAGE_EDIT_LABEL = 'Edit in Favorite Pages';
+  /** Length of the message text put in a new entry's memo (Resolved 35). */
+  const EXCERPT_MAX = 100;
+  /** Block-level DText output, kept apart by a space in an excerpt. */
+  const EXCERPT_BLOCKS =
+      'p, div, li, tr, pre, h1, h2, h3, h4, h5, h6, details, summary';
+
+  /**
+   * Our item in each "…" menu that has one, by the menu (div.popup-menu).
+   * @type {!WeakMap<!Element, {link: !HTMLElement, url: string}>}
+   */
+  const messageMenuItems = new WeakMap();
+
+  /**
+   * What a "…" menu's message is saved as (PLAN D9-C-2, Resolved 35): the
+   * URL Danbooru's Copy Link gives, which leads to that one message, a
+   * title saying where it was written and by whom, and the start of its
+   * text as the memo.
+   * @param {!Element} article article.forum-post or article.comment.
+   * @return {?{path: string, title: string, memo: string, copyLink: string}}
+   */
+  function describeMessage(article) {
+    const pageTitle = document.title.replace(TITLE_SUFFIX_PATTERN, '').trim();
+    let match = /^forum_post_(\d+)$/.exec(article.id);
+    if (match && article.matches('.forum-post')) {
+      // Forum posts are only shown on their topic's page, titled after it.
+      const topic = FORUM_TOPIC_PATTERN.test(location.pathname) && pageTitle;
+      return {
+        path: `/forum_posts/${match[1]}`,
+        title: messageTitle(topic || `forum #${match[1]}`, article),
+        memo: messageExcerpt(article),
+        copyLink: 'a.forum-post-copy-link',
+      };
+    }
+    match = /^comment_(\d+)$/.exec(article.id);
+    if (match && article.matches('.comment')) {
+      const postId = article.dataset.postId;
+      // On the post's own page its title (tags and artist); elsewhere, as
+      // in /comments, its number.
+      const post = postId &&
+          (location.pathname === `/posts/${postId}` && pageTitle ||
+           `post #${postId}`);
+      return {
+        path: `/comments/${match[1]}`,
+        title: messageTitle(post || `comment #${match[1]}`, article),
+        memo: messageExcerpt(article),
+        copyLink: 'a.comment-copy-link',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * "<where> — <author>'s comment". A long context gives way so the author
+   * always shows.
+   * @param {string} context The topic, post or message it belongs to.
+   * @param {!Element} article
+   * @return {string}
+   */
+  function messageTitle(context, article) {
+    const author = article.querySelector('.author-name a.user');
+    const name = author ? author.textContent.trim() : '';
+    if (!name) return clampText(context, TITLE_MAX);
+    const suffix = ` — ${name}'s comment`;
+    return clampText(context, TITLE_MAX - suffix.length) + suffix;
+  }
+
+  /**
+   * The start of a message's own words, on one line: quotes of earlier
+   * messages are left out and spoilers stay hidden (Resolved 35).
+   * @param {!Element} article
+   * @return {string}
+   */
+  function messageExcerpt(article) {
+    const body = article.querySelector(':scope > .content > .prose');
+    if (!body) return '';
+    // Copied into an inert document, where embedded images do not load.
+    const copy = document.implementation.createHTMLDocument('')
+        .importNode(body, true);
+    for (const quote of copy.querySelectorAll('blockquote')) quote.remove();
+    for (const spoiler of copy.querySelectorAll('.spoiler')) {
+      spoiler.replaceWith(' [spoiler] ');
+    }
+    for (const br of copy.querySelectorAll('br')) br.replaceWith(' ');
+    for (const block of copy.querySelectorAll(EXCERPT_BLOCKS)) {
+      block.append(' ');
+    }
+    const chars = Array.from(copy.textContent.replace(/\s+/g, ' ').trim());
+    if (chars.length <= EXCERPT_MAX) return chars.join('');
+    return `${chars.slice(0, EXCERPT_MAX).join('').trimEnd()}…`;
+  }
+
+  /**
+   * Adds "Save to Favorite Pages" under the menu's Copy Link.
+   * @param {!Element} menu div.popup-menu.
+   * @param {!HTMLElement} button Its "…" button.
+   * @return {?{link: !HTMLElement, url: string}}
+   */
+  function addMessageMenuItem(menu, button) {
+    // No list here means tippy already took it: the menu was opened before
+    // this script was ready.
+    const list = menu.querySelector('ul.popup-menu-content');
+    const message = describeMessage(
+        button.closest('article.forum-post, article.comment'));
+    const checked = message && sanitizeUrl(message.path);
+    if (!list || !checked || !checked.ok) return null;
+    const icon = makeIcon('bookmark');
+    // Danbooru's own menu icon classes size it like the icons around it.
+    icon.classList.add('icon', 'svg-icon');
+    const link = makeElement('a', {
+      href: '#',
+      role: 'button',
+      className: 'pfp-message-save',
+      onclick: (event) => {
+        event.preventDefault();
+        // The dialog hands focus back to what had it when it opened; the
+        // item itself leaves the page as Danbooru closes the menu.
+        button.focus({preventScroll: true});
+        openSaveDialog(
+            {url: checked.url, title: message.title, memo: message.memo});
+      },
+      onkeydown: (event) => {
+        if (event.key !== ' ') return;
+        event.preventDefault();
+        event.currentTarget.click();
+      },
+    }, [icon, ' ', makeElement('span', {text: MESSAGE_SAVE_LABEL})]);
+    const item =
+        makeElement('li', {className: 'pfp-message-menu-item'}, [link]);
+    const copyLink = list.querySelector(message.copyLink);
+    if (copyLink) {
+      copyLink.closest('li').after(item);
+    } else {
+      console.warn(LOG_PREFIX, 'menu "Copy Link" item not found');
+      list.appendChild(item);
+    }
+    return {link, url: checked.url};
+  }
+
+  /**
+   * Shows on the item whether its message is saved.
+   * @param {{id: number}} user
+   * @param {{link: !HTMLElement, url: string}} entry
+   * @return {!Promise<void>}
+   */
+  async function refreshMessageMenuItem(user, {link, url}) {
+    let saved = false;
+    try {
+      saved = (await getPageByUrl(user.id, url)) !== null;
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+    }
+    link.classList.toggle('pfp-saved', saved);
+    link.lastChild.textContent =
+        saved ? MESSAGE_EDIT_LABEL : MESSAGE_SAVE_LABEL;
+  }
+
+  /**
+   * Adds the item to a message's "…" menu as it is being opened, or brings
+   * the label of the one already there up to date.
+   * @param {{id: number}} user
+   * @param {!Event} event
+   */
+  function onMessageMenuPress(user, event) {
+    const button = event.target instanceof Element ?
+        event.target.closest(MESSAGE_MENU_BUTTON) : null;
+    const menu = button && button.closest('.popup-menu');
+    if (!menu) return;
+    let entry = messageMenuItems.get(menu);
+    if (!entry) {
+      entry = addMessageMenuItem(menu, button);
+      if (!entry) return;
+      messageMenuItems.set(menu, entry);
+    }
+    refreshMessageMenuItem(user, entry);
+  }
+
+  /** @param {{id: number}} user */
+  function initMessageMenus(user) {
+    const onPress = (event) => onMessageMenuPress(user, event);
+    // Capture phase on the document runs ahead of tippy's listeners on
+    // <body>: pointerdown for mouse and touch hold, click for Enter on a
+    // focused "…" button.
+    document.addEventListener('pointerdown', onPress, true);
+    document.addEventListener('click', onPress, true);
+  }
+
+  /**
+   * Sets the list page's tab title the moment the parser creates <title>,
+   * instead of at DOMContentLoaded, so "Page not found" never shows in the
+   * tab. Gives up once the document has loaded.
+   */
+  function retitleListPage() {
+    const title = 'Favorite Pages | Danbooru';
+    const apply = () => {
+      if (document.title === title) return document.readyState !== 'loading';
+      if (document.querySelector('title')) document.title = title;
+      return false;
+    };
+    if (apply()) return;
+    const observer = new MutationObserver(() => {
+      if (apply()) observer.disconnect();
+    });
+    observer.observe(document, {childList: true, subtree: true});
+    document.addEventListener('DOMContentLoaded', () => {
+      apply();
+      observer.disconnect();
+    }, {once: true});
+  }
+
+  // ==========================================================================
+  // === Latest forum page (Resolved 34) ======================================
   // ==========================================================================
 
   /**
-   * A bookmark next to the post page's heart. It wears the heart buttons'
-   * classes, so Danbooru styles it the same. Favoriting only toggles the
-   * two heart forms and a class on .fav-buttons (favorites/_update.js.erb),
-   * so the bookmark stays put.
-   * @param {{id: number}} user
+   * Moves a topic opened as ?page=last on to its newest page. Runs at
+   * document-start: the topic's post count comes from a small JSON request
+   * while Danbooru's page 1 is still loading, and the page number follows
+   * Danbooru's own "page N" link (ForumTopic#last_page). Wherever the link
+   * was opened from (list, popover, new tab), this is where it lands.
    */
-  function initPostBookmarkButton(user) {
-    if (!POST_DETAIL_PATTERN.test(location.pathname)) return;
-    const favButtons =
-        document.querySelector('.fav-buttons-container .fav-buttons');
-    if (!favButtons) {
-      console.warn(LOG_PREFIX, 'post heart buttons (.fav-buttons) not found');
-      return;
-    }
-    if (favButtons.querySelector('.pfp-bookmark-btn')) return;
-    const button = makeElement('button', {
-      type: 'button',
-      id: BOOKMARK_BUTTON_ID,
-      className: 'pfp-bookmark-btn text-lg py-1 px-3',
-      onclick: saveCurrentPage,
-    }, [makeIcon('bookmark')]);
-    // Danbooru stacks the heart forms as blocks; this lays them out in a
-    // row with the bookmark.
-    favButtons.classList.add('pfp-fav-buttons');
-    favButtons.appendChild(button);
-    trackCurrentPage(user, button, 'post');
+  function openLatestForumPage() {
+    const match = FORUM_TOPIC_PATTERN.exec(location.pathname);
+    if (!match || !isLatestPage(location.href)) return;
+    injectStyles(LATEST_CLOAK_ID, LATEST_CLOAK_CSS);
+    const here = new URL(location.href);
+    const limit = here.searchParams.get('limit');
+    const perPage = limit ?
+        Math.min(Math.max(parseInt(limit, 10) || 0, 1), FORUM_LIMIT_MAX) :
+        FORUM_POSTS_PER_PAGE;
+    const uncloak = () => document.getElementById(LATEST_CLOAK_ID)?.remove();
+    // Page 1 is what Danbooru is showing already: only the address changes.
+    const stay = () => {
+      here.searchParams.delete('page');
+      history.replaceState(history.state, '', here.href);
+      uncloak();
+      // Without <html> yet, injectStyles adds the cloak only once it
+      // appears; this catches that late one too.
+      document.addEventListener('DOMContentLoaded', uncloak, {once: true});
+    };
+    fetch(`/forum_topics/${match[1]}.json?only=response_count`, {
+      credentials: 'same-origin',
+      headers: {Accept: 'application/json'},
+    }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }).then(({response_count: count}) => {
+      if (!Number.isFinite(count)) throw new Error('no response_count');
+      const page = Math.max(Math.ceil(count / perPage), 1);
+      if (page === 1) {
+        stay();
+        return;
+      }
+      here.searchParams.set('page', String(page));
+      location.replace(here.href);
+    }).catch((err) => {
+      console.warn(LOG_PREFIX, 'latest forum page unavailable', err);
+      stay();
+      const report = () => showToast(
+          'Could not find the latest page; showing page 1.', {error: true});
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', report, {once: true});
+      } else {
+        report();
+      }
+    });
   }
 
   // ==========================================================================
@@ -3912,7 +4479,7 @@
     if (location.pathname === LIST_PATH) initListPage(user);
     if (!user) return;
     initNavItem(user);
-    initPostBookmarkButton(user);
+    initMessageMenus(user);
     initProfileRow(user);
     initSiteMapLink();
   }
@@ -3941,7 +4508,9 @@
   // waits for the parsed document.
   if (location.pathname === LIST_PATH) {
     injectStyles(LIST_CLOAK_ID, LIST_CLOAK_CSS);
+    retitleListPage();
   }
+  openLatestForumPage();
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, {once: true});
   } else {
