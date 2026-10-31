@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.6.1
+// @version      0.6.2
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -172,6 +172,14 @@
   const POPOVER_LIST_ID = 'pfp-popover-list';
   /** Most pages the popover lists at once; the filter narrows the rest. */
   const POPOVER_LIMIT = 50;
+  // Swiping the phone drawer closed (Resolved 46): how far a finger moves
+  // before it counts as a swipe, the share of the drawer's width that
+  // closes it on release, and the speed (px/ms) of a flick that does too.
+  const SWIPE_START_PX = 10;
+  const SWIPE_CLOSE_SHARE = 0.3;
+  const SWIPE_FLICK_SPEED = 0.5;
+  /** The drawer's slide, in and out; matches pfp-drawer-in in GLOBAL_CSS. */
+  const DRAWER_SLIDE_MS = 200;
   const TOAST_ID = 'pfp-toast';
   const TOAST_MS = 1500;
   const TOAST_ERROR_MS = 3000;
@@ -396,6 +404,9 @@
       height: 100%;
       border-width: 0 0 0 1px;
       border-radius: 0;
+      /* Sideways swipes are the script's (closing the drawer, Resolved
+         46); up and down stay the list's scroll. */
+      touch-action: pan-y;
     }
 
     /* Filter, then the order picker, on one line (wrapping when narrow). */
@@ -623,6 +634,11 @@
 
       .pfp-popover.pfp-drawer {
         animation: pfp-drawer-in 200ms ease-out;
+      }
+
+      /* After a swipe: sliding out, or back into place. */
+      .pfp-popover.pfp-drawer.pfp-drawer-settling {
+        transition: transform 200ms ease-out;
       }
 
       @keyframes pfp-drawer-in {
@@ -2500,8 +2516,9 @@
   /** @type {?function()} Tears down the open popover. */
   let activePopoverClose = null;
 
+  /** For pagehide and bfcache restores: never touches the history. */
   function closePopover() {
-    if (activePopoverClose) activePopoverClose();
+    if (activePopoverClose) activePopoverClose({leaveHistory: true});
   }
 
   /**
@@ -2785,8 +2802,50 @@
       } else {
         // Stays open until the page unloads; pagehide closes it before the
         // page can enter the bfcache.
-        location.assign(page.url);
+        navigate(page.url);
       }
+    }
+
+    // --- Phone drawer and the back button (Resolved 46) ---
+    // Opening the drawer adds a history entry for the same address, so
+    // Android's Back closes the drawer instead of leaving the page. Closing
+    // it any other way takes that entry away again, and a link followed from
+    // the drawer takes its place, so Back never has a dead press.
+
+    /** Whether the drawer's history entry is the current one. */
+    let historyEntry = false;
+
+    function onPopState() {
+      if (!historyEntry) return;
+      historyEntry = false;
+      close();
+    }
+
+    /** @param {string} url */
+    function navigate(url) {
+      if (historyEntry) {
+        historyEntry = false;
+        location.replace(url);
+      } else {
+        location.assign(url);
+      }
+    }
+
+    /**
+     * A plain tap on a link in the drawer (an option, Manage) navigates
+     * like Enter does; new-tab clicks keep the browser's own handling.
+     * @param {!MouseEvent} event
+     */
+    function onDrawerLinkClick(event) {
+      const link = event.target instanceof Element ?
+          event.target.closest('a[href]') : null;
+      if (!link || !historyEntry || event.defaultPrevented ||
+          event.button !== 0 || event.ctrlKey || event.metaKey ||
+          event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      navigate(link.href);
     }
 
     function onPointerMove(event) {
@@ -2821,10 +2880,19 @@
 
     let stopFitting = () => {};
 
-    function close() {
+    /**
+     * @param {{leaveHistory: (boolean|undefined)}=} options True when the
+     *     page is being left: the drawer's history entry stays as it is.
+     */
+    function close({leaveHistory = false} = {}) {
       stopFitting();
+      window.removeEventListener('popstate', onPopState);
       overlay.remove();
       activePopoverClose = null;
+      if (historyEntry && !leaveHistory) {
+        historyEntry = false;
+        history.back();
+      }
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
         returnFocus.focus({preventScroll: true});
       }
@@ -2835,8 +2903,101 @@
     activePopoverClose = close;
     document.body.appendChild(overlay);
     stopFitting = fitToVisualViewport(overlay);
+    if (drawer) {
+      // Still inside the tap that opened it: a history entry added without
+      // a user gesture may be skipped by Back.
+      history.pushState(history.state, '');
+      historyEntry = true;
+      window.addEventListener('popstate', onPopState);
+      panel.addEventListener('click', onDrawerLinkClick);
+      addSwipeToClose(panel, () => close());
+    }
     (focusFilter ? filterInput : panel).focus({preventScroll: true});
     load();
+  }
+
+  /**
+   * Swiping the phone drawer back to the right closes it (Resolved 46).
+   * The drawer follows the finger; let go past a third of its width, or
+   * with a flick, and it slides out, otherwise it slides back. Up and down
+   * stay the list's scroll (touch-action: pan-y), and a swipe starting in
+   * the filter or the order picker is left to them.
+   * @param {!HTMLElement} panel
+   * @param {function()} onClose
+   */
+  function addSwipeToClose(panel, onClose) {
+    /** @type {?{id: number, x: number, y: number, t: number, dx: number,
+     *     active: boolean}} */
+    let swipe = null;
+    let leaving = false;
+    let swallowClick = false;
+    const settle = (transform, then) => {
+      panel.classList.add('pfp-drawer-settling');
+      panel.style.transform = transform;
+      setTimeout(() => {
+        panel.classList.remove('pfp-drawer-settling');
+        if (then) then();
+      }, prefersReducedMotion() ? 0 : DRAWER_SLIDE_MS);
+    };
+    panel.addEventListener('pointerdown', (event) => {
+      swallowClick = false;
+      if (leaving || event.pointerType === 'mouse' || !event.isPrimary ||
+          !(event.target instanceof Element) ||
+          event.target.closest('input, select, textarea')) {
+        return;
+      }
+      swipe = {id: event.pointerId, x: event.clientX, y: event.clientY,
+        t: event.timeStamp, dx: 0, active: false};
+    });
+    panel.addEventListener('pointermove', (event) => {
+      if (!swipe || event.pointerId !== swipe.id) return;
+      const dx = event.clientX - swipe.x;
+      const dy = event.clientY - swipe.y;
+      if (!swipe.active) {
+        if (Math.abs(dx) < SWIPE_START_PX && Math.abs(dy) < SWIPE_START_PX) {
+          return;
+        }
+        // Up, down or to the left: not a close.
+        if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) {
+          swipe = null;
+          return;
+        }
+        swipe.active = true;
+        try {
+          panel.setPointerCapture(event.pointerId);
+        } catch (err) {
+          // The pointer is already gone; the moves still arrive here.
+        }
+        // The opening slide must not fight the finger.
+        panel.style.animation = 'none';
+      }
+      swipe.dx = Math.max(0, dx);
+      panel.style.transform = `translateX(${swipe.dx}px)`;
+    });
+    const end = (event) => {
+      if (!swipe || event.pointerId !== swipe.id) return;
+      const {active, dx, t} = swipe;
+      swipe = null;
+      if (!active) return;
+      swallowClick = true;
+      const flick = dx / Math.max(1, event.timeStamp - t) >= SWIPE_FLICK_SPEED;
+      if (event.type === 'pointerup' &&
+          (dx >= panel.offsetWidth * SWIPE_CLOSE_SHARE || flick)) {
+        leaving = true;
+        settle('translateX(100%)', onClose);
+      } else {
+        settle('');
+      }
+    };
+    panel.addEventListener('pointerup', end);
+    panel.addEventListener('pointercancel', end);
+    // A swipe that ends over a link is not a tap on it.
+    panel.addEventListener('click', (event) => {
+      if (!swallowClick) return;
+      swallowClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
   }
 
   // ==========================================================================
@@ -3375,7 +3536,11 @@
     }
 
     function showPageFromUrl() {
-      pageNumber = pageNumberFromUrl();
+      const next = pageNumberFromUrl();
+      // Back from the phone drawer's own history entry (Resolved 46) keeps
+      // the address, and the list as it is.
+      if (next === pageNumber) return;
+      pageNumber = next;
       if (!move) render();
     }
 
