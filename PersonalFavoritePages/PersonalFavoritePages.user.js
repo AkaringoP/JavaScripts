@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.2.0
+// @version      0.3.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -9,7 +9,7 @@
 // @icon         https://danbooru.donmai.us/favicon.ico
 // @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/feature/personal-favorite-pages/PersonalFavoritePages/PersonalFavoritePages.user.js
 // @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/feature/personal-favorite-pages/PersonalFavoritePages/PersonalFavoritePages.user.js
-// @run-at       document-idle
+// @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
@@ -52,8 +52,9 @@
   // Removed from every saved URL. api_key / login authenticate a request on
   // their own (session_loader.rb), so keeping them would leak the key through
   // Share exports. commit=Search is noise added by every search form's
-  // submit button.
-  const STRIPPED_PARAMS = new Set(['api_key', 'login', 'commit']);
+  // submit button, and z=1/2/5 only records where a search was started from
+  // (tag list links, search box); the server ignores it (Resolved 26).
+  const STRIPPED_PARAMS = new Set(['api_key', 'login', 'commit', 'z']);
   // URLs carrying these are one-time links and are refused outright.
   const TOKEN_PARAMS = Object.freeze(['email_verification_key']);
   // Post links opened from a search keep the search as ?q=...; dropping it
@@ -103,18 +104,27 @@
     loggedOut: 'Log in to use Favorite Pages.',
   });
 
-  // First match wins (PLAN D3).
-  const PAGE_TYPES = Object.freeze([
-    ['api', DATA_EXTENSION_PATTERN],
-    ['post', /^\/posts\/\d+/],
-    ['post-search', /^\/(?:posts\/?)?$/],
-    ['pool', /^\/pools(?:\/|$)/],
-    ['wiki', /^\/wiki_pages(?:\/|$)/],
-    ['artist', /^\/artists(?:\/|$)/],
-    ['forum', /^\/forum_(?:topics|posts)(?:\/|$)/],
-    ['user', /^\/(?:users(?:\/|$)|profile$)/],
-    ['comment', /^\/comments(?:\/|$)/],
+  // Page types (PLAN D3, Resolved 24). Danbooru's API help: an index (list)
+  // is a plural collection path without an id, a show (single record) adds
+  // the id, and searches go in search[...] parameters.
+  /** Single records; first match wins. */
+  const ITEM_TYPES = Object.freeze([
+    ['post', /^\/posts\/\d+$/],
+    ['pool', /^\/pools\/\d+$/],
+    ['wiki', /^\/wiki_pages\/[^/]+$/],
+    ['artist', /^\/artists\/\d+$/],
+    ['forum', /^\/forum_(?:topics|posts)\/\d+$/],
+    ['user', /^\/(?:users\/\d+|profile)$/],
+    ['comment', /^\/comments\/\d+$/],
   ]);
+  /** The post search, kept apart from other lists as the most saved one. */
+  const POST_SEARCH_PATTERN = /^\/(?:posts)?$/;
+  /** Index routes end in a plural collection name. */
+  const PLURAL_PATH_PATTERN = /\/[a-z_]+s$/;
+  /** Lists whose collection name is not plural. */
+  const SINGULAR_LIST_PATHS = new Set(['/pools/gallery', '/modqueue']);
+  /** Plural-looking paths that are not lists. */
+  const NOT_LIST_PATTERN = /^\/(?:static\/|statistics$)/;
 
   const TITLE_SUFFIX_PATTERN = /\s*\|\s*Danbooru\s*$/;
 
@@ -124,6 +134,13 @@
   const QUERY_KEEP_ENCODED = /[&=#+%\s]/g;
 
   const STYLE_ID = 'pfp-style';
+  const LIST_CLOAK_ID = 'pfp-list-cloak';
+  // Injected at document-start on LIST_PATH only: hides the 404 page's own
+  // content (heading, random post image) until the list replaces it, so it
+  // never flashes. Keyed to Danbooru's 404 container, so it hides nothing if
+  // the route ever becomes a real Danbooru page (Resolved 25).
+  const LIST_CLOAK_CSS =
+      '#a-not-found:not(.pfp-ready) > * { display: none; }';
   const DIALOG_ID = 'pfp-dialog';
   const TOAST_ID = 'pfp-toast';
   const TOAST_MS = 1500;
@@ -318,6 +335,208 @@
           transform: none;
         }
       }
+
+      /* Row moves: neighbours slide aside, the lifted row follows the
+         pointer without lag, then slides into its gap when released. */
+      .pfp-table-sorting .pfp-row {
+        transition: transform 150ms ease;
+      }
+
+      .pfp-table-sorting .pfp-row.pfp-row-dragging {
+        transition: none;
+      }
+
+      .pfp-table-sorting .pfp-row.pfp-row-settling {
+        transition: transform 150ms ease;
+      }
+    }
+
+    /* List page. It sits inside Danbooru's 404 page, so button, select,
+       input, a, h1 and table.striped keep Danbooru's look; these rules add
+       layout only. Rules are scoped under .pfp-page so Danbooru's form
+       rules cannot out-cascade them. */
+    .pfp-page h1 {
+      margin: 0 0 4px;
+    }
+
+    .pfp-page .pfp-page-owner,
+    .pfp-page .pfp-summary {
+      margin: 0 0 var(--pfp-gap);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-page .pfp-page-message,
+    .pfp-list .pfp-page-message {
+      margin: var(--pfp-gap) 0;
+      color: var(--muted-text-color);
+    }
+
+    .pfp-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pfp-gap);
+      margin: 0 0 var(--pfp-gap);
+    }
+
+    .pfp-page .pfp-sort,
+    .pfp-page .pfp-sort-dir,
+    .pfp-page .pfp-filter,
+    .pfp-page .pfp-add-url {
+      box-sizing: border-box;
+      margin: 0;
+    }
+
+    .pfp-page .pfp-filter {
+      flex: 1 1 12em;
+      min-width: 12em;
+    }
+
+    .pfp-page .pfp-add-url {
+      margin-left: auto;
+    }
+
+    .pfp-table {
+      width: 100%;
+    }
+
+    .pfp-table.striped th,
+    .pfp-table.striped td {
+      vertical-align: middle;
+    }
+
+    .pfp-table .pfp-col-handle,
+    .pfp-table .pfp-col-actions {
+      width: 1%;
+      white-space: nowrap;
+    }
+
+    .pfp-table .pfp-col-type,
+    .pfp-table .pfp-col-added {
+      white-space: nowrap;
+    }
+
+    .pfp-table .pfp-col-title,
+    .pfp-table .pfp-col-memo {
+      overflow-wrap: anywhere;
+    }
+
+    /* Memo keeps its newlines and shows at most 3 lines. The clamp is on
+       the inner span: a table cell loses its table layout under
+       -webkit-box, and line-clamp is ignored on table cells. */
+    .pfp-table td.pfp-col-memo {
+      white-space: pre-wrap;
+    }
+
+    .pfp-table .pfp-memo-text {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+
+    .pfp-table .pfp-col-added {
+      color: var(--muted-text-color);
+    }
+
+    /* The internal link goes on its own line under the title. */
+    .pfp-table .pfp-row-url {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+      overflow-wrap: anywhere;
+    }
+
+    /* Icons are drawn with currentColor; Danbooru's global button style
+       would otherwise leave them as empty grey pills. */
+    .pfp-page .pfp-icon {
+      display: block;
+      width: 18px;
+      height: 18px;
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .pfp-page .pfp-icon-grip {
+      fill: currentColor;
+      stroke: none;
+    }
+
+    .pfp-page .pfp-handle,
+    .pfp-page .pfp-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: var(--pfp-radius);
+      background: transparent;
+      box-shadow: none;
+      font: inherit;
+      line-height: 1;
+      vertical-align: middle;
+    }
+
+    .pfp-page .pfp-handle:hover,
+    .pfp-page .pfp-handle:active,
+    .pfp-page .pfp-icon-button:hover,
+    .pfp-page .pfp-icon-button:active {
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .pfp-page .pfp-handle {
+      min-width: 44px;
+      min-height: 44px;
+      color: var(--muted-text-color);
+      cursor: grab;
+      touch-action: none;
+    }
+
+    .pfp-table-draggable .pfp-row-dragging .pfp-handle {
+      cursor: grabbing;
+    }
+
+    .pfp-page .pfp-icon-button {
+      min-width: 32px;
+      min-height: 32px;
+      color: var(--link-color);
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-icon-button:hover {
+      color: var(--link-hover-color);
+    }
+
+    .pfp-page .pfp-icon-button.pfp-remove:hover {
+      color: var(--error-color);
+    }
+
+    .pfp-page .pfp-handle:focus-visible,
+    .pfp-page .pfp-icon-button:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-table-sorting .pfp-row {
+      will-change: transform;
+    }
+
+    /* The lifted row. Beats Danbooru's row stripe and hover rules by
+       specificity. */
+    .pfp-table.striped .pfp-row.pfp-row-dragging {
+      position: relative;
+      z-index: 1;
+      background: var(--table-row-hover-background);
+      box-shadow: var(--shadow-lg);
+      user-select: none;
     }
 
     /* Danbooru's mobile breakpoint. */
@@ -332,6 +551,28 @@
         left: 16px;
         right: 16px;
         max-width: none;
+      }
+
+      .pfp-page .pfp-filter {
+        flex-basis: 100%;
+      }
+
+      .pfp-table .pfp-col-added {
+        display: none;
+      }
+
+      .pfp-table .pfp-memo-text {
+        -webkit-line-clamp: 2;
+      }
+
+      .pfp-page .pfp-handle {
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      .pfp-page .pfp-icon-button {
+        min-width: 44px;
+        min-height: 44px;
       }
     }
   `;
@@ -557,7 +798,7 @@
       url: cleanUrl,
       title: clampText(title, TITLE_MAX) || fallbackTitle(cleanUrl),
       memo: clampText(memo, MEMO_MAX),
-      type: classify(new URL(cleanUrl).pathname),
+      type: classify(cleanUrl),
     };
     return withStore(STORE_PAGES, 'readwrite', async (store) => {
       const existing = await getRecordByUrl(store, userId, cleanUrl);
@@ -604,7 +845,7 @@
         if (holder && isActive(holder)) throw new Error('url already saved');
         if (holder) await requestToPromise(store.delete(holder.id));
         next.url = newUrl;
-        next.type = classify(new URL(newUrl).pathname);
+        next.type = classify(newUrl);
       }
       if (changes.title !== undefined) {
         next.title = clampText(changes.title, TITLE_MAX) ||
@@ -848,12 +1089,24 @@
   }
 
   /**
-   * @param {string} pathname
-   * @return {string} One of the PAGE_TYPES names, or 'other'.
+   * Type of a saved URL: 'api', a single-record type (ITEM_TYPES),
+   * 'post-search', 'list' (search results and other index pages) or
+   * 'other' (PLAN D3, Resolved 24).
+   * @param {string} url An absolute or site-relative URL.
+   * @return {string}
    */
-  function classify(pathname) {
-    const match = PAGE_TYPES.find(([, pattern]) => pattern.test(pathname));
-    return match ? match[0] : 'other';
+  function classify(url) {
+    const {pathname, searchParams} = new URL(url, SITE_ORIGIN);
+    if (DATA_EXTENSION_PATTERN.test(pathname)) return 'api';
+    const path = pathname.replace(/\/+$/, '') || '/';
+    const item = ITEM_TYPES.find(([, pattern]) => pattern.test(path));
+    if (item) return item[0];
+    if (POST_SEARCH_PATTERN.test(path)) return 'post-search';
+    const hasSearch =
+        [...searchParams.keys()].some((name) => name.startsWith('search['));
+    const isIndex = SINGULAR_LIST_PATHS.has(path) ||
+        (PLURAL_PATH_PATTERN.test(path) && !NOT_LIST_PATTERN.test(path));
+    return hasSearch || isIndex ? 'list' : 'other';
   }
 
   /**
@@ -899,6 +1152,57 @@
     return title && !/^https?:\/\//.test(title) ? title : fallbackTitle(url);
   }
 
+  /**
+   * The page's own search form: a GET form from Danbooru's search_form_for
+   * with a submit button, whose action is this page. That skips the subnav
+   * quick search, which has no submit button (Resolved 15, 16).
+   * @return {?HTMLFormElement}
+   */
+  function findSearchForm() {
+    return [...document.querySelectorAll('form.search-form')].find(
+        (form) => form.method.toLowerCase() === 'get' &&
+            form.querySelector('[type="submit"]') !== null &&
+            new URL(form.action, SITE_ORIGIN).pathname === location.pathname) ||
+        null;
+  }
+
+  /**
+   * The main condition of a search page: the first text field of its search
+   * form (Name, Tag, Tags, ...) that has a value. Read from the saved URL,
+   * not the field, so an edited but unsubmitted field cannot leak in.
+   * @param {string} url The page's sanitized URL.
+   * @return {string} Empty when there is no such form or value.
+   */
+  function searchSummary(url) {
+    const form = findSearchForm();
+    if (!form) return '';
+    const params = new URL(url).searchParams;
+    const fields = form.querySelectorAll(
+        'input[type="text"][name], input[type="search"][name]');
+    for (const field of fields) {
+      const value = (params.get(field.name) || '').trim();
+      if (value) return value;
+    }
+    return '';
+  }
+
+  /**
+   * Suggested title for the open page: its document title, plus the main
+   * search condition on search pages, so the same page saved with other
+   * conditions stays distinguishable, e.g. "Related tags | user:AkaringoP"
+   * (Resolved 23).
+   * @param {string} url The page's sanitized URL.
+   * @return {string}
+   */
+  function suggestTitle(url) {
+    const base = extractTitle(url);
+    const summary = searchSummary(url);
+    if (!summary || base.toLowerCase().includes(summary.toLowerCase())) {
+      return base;
+    }
+    return clampText(`${base} | ${summary}`, TITLE_MAX);
+  }
+
   // ==========================================================================
   // === UI primitives ========================================================
   // ==========================================================================
@@ -914,10 +1218,17 @@
    */
   function injectStyles(id, css) {
     if (document.getElementById(id)) return;
+    // At document-start even <html> may not exist yet in some managers.
+    const parent = document.head || document.documentElement;
+    if (!parent) {
+      document.addEventListener(
+          'DOMContentLoaded', () => injectStyles(id, css), {once: true});
+      return;
+    }
     const style = document.createElement('style');
     style.id = id;
     style.textContent = css;
-    (document.head || document.documentElement).appendChild(style);
+    parent.appendChild(style);
   }
 
   function ensureStyles() {
@@ -949,6 +1260,12 @@
     }
     node.append(...children.filter((child) => child != null));
     return node;
+  }
+
+  /** @return {boolean} Whether the viewer asked the OS for less motion. */
+  function prefersReducedMotion() {
+    return Boolean(window.matchMedia) &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
   /** @return {boolean} Whether a dialog or popover of ours is open. */
@@ -1207,7 +1524,7 @@
         if (urlInput) urlInput.setAttribute('aria-invalid', 'true');
         return null;
       }
-      typeChip.textContent = classify(new URL(checked.url).pathname);
+      typeChip.textContent = classify(checked.url);
       setMessage(urlError, '');
       if (urlInput) urlInput.removeAttribute('aria-invalid');
       return checked.url;
@@ -1325,6 +1642,8 @@
 
   /** Settings in effect; replaced once the stored ones have loaded. */
   let settings = DEFAULT_SETTINGS;
+  /** Settles once `settings` holds the stored values (or the defaults). */
+  let settingsReady = Promise.resolve();
 
   /** Which setting holds each hotkey, and what it does. */
   const HOTKEY_ACTIONS = Object.freeze([
@@ -1369,7 +1688,7 @@
   function saveCurrentPage() {
     const checked = checkCurrentPage();
     if (checked.ok) {
-      openSaveDialog({url: checked.url, title: extractTitle(checked.url)});
+      openSaveDialog({url: checked.url, title: suggestTitle(checked.url)});
     } else if (checked.reason !== 'loggedOut') {
       // Logged-out visitors get no reaction at all (PLAN D2-2).
       showToast(REJECT_MESSAGES[checked.reason], {error: true});
@@ -1381,6 +1700,711 @@
       settings = await getSettings();
     } catch (err) {
       console.warn(LOG_PREFIX, 'settings unavailable, using defaults', err);
+    }
+  }
+
+  /**
+   * @param {{code: string, shiftKey: boolean}} hotkey
+   * @return {string} E.g. "Shift+B".
+   */
+  function formatHotkey(hotkey) {
+    const key = hotkey.code.replace(/^(?:Key|Digit)/, '');
+    return hotkey.shiftKey ? `Shift+${key}` : key;
+  }
+
+  // ==========================================================================
+  // === Icons ================================================================
+  // ==========================================================================
+  // Inline SVG so no glyph depends on the viewer's fonts; strokes and fills
+  // use currentColor to follow the theme.
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICON_SHAPES = Object.freeze({
+    grip: [
+      ['circle', {cx: 9, cy: 6, r: 1.6}], ['circle', {cx: 15, cy: 6, r: 1.6}],
+      ['circle', {cx: 9, cy: 12, r: 1.6}], ['circle', {cx: 15, cy: 12, r: 1.6}],
+      ['circle', {cx: 9, cy: 18, r: 1.6}], ['circle', {cx: 15, cy: 18, r: 1.6}],
+    ],
+    edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
+    remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
+  });
+
+  /**
+   * @param {string} name A key of ICON_SHAPES.
+   * @return {!SVGElement}
+   */
+  function makeIcon(name) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', `pfp-icon pfp-icon-${name}`);
+    svg.setAttribute('aria-hidden', 'true');
+    for (const [tag, attrs] of ICON_SHAPES[name]) {
+      const shape = document.createElementNS(SVG_NS, tag);
+      for (const [key, value] of Object.entries(attrs)) {
+        shape.setAttribute(key, String(value));
+      }
+      svg.appendChild(shape);
+    }
+    return svg;
+  }
+
+  // ==========================================================================
+  // === List page (PLAN D5, D8) ==============================================
+  // ==========================================================================
+
+  /** Sort modes; `dir` is the natural direction a mode starts in. */
+  const SORT_MODES = Object.freeze([
+    {value: 'custom', label: 'Custom order', dir: 'asc'},
+    {value: 'created', label: 'Date added', dir: 'desc'},
+    {value: 'title', label: 'Title', dir: 'asc'},
+    {value: 'type', label: 'Type', dir: 'asc'},
+  ]);
+  /** Distance from the viewport edge that scrolls the page while dragging. */
+  const DRAG_EDGE_PX = 48;
+  const DRAG_SCROLL_PX = 12;
+  /** A little longer than the 150ms slide transition in GLOBAL_CSS. */
+  const SETTLE_MS = 170;
+  const collator =
+      new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+
+  /**
+   * Orders pages for display. The custom order has a single direction: a
+   * reversed view of an order you arrange by hand only confuses (PLAN D8).
+   * @param {!Array<!Object>} pages
+   * @param {string} mode A SORT_MODES value.
+   * @param {string} dir 'asc' or 'desc'.
+   * @return {!Array<!Object>} A new array.
+   */
+  function sortPages(pages, mode, dir) {
+    const sign = dir === 'desc' ? -1 : 1;
+    const comparators = {
+      custom: (a, b) => a.sortOrder - b.sortOrder || b.createdAt - a.createdAt,
+      created: (a, b) => sign * (a.createdAt - b.createdAt),
+      title: (a, b) => sign * collator.compare(a.title, b.title),
+      type: (a, b) =>
+        sign * collator.compare(classify(a.url), classify(b.url)) ||
+          collator.compare(a.title, b.title),
+    };
+    return [...pages].sort(comparators[mode] || comparators.custom);
+  }
+
+  /**
+   * @param {!Array<!Object>} pages
+   * @param {string} query Matched against title, memo and internal link.
+   * @return {!Array<!Object>}
+   */
+  function filterPages(pages, query) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return pages;
+    return pages.filter((page) => [page.title, page.memo, toSitePath(page.url)]
+        .some((text) => text.toLowerCase().includes(needle)));
+  }
+
+  /**
+   * sortOrder for a page dropped between two neighbours (either may be null
+   * at an end), or null when the gap has run out and the list must be
+   * renumbered first (PLAN D8-4).
+   * @param {?Object} before
+   * @param {?Object} after
+   * @return {?number}
+   */
+  function sortOrderBetween(before, after) {
+    if (!before && !after) return 0;
+    if (!before) return after.sortOrder - SORT_STEP;
+    if (!after) return before.sortOrder + SORT_STEP;
+    const gap = after.sortOrder - before.sortOrder;
+    return gap >= 1 ? before.sortOrder + gap / 2 : null;
+  }
+
+  /**
+   * Moves the page at `from` to position `to` of the custom order.
+   * @param {number} userId
+   * @param {!Array<!Object>} ordered Active pages in custom order.
+   * @param {number} from
+   * @param {number} to Index in the order after the move.
+   * @return {!Promise<void>}
+   */
+  async function movePage(userId, ordered, from, to) {
+    if (from === to) return;
+    const moved = ordered[from];
+    const neighbours = (list) => {
+      const rest = list.filter((page) => page.id !== moved.id);
+      return [rest[to - 1] || null, rest[to] || null];
+    };
+    let sortOrder = sortOrderBetween(...neighbours(ordered));
+    if (sortOrder === null) {
+      sortOrder = sortOrderBetween(...neighbours(await renumberAll(userId)));
+    }
+    await reorderPage(userId, moved.id, sortOrder);
+  }
+
+  /**
+   * @param {number} ms
+   * @return {!HTMLElement} A <time> showing the date, full time on hover.
+   */
+  function makeDate(ms) {
+    const date = new Date(ms);
+    return makeElement('time', {
+      datetime: date.toISOString(),
+      title: date.toLocaleString(),
+      text: date.toLocaleDateString(),
+    });
+  }
+
+  /**
+   * Takes over Danbooru's 404 page at LIST_PATH (PLAN D5). Steps aside if
+   * the page is no longer a 404, i.e. Danbooru now owns the route.
+   * @param {?{id: number, name: string}} user
+   * @return {!Promise<void>}
+   */
+  async function initListPage(user) {
+    const root = document.getElementById('a-not-found');
+    if (!root) {
+      console.warn(LOG_PREFIX, `${LIST_PATH} is not a 404 page any more;`,
+          'the list page is disabled');
+      return;
+    }
+    document.title = 'Favorite Pages | Danbooru';
+    try {
+      if (!user) {
+        root.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message', text: REJECT_MESSAGES.loggedOut,
+        }));
+        return;
+      }
+      await settingsReady;
+      const view = createListView(user);
+      root.replaceChildren(view.element);
+      stateRefreshers.add(view.reload);
+      purgeTombstones(user.id).catch(
+          (err) => console.warn(LOG_PREFIX, 'tombstone purge failed', err));
+      await view.reload();
+    } finally {
+      // Lifts LIST_CLOAK_CSS once the list (or a message) is in place.
+      root.classList.add('pfp-ready');
+    }
+  }
+
+  /**
+   * Builds the list page: toolbar, table and the drag-to-reorder logic.
+   * @param {{id: number, name: string}} user
+   * @return {{element: !HTMLElement, reload: function(): !Promise<void>}}
+   */
+  function createListView(user) {
+    const initial = SORT_MODES.find(({value}) => value === settings.defaultSort)
+        || SORT_MODES[0];
+    let pages = [];
+    let mode = initial.value;
+    let dir = initial.value === 'custom' ? 'asc' : settings.defaultSortDir;
+    let query = '';
+    /** Row move in progress (pointer drag or arrow key); null when none. */
+    let move = null;
+
+    const sortSelect = makeElement('select', {
+      'className': 'pfp-sort',
+      'aria-label': 'Sort by',
+      'onchange': () => {
+        mode = sortSelect.value;
+        dir = SORT_MODES.find(({value}) => value === mode).dir;
+        render();
+      },
+    }, SORT_MODES.map(({value, label}) =>
+      makeElement('option', {value, text: label})));
+    sortSelect.value = mode;
+    const dirButton = makeElement('button', {
+      type: 'button',
+      className: 'pfp-sort-dir',
+      onclick: () => {
+        dir = dir === 'asc' ? 'desc' : 'asc';
+        render();
+      },
+    });
+    const filterInput = makeElement('input', {
+      'type': 'search',
+      'className': 'pfp-filter',
+      'placeholder': 'Filter by title, memo or URL',
+      'aria-label': 'Filter',
+      'oninput': () => {
+        query = filterInput.value;
+        render();
+      },
+    });
+    const summary = makeElement('p', {className: 'pfp-summary'});
+    const content = makeElement('div', {className: 'pfp-list'});
+
+    const element = makeElement('div', {className: 'pfp-page'}, [
+      makeElement('h1', {text: 'Favorite Pages'}),
+      makeElement('p', {
+        className: 'pfp-page-owner', text: `Saved by ${user.name}`,
+      }),
+      makeElement('div', {className: 'pfp-toolbar'}, [
+        sortSelect,
+        dirButton,
+        filterInput,
+        makeElement('button', {
+          type: 'button',
+          className: 'pfp-add-url',
+          text: 'Add URL',
+          onclick: () => openSaveDialog({editable: true}),
+        }),
+      ]),
+      summary,
+      content,
+    ]);
+
+    async function reload() {
+      try {
+        pages = await listPages(user.id);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        content.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message', text: describeError(err),
+        }));
+        return;
+      }
+      if (!move) render();
+    }
+
+    function render() {
+      const draggable = mode === 'custom' && !query.trim();
+      const shown = filterPages(sortPages(pages, mode, dir), query);
+      dirButton.disabled = mode === 'custom';
+      dirButton.textContent = dir === 'asc' ? '↑' : '↓';
+      dirButton.setAttribute('aria-label',
+          dir === 'asc' ? 'Ascending order' : 'Descending order');
+      const total = `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`;
+      summary.textContent =
+          shown.length === pages.length ? total : `${shown.length} of ${total}`;
+
+      if (!pages.length) {
+        content.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message',
+          text: 'No favorite pages yet. Press ' +
+              `${formatHotkey(settings.hotkeySave)} on any page to save it.`,
+        }));
+        return;
+      }
+      if (!shown.length) {
+        content.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message', text: 'No pages match the filter.',
+        }));
+        return;
+      }
+      const tbody = makeElement('tbody', {},
+          shown.map((page) => makeRow(page, draggable)));
+      const tableClass = draggable ? 'pfp-table pfp-table-draggable' :
+          'pfp-table';
+      content.replaceChildren(makeElement('table', {
+        className: `striped ${tableClass}`,
+      }, [
+        makeElement('thead', {}, [makeElement('tr', {}, [
+          draggable ?
+              makeElement('th', {'className': 'pfp-col-handle',
+                'aria-label': 'Reorder'}) :
+              null,
+          makeElement('th', {className: 'pfp-col-title', text: 'Title'}),
+          makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
+          makeElement('th', {className: 'pfp-col-memo', text: 'Memo'}),
+          makeElement('th', {className: 'pfp-col-added', text: 'Added'}),
+          makeElement('th', {'className': 'pfp-col-actions',
+            'aria-label': 'Actions'}),
+        ])]),
+        tbody,
+      ]));
+    }
+
+    /**
+     * @param {!Object} page
+     * @param {boolean} draggable
+     * @return {!HTMLElement}
+     */
+    function makeRow(page, draggable) {
+      const row = makeElement('tr', {'className': 'pfp-row',
+        'data-id': page.id});
+      const handle = draggable ?
+          makeElement('button', {
+            'type': 'button',
+            'className': 'pfp-handle',
+            'aria-label': `Move "${page.title}" (arrow keys)`,
+            'onpointerdown': (event) => startDrag(event, row),
+            'onkeydown': (event) => onHandleKeydown(event, page.id),
+          }, [makeIcon('grip')]) :
+          null;
+      row.append(
+          draggable ?
+              makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
+              '',
+          makeElement('td', {className: 'pfp-col-title'}, [
+            makeElement('a', {href: page.url, text: page.title}),
+            makeElement('span', {
+              className: 'pfp-row-url', text: toSitePath(page.url),
+            }),
+          ]),
+          makeElement('td', {className: 'pfp-col-type'}, [
+            // Computed, not stored: records saved under older type rules
+            // still show the current type (Resolved 24).
+            makeElement('span', {
+              className: 'pfp-chip', text: classify(page.url),
+            }),
+          ]),
+          makeElement('td', {className: 'pfp-col-memo'}, [
+            // The line clamp has to sit on an inner element: table cells
+            // ignore it. The tooltip shows a clamped memo in full.
+            makeElement('span', {
+              className: 'pfp-memo-text', title: page.memo || null,
+              text: page.memo,
+            }),
+          ]),
+          makeElement('td', {className: 'pfp-col-added'},
+              [makeDate(page.createdAt)]),
+          makeElement('td', {className: 'pfp-col-actions'}, [
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-edit',
+              'title': 'Edit',
+              'aria-label': `Edit "${page.title}"`,
+              'onclick': () => openSaveDialog({url: page.url, editable: true}),
+            }, [makeIcon('edit')]),
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-remove',
+              'title': 'Remove',
+              'aria-label': `Remove "${page.title}"`,
+              'onclick': () => removePage(page),
+            }, [makeIcon('remove')]),
+          ]));
+      return row;
+    }
+
+    async function removePage(page) {
+      if (!window.confirm(`Remove "${page.title}" from Favorite Pages?`)) {
+        return;
+      }
+      try {
+        await deletePage(user.id, page.id);
+        showToast('Removed from Favorite Pages.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      notifyPagesChanged();
+    }
+
+    /**
+     * Saves a new position, then re-reads the list (also on failure, which
+     * puts the rows back where the stored order has them).
+     * @param {number} from
+     * @param {number} to
+     * @param {?string=} focusId Row whose handle gets focus afterwards.
+     */
+    async function commitMove(from, to, focusId = null) {
+      try {
+        await movePage(user.id, sortPages(pages, 'custom', 'asc'), from, to);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      await reload();
+      const row = focusId &&
+          tableRows().find((candidate) => candidate.dataset.id === focusId);
+      if (row) row.querySelector('.pfp-handle').focus();
+    }
+
+    // --- Moving rows (PLAN D8-2, D8-3, Resolved 22) ---
+    // A move lifts the row and slides it with transforms only; the DOM
+    // order stays put until the row has settled into its gap, and then
+    // changes in the same frame the transforms are cleared, so nothing
+    // jumps. Row positions are taken once, in page coordinates, so they
+    // stay valid while the page auto-scrolls.
+
+    function tableRows() {
+      return [...content.querySelectorAll('tbody > tr.pfp-row')];
+    }
+
+    /**
+     * Lifts `row` and records where every row sits.
+     * @param {!HTMLElement} row
+     * @return {!Object} The move: row, slots, from, to.
+     */
+    function beginMove(row) {
+      const rows = tableRows();
+      const scrollTop = window.scrollY;
+      const slots = rows.map((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return {row: candidate, top: rect.top + scrollTop, height: rect.height};
+      });
+      const table = content.querySelector('table');
+      if (table) table.classList.add('pfp-table-sorting');
+      row.classList.add('pfp-row-dragging');
+      const from = rows.indexOf(row);
+      return {row, slots, from, to: from};
+    }
+
+    /**
+     * Slides the neighbours to open a gap at `move.to`.
+     * @param {!Object} move
+     * @return {number} Offset that puts the moved row into the gap.
+     */
+    function layoutMove(move) {
+      const self = move.slots[move.from];
+      move.slots.forEach((slot, i) => {
+        let shift = 0;
+        if (move.from < i && i <= move.to) shift = -self.height;
+        if (move.to <= i && i < move.from) shift = self.height;
+        if (i !== move.from) {
+          slot.row.style.transform = shift ? `translateY(${shift}px)` : '';
+        }
+      });
+      const target = move.slots[move.to];
+      const top = move.to > move.from ?
+          target.top + target.height - self.height :
+          target.top;
+      return top - self.top;
+    }
+
+    /**
+     * Animates the moved row into its gap (or home, when `to` equals
+     * `from`), then commits the DOM order.
+     * @param {!Object} move
+     * @param {function()} onDone
+     */
+    function settleMove(move, onDone) {
+      const offset = layoutMove(move);
+      move.row.classList.add('pfp-row-settling');
+      move.row.style.transform = offset ? `translateY(${offset}px)` : '';
+      setTimeout(() => {
+        finishMove(move);
+        onDone();
+      }, prefersReducedMotion() ? 0 : SETTLE_MS);
+    }
+
+    function finishMove(move) {
+      // Dropping the transition class first means clearing the transforms
+      // below cannot animate.
+      const table = content.querySelector('table');
+      if (table) table.classList.remove('pfp-table-sorting');
+      for (const {row} of move.slots) row.style.transform = '';
+      move.row.classList.remove('pfp-row-dragging', 'pfp-row-settling');
+      if (move.to !== move.from && move.row.isConnected) {
+        const rows = move.slots.map(({row}) => row);
+        rows.splice(move.from, 1);
+        rows.splice(move.to, 0, move.row);
+        move.row.parentNode.append(...rows);
+      }
+    }
+
+    /** Arrow keys on a focused handle move the row one place (D8-5). */
+    function onHandleKeydown(event, id) {
+      const step = {ArrowUp: -1, ArrowDown: 1}[event.key];
+      if (!step || move) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rows = tableRows();
+      const from = rows.findIndex((row) => row.dataset.id === id);
+      const to = from + step;
+      if (from < 0 || to < 0 || to >= rows.length) return;
+      move = beginMove(rows[from]);
+      move.to = to;
+      settleMove(move, () => {
+        // Re-inserting the row in finishMove drops focus; give it straight
+        // back so keyboard users never lose their place.
+        rows[from].querySelector('.pfp-handle').focus({preventScroll: true});
+        move = null;
+        commitMove(from, to, id);
+      });
+    }
+
+    // Pointer Events cover mouse, touch and pen with one code path; the
+    // handle alone has touch-action: none, so the rest of a row still
+    // scrolls the page. The lifted row follows the pointer; the gap opens
+    // where its centre has passed a neighbour's midpoint.
+
+    function startDrag(event, row) {
+      if (move || event.button !== 0) return;
+      event.preventDefault();
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch (err) {
+        // Not supported: the document listeners below still see the moves.
+      }
+      move = beginMove(row);
+      Object.assign(move, {
+        dragging: true,
+        pointerId: event.pointerId,
+        startY: event.clientY + window.scrollY,
+        y: event.clientY,
+        frame: 0,
+      });
+      document.addEventListener('pointermove', onDragMove);
+      document.addEventListener('pointerup', onDragEnd);
+      document.addEventListener('pointercancel', cancelDrag);
+      document.addEventListener('keydown', onDragKeydown, true);
+      move.frame = requestAnimationFrame(autoScroll);
+    }
+
+    function trackPointer() {
+      const self = move.slots[move.from];
+      const offset = move.y + window.scrollY - move.startY;
+      const centre = self.top + self.height / 2 + offset;
+      let to = move.from;
+      move.slots.forEach((slot, i) => {
+        const middle = slot.top + slot.height / 2;
+        if (i > move.from && middle < centre) to = Math.max(to, i);
+        if (i < move.from && middle > centre) to = Math.min(to, i);
+      });
+      move.to = to;
+      layoutMove(move);
+      move.row.style.transform = `translateY(${offset}px)`;
+    }
+
+    function isDragEvent(event) {
+      return move !== null && move.dragging &&
+          event.pointerId === move.pointerId;
+    }
+
+    function onDragMove(event) {
+      if (!isDragEvent(event)) return;
+      move.y = event.clientY;
+      trackPointer();
+    }
+
+    function autoScroll() {
+      if (!move || !move.dragging) return;
+      if (move.y < DRAG_EDGE_PX) {
+        window.scrollBy(0, -DRAG_SCROLL_PX);
+        trackPointer();
+      } else if (move.y > window.innerHeight - DRAG_EDGE_PX) {
+        window.scrollBy(0, DRAG_SCROLL_PX);
+        trackPointer();
+      }
+      move.frame = requestAnimationFrame(autoScroll);
+    }
+
+    function releasePointer() {
+      document.removeEventListener('pointermove', onDragMove);
+      document.removeEventListener('pointerup', onDragEnd);
+      document.removeEventListener('pointercancel', cancelDrag);
+      document.removeEventListener('keydown', onDragKeydown, true);
+      cancelAnimationFrame(move.frame);
+      move.dragging = false;
+    }
+
+    function onDragEnd(event) {
+      if (!isDragEvent(event)) return;
+      releasePointer();
+      const {from, to} = move;
+      settleMove(move, () => {
+        move = null;
+        if (from !== to) commitMove(from, to);
+      });
+    }
+
+    /** Pointer cancelled or Esc: every row slides back home. */
+    function cancelDrag() {
+      if (!move || !move.dragging) return;
+      releasePointer();
+      move.to = move.from;
+      settleMove(move, () => {
+        move = null;
+      });
+    }
+
+    function onDragKeydown(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag();
+    }
+
+    render();
+    return {element, reload};
+  }
+
+  // ==========================================================================
+  // === Profile row (PLAN D6) ================================================
+  // ==========================================================================
+
+  /**
+   * /profile renders the same page as /users/<own id> without redirecting
+   * (Resolved 8).
+   * @param {{id: number}} user
+   * @return {boolean}
+   */
+  function isOwnProfile(user) {
+    if (location.pathname === '/profile') return true;
+    const match = /^\/users\/(\d+)$/.exec(location.pathname);
+    return match !== null && Number(match[1]) === user.id;
+  }
+
+  /**
+   * Adds "Favorite Pages: N" under Favorite Groups in the statistics table.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
+   */
+  async function initProfileRow(user) {
+    if (!isOwnProfile(user)) return;
+    const table = document.querySelector('table.user-statistics');
+    if (!table) {
+      console.warn(LOG_PREFIX, 'profile statistics table not found');
+      return;
+    }
+    let row = table.querySelector('tr.pfp-profile-row');
+    if (!row) {
+      const labelled = (label) => [...table.querySelectorAll('tr')].find(
+          (tr) => tr.querySelector('th')?.textContent.trim() === label);
+      const anchor = labelled('Favorite Groups') || labelled('Favorites');
+      row = makeElement('tr', {className: 'pfp-profile-row'}, [
+        makeElement('th', {text: 'Favorite Pages'}),
+        makeElement('td', {}, [
+          makeElement('a', {href: LIST_PATH, text: '…'}),
+        ]),
+      ]);
+      if (anchor) {
+        anchor.after(row);
+      } else {
+        console.warn(LOG_PREFIX, 'Favorite Groups row not found');
+        (table.tBodies[0] || table).appendChild(row);
+      }
+    }
+    const link = row.querySelector('a');
+    const update = async () => {
+      try {
+        link.textContent = String(await countPages(user.id));
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+      }
+    };
+    stateRefreshers.add(update);
+    await update();
+  }
+
+  // ==========================================================================
+  // === Site map link (PLAN D9-E) ============================================
+  // ==========================================================================
+
+  /**
+   * Lists the page in the site map's Profile section (/static/site_map, the
+   * navbar's "More »"), right under "Favorite groups" (Resolved 21).
+   */
+  function initSiteMapLink() {
+    if (location.pathname !== '/static/site_map') return;
+    if (document.querySelector('.pfp-sitemap-link')) return;
+    const heading = [...document.querySelectorAll('ul > li > h2')]
+        .find((h2) => h2.textContent.trim() === 'Profile');
+    const list = heading && heading.closest('ul');
+    if (!list) {
+      console.warn(LOG_PREFIX, 'site map Profile section not found');
+      return;
+    }
+    const item = makeElement('li', {className: 'pfp-sitemap-link'}, [
+      makeElement('a', {href: LIST_PATH, text: 'Favorite pages'}),
+    ]);
+    const groups = list.querySelector('a[href="/favorite_groups"]');
+    if (groups) {
+      groups.closest('li').after(item);
+    } else {
+      console.warn(LOG_PREFIX, 'site map "Favorite groups" link not found');
+      list.appendChild(item);
     }
   }
 
@@ -1418,11 +2442,15 @@
     // Registered on JSON documents too, so the save key can explain why it
     // does nothing there.
     document.addEventListener('keydown', onGlobalKeydown);
-    loadSettings();
+    settingsReady = loadSettings();
     if (!isHtmlDocument()) return;
     ensureStyles();
-    if (!getCurrentUser()) return;
-    // Entry points and page modules hook in here as they are built.
+    const user = getCurrentUser();
+    // The list page also answers logged-out visitors (with a message).
+    if (location.pathname === LIST_PATH) initListPage(user);
+    if (!user) return;
+    initProfileRow(user);
+    initSiteMapLink();
   }
 
   // Close overlays before the page goes into the bfcache, and re-read saved
@@ -1444,5 +2472,15 @@
     REJECT_MESSAGES,
   };
 
-  init();
+  // The script runs at document-start so the list page can hide Danbooru's
+  // 404 content before it is ever painted (Resolved 25); everything else
+  // waits for the parsed document.
+  if (location.pathname === LIST_PATH) {
+    injectStyles(LIST_CLOAK_ID, LIST_CLOAK_CSS);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, {once: true});
+  } else {
+    init();
+  }
 })();
