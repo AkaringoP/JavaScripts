@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.4.0
+// @version      0.5.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -143,6 +143,12 @@
   // the route ever becomes a real Danbooru page (Resolved 25).
   const LIST_CLOAK_CSS =
       '#a-not-found:not(.pfp-ready) > * { display: none; }';
+  // Danbooru names its main menu links nav-<text> (nav_link_to).
+  const NAV_LINK_ID = 'nav-favorite-pages';
+  const NAV_SAVE_ID = 'nav-favorite-pages-save';
+  const BOOKMARK_BUTTON_ID = 'pfp-bookmark-btn';
+  // Danbooru names subnav links subnav-<text> (subnav_link_to).
+  const SUBNAV_NEW_ID = 'subnav-new';
   const DIALOG_ID = 'pfp-dialog';
   const POPOVER_ID = 'pfp-popover';
   const POPOVER_LIST_ID = 'pfp-popover-list';
@@ -469,6 +475,89 @@
       color: var(--error-color, ActiveText);
     }
 
+    /* Navbar item. The link wears Danbooru's own menu classes; the save
+       button beside it drops the global button look to read as part of
+       the menu. The wrapper keeps the two on one line when the menu
+       wraps. */
+    .pfp-nav-item {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .pfp-nav-item .pfp-nav-save {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0.375rem 0.5rem;
+      border: 0;
+      border-radius: var(--pfp-radius);
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .pfp-nav-item .pfp-nav-save:hover,
+    .pfp-nav-item .pfp-nav-save:active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-hover-color);
+    }
+
+    .pfp-nav-item .pfp-nav-save.pfp-blocked {
+      color: var(--muted-text-color);
+    }
+
+    .pfp-nav-item .pfp-nav-save:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-nav-save .pfp-icon {
+      display: block;
+      width: 1.15em;
+      height: 1.15em;
+    }
+
+    /* Post page: the bookmark in a row with the heart (one heart form is
+       always display: none). The button itself keeps Danbooru's button
+       look through the heart's own classes; the icon matches the heart's
+       1em svg-icon, and a saved bookmark turns link blue the way a
+       favorited heart turns red. */
+    .fav-buttons.pfp-fav-buttons {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .pfp-bookmark-btn .pfp-icon {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      vertical-align: middle;
+    }
+
+    .pfp-bookmark-btn.pfp-saved {
+      color: var(--link-color);
+    }
+
+    .pfp-bookmark-btn.pfp-blocked {
+      color: var(--muted-text-color);
+    }
+
+    /* Saved: a filled bookmark without the plus. */
+    .pfp-saved .pfp-bookmark-body {
+      fill: currentColor;
+    }
+
+    .pfp-saved .pfp-bookmark-plus {
+      display: none;
+    }
+
     @media (prefers-reduced-motion: no-preference) {
       .pfp-toast,
       .pfp-popover {
@@ -509,11 +598,14 @@
       margin: 0 0 4px;
     }
 
-    .pfp-page .pfp-page-owner,
-    .pfp-page .pfp-summary {
-      margin: 0 0 var(--pfp-gap);
+    .pfp-page .pfp-page-owner {
+      margin: 0 0 1em;
       color: var(--muted-text-color);
       font-size: 0.85em;
+    }
+
+    .pfp-page [hidden] {
+      display: none !important;
     }
 
     .pfp-page .pfp-page-message,
@@ -522,13 +614,21 @@
       color: var(--muted-text-color);
     }
 
-    /* One control per line; the sort and its direction share one. */
-    .pfp-toolbar {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: var(--pfp-gap);
-      margin: 0 0 var(--pfp-gap);
+    /* View settings in the manner of Danbooru's search forms (its
+       inline-form): bold labels right-aligned in a column, one control per
+       line; the sort and its direction share one. */
+    .pfp-view-controls {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 30em);
+      align-items: center;
+      gap: var(--pfp-gap) 1em;
+      margin: 0 0 1em;
+    }
+
+    .pfp-view-controls .pfp-control-label {
+      font-weight: bold;
+      text-align: right;
+      white-space: nowrap;
     }
 
     .pfp-sort-row {
@@ -538,15 +638,73 @@
 
     .pfp-page .pfp-sort,
     .pfp-page .pfp-sort-dir,
-    .pfp-page .pfp-filter,
-    .pfp-page .pfp-add-url {
+    .pfp-page .pfp-filter {
       box-sizing: border-box;
       margin: 0;
     }
 
     .pfp-page .pfp-filter {
       width: 100%;
-      max-width: 30em;
+    }
+
+    /* The count line: select-all box and count, or the selection and its
+       actions. Its fixed height keeps the table from jumping when the
+       buttons appear. */
+    .pfp-page .pfp-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pfp-gap);
+      min-height: 2em;
+      margin: 0 0 var(--pfp-gap);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-page .pfp-select-all-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5em;
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-bulk-actions {
+      display: inline-flex;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-page .pfp-bulk-actions button {
+      margin: 0;
+      padding: 0.125em 0.75em;
+      font: inherit;
+    }
+
+    .pfp-page .pfp-select,
+    .pfp-page .pfp-select-all {
+      margin: 0;
+      cursor: pointer;
+    }
+
+    /* The list's subnav "New": reads as one of Danbooru's subnav links;
+       the resets keep the global button look off it, and its py / px
+       utility classes give the padding. */
+    #subnav-menu .pfp-subnav-action {
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: inherit;
+      cursor: pointer;
+    }
+
+    #subnav-menu .pfp-subnav-action:hover,
+    #subnav-menu .pfp-subnav-action:active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-hover-color);
     }
 
     /* Danbooru's paginator classes do the rest; its arrows are 1em. */
@@ -568,11 +726,17 @@
        instead of reshaping the table: Memo gets a fixed share, Title the
        rest, and the small columns fit content that barely varies. Type is
        wide enough for its longest chip, post-search. */
+    .pfp-table .pfp-col-select,
     .pfp-table .pfp-col-handle,
     .pfp-table .pfp-col-added,
     .pfp-table .pfp-col-actions {
       width: 1%;
       white-space: nowrap;
+    }
+
+    /* A ticked row, marked like a hovered one. */
+    .pfp-table.striped .pfp-row.pfp-row-selected {
+      background: var(--table-row-hover-background);
     }
 
     .pfp-table .pfp-col-type {
@@ -615,18 +779,23 @@
       overflow-wrap: anywhere;
     }
 
-    /* Icons are drawn with currentColor; Danbooru's global button style
-       would otherwise leave them as empty grey pills. */
-    .pfp-page .pfp-icon {
-      display: block;
-      width: 18px;
-      height: 18px;
+    /* Icons are drawn with currentColor, here and in the entry points on
+       Danbooru's own pages; each place sets the size. */
+    .pfp-icon {
       flex: none;
       fill: none;
       stroke: currentColor;
       stroke-width: 2;
       stroke-linecap: round;
       stroke-linejoin: round;
+    }
+
+    /* Danbooru's global button style would otherwise leave these icons as
+       empty grey pills. */
+    .pfp-page .pfp-icon {
+      display: block;
+      width: 18px;
+      height: 18px;
     }
 
     .pfp-page .pfp-icon-grip,
@@ -811,6 +980,10 @@
         display: none;
       }
 
+      .pfp-view-controls {
+        grid-template-columns: max-content minmax(0, 1fr);
+      }
+
       /* Too narrow for fixed shares: a 30% memo would leave the title a
          sliver, so columns size to their content here. */
       .pfp-table .pfp-col-type,
@@ -833,6 +1006,11 @@
       }
 
       .pfp-menu .pfp-menu-item {
+        min-height: 44px;
+      }
+
+      .pfp-nav-item .pfp-nav-save {
+        min-width: 44px;
         min-height: 44px;
       }
     }
@@ -1126,13 +1304,29 @@
    * @param {string} id
    * @return {!Promise<void>}
    */
-  function deletePage(userId, id) {
+  async function deletePage(userId, id) {
+    await deletePages(userId, [id]);
+  }
+
+  /**
+   * Deletes several pages in one transaction, all or none (Resolved 32).
+   * Ids of other accounts or of pages already deleted are skipped.
+   * @param {number} userId
+   * @param {!Array<string>} ids
+   * @return {!Promise<number>} How many pages were deleted.
+   */
+  function deletePages(userId, ids) {
     return withStore(STORE_PAGES, 'readwrite', async (store) => {
-      const record = await requestToPromise(store.get(id));
-      if (!record || record.userId !== userId || !isActive(record)) return;
       const now = Date.now();
-      await requestToPromise(
-          store.put({...record, deletedAt: now, updatedAt: now}));
+      let count = 0;
+      for (const id of new Set(ids)) {
+        const record = await requestToPromise(store.get(id));
+        if (!record || record.userId !== userId || !isActive(record)) continue;
+        await requestToPromise(
+            store.put({...record, deletedAt: now, updatedAt: now}));
+        count++;
+      }
+      return count;
     });
   }
 
@@ -2307,6 +2501,11 @@
       ['circle', {cx: 5, cy: 12, r: 1.8}], ['circle', {cx: 12, cy: 12, r: 1.8}],
       ['circle', {cx: 19, cy: 12, r: 1.8}],
     ],
+    // A bookmark with a plus; once saved, CSS fills it and hides the plus.
+    bookmark: [
+      ['path', {'d': 'M6 3.5h12V21l-6-4-6 4z', 'class': 'pfp-bookmark-body'}],
+      ['path', {'d': 'M12 7v6M9 10h6', 'class': 'pfp-bookmark-plus'}],
+    ],
   });
 
   /**
@@ -2496,6 +2695,8 @@
         }));
         return;
       }
+      // Before the wait, so the header does not shift once the list shows.
+      initListSubnav();
       await settingsReady;
       const view = createListView(user);
       root.replaceChildren(view.element);
@@ -2521,8 +2722,39 @@
   }
 
   /**
-   * Builds the list page: toolbar, table, paginator and the drag-to-reorder
-   * logic.
+   * Page actions for the list page, in a subnav like the ones on Danbooru's
+   * index pages ("New", "Help", ...), apart from the view settings in the
+   * page (Resolved 32). Danbooru's 404 page has no subnav, so one is made
+   * with Danbooru's id and classes under the main menu. On phones it sits
+   * in the menu, as on every Danbooru page.
+   */
+  function initListSubnav() {
+    if (document.getElementById(SUBNAV_NEW_ID)) return;
+    const nav = document.getElementById('nav');
+    if (!nav) {
+      console.warn(LOG_PREFIX, 'navbar #nav not found; no list page actions');
+      return;
+    }
+    let subnav = document.getElementById('subnav-menu');
+    if (!subnav) {
+      subnav = makeElement('div', {
+        id: 'subnav-menu', className: 'flex flex-wrap items-center px-5 sm:p-2',
+      });
+      nav.appendChild(subnav);
+    }
+    subnav.appendChild(makeElement('button', {
+      type: 'button',
+      id: SUBNAV_NEW_ID,
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Add a page by its URL',
+      text: 'New',
+      onclick: () => openSaveDialog({editable: true}),
+    }));
+  }
+
+  /**
+   * Builds the list page: view settings, selection bar, table, paginator
+   * and the drag-to-reorder logic.
    * @param {{id: number, name: string}} user
    * @return {{
    *   element: !HTMLElement,
@@ -2544,10 +2776,18 @@
     let move = null;
     /** Set while a move is being written, so moves never overlap. */
     let committing = false;
+    /**
+     * Ids of the rows ticked for removal; only rows on view, so nothing
+     * unseen is ever removed (Resolved 32).
+     * @type {!Set<string>}
+     */
+    const selected = new Set();
+    /** The count line's text while nothing is selected. */
+    let countText = '';
 
     const sortSelect = makeElement('select', {
+      'id': 'pfp-sort',
       'className': 'pfp-sort',
-      'aria-label': 'Sort by',
       'onchange': () => {
         mode = sortSelect.value;
         dir = SORT_MODES.find(({value}) => value === mode).dir;
@@ -2566,9 +2806,9 @@
     });
     const filterInput = makeElement('input', {
       'type': 'search',
+      'id': 'pfp-filter',
       'className': 'pfp-filter',
-      'placeholder': 'Filter by title, memo or URL',
-      'aria-label': 'Filter',
+      'placeholder': 'Title, memo or URL',
       // Danbooru's wording for its own shortcut tooltips.
       'title': 'Shortcut is q',
       'oninput': () => {
@@ -2576,28 +2816,64 @@
         resetPage();
       },
     });
-    const summary = makeElement('p', {className: 'pfp-summary'});
+    const selectAll = makeElement('input', {
+      type: 'checkbox',
+      className: 'pfp-select-all',
+      onchange: () => {
+        if (selectAll.checked) {
+          for (const row of tableRows()) selected.add(row.dataset.id);
+        } else {
+          selected.clear();
+        }
+        updateSelection();
+      },
+    });
+    const countLabel = makeElement('span', {className: 'pfp-summary-text'});
+    const bulkActions = makeElement('span', {className: 'pfp-bulk-actions'}, [
+      makeElement('button', {
+        type: 'button',
+        className: 'pfp-remove-selected button-outline-danger',
+        text: 'Remove selected',
+        onclick: removeSelected,
+      }),
+      makeElement('button', {
+        type: 'button',
+        className: 'pfp-clear-selection',
+        text: 'Clear',
+        onclick: () => {
+          selected.clear();
+          updateSelection();
+        },
+      }),
+    ]);
+    // The count doubles as the select-all label; with rows ticked it turns
+    // into "N items selected" and the bulk actions show.
+    const summary = makeElement('div', {className: 'pfp-summary'}, [
+      makeElement('label', {className: 'pfp-select-all-label'},
+          [selectAll, countLabel]),
+      bulkActions,
+    ]);
     const content = makeElement('div', {className: 'pfp-list'});
+    const controlLabel = (control, text) => makeElement('label', {
+      className: 'pfp-control-label', for: control.id, text,
+    });
 
     const element = makeElement('div', {className: 'pfp-page'}, [
       makeElement('h1', {text: 'Favorite Pages'}),
       makeElement('p', {
         className: 'pfp-page-owner', text: `Saved by ${user.name}`,
       }),
-      // One control per line (Resolved 30); the direction belongs to the
-      // sort, so the two share a line.
-      makeElement('div', {className: 'pfp-toolbar'}, [
+      // View settings, laid out like Danbooru's search forms: bold labels
+      // in a column, one control per line. Page actions ("New") are in
+      // the subnav instead (Resolved 32).
+      makeElement('div', {className: 'pfp-view-controls'}, [
+        controlLabel(filterInput, 'Filter'),
+        filterInput,
+        controlLabel(sortSelect, 'Order'),
         makeElement('div', {className: 'pfp-sort-row'}, [
           sortSelect,
           dirButton,
         ]),
-        filterInput,
-        makeElement('button', {
-          type: 'button',
-          className: 'pfp-add-url',
-          text: 'Add URL',
-          onclick: () => openSaveDialog({editable: true}),
-        }),
       ]),
       summary,
       content,
@@ -2669,19 +2945,22 @@
           dir === 'asc' ? 'Ascending order' : 'Descending order');
       // "items", not "pages": the paginator below has pages of its own.
       const total = `${pages.length} ${pages.length === 1 ? 'item' : 'items'}`;
-      summary.textContent = matches.length === pages.length ?
+      countText = matches.length === pages.length ?
           total : `${matches.length} of ${total}`;
-
-      if (!pages.length) {
-        content.replaceChildren(makeElement('p', {
-          className: 'pfp-page-message', text: emptyListMessage(),
-        }));
-        return;
+      // A turned page, new filter or removal takes rows out of view; their
+      // ticks go with them.
+      const shownIds = new Set(shown.map((page) => page.id));
+      for (const id of selected) {
+        if (!shownIds.has(id)) selected.delete(id);
       }
+
       if (!shown.length) {
         content.replaceChildren(makeElement('p', {
-          className: 'pfp-page-message', text: 'No pages match the filter.',
+          className: 'pfp-page-message',
+          text: pages.length ? 'No pages match the filter.' :
+              emptyListMessage(),
         }));
+        updateSelection();
         return;
       }
       const tbody = makeElement('tbody', {},
@@ -2692,6 +2971,8 @@
         className: `striped ${tableClass}`,
       }, [
         makeElement('thead', {}, [makeElement('tr', {}, [
+          makeElement('th', {'className': 'pfp-col-select',
+            'aria-label': 'Select'}),
           draggable ?
               makeElement('th', {'className': 'pfp-col-handle',
                 'aria-label': 'Reorder'}) :
@@ -2705,6 +2986,43 @@
         ])]),
         tbody,
       ]), makePager(pageNumber, lastPage));
+      updateSelection();
+    }
+
+    /**
+     * Syncs the ticks, the select-all box and the count line with
+     * `selected`.
+     */
+    function updateSelection() {
+      const rows = tableRows();
+      for (const row of rows) {
+        const ticked = selected.has(row.dataset.id);
+        row.classList.toggle('pfp-row-selected', ticked);
+        row.querySelector('.pfp-select').checked = ticked;
+      }
+      const count = selected.size;
+      selectAll.disabled = rows.length === 0;
+      selectAll.checked = count > 0 && count === rows.length;
+      selectAll.indeterminate = count > 0 && count < rows.length;
+      countLabel.textContent = count ?
+          `${count} ${count === 1 ? 'item' : 'items'} selected` : countText;
+      bulkActions.hidden = count === 0;
+    }
+
+    async function removeSelected() {
+      const ids = [...selected];
+      if (!ids.length) return;
+      const what = `${ids.length} ${ids.length === 1 ? 'item' : 'items'}`;
+      if (!window.confirm(`Remove ${what} from Favorite Pages?`)) return;
+      try {
+        const count = await deletePages(user.id, ids);
+        showToast(`Removed ${count} ${count === 1 ? 'item' : 'items'}.`);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      selected.clear();
+      notifyPagesChanged();
     }
 
     /**
@@ -2802,7 +3120,21 @@
             'onkeydown': (event) => onHandleKeydown(event, page.id),
           }, [makeIcon('grip')]) :
           null;
+      const tick = makeElement('input', {
+        'type': 'checkbox',
+        'className': 'pfp-select',
+        'aria-label': `Select "${page.title}"`,
+        'onchange': () => {
+          if (tick.checked) {
+            selected.add(page.id);
+          } else {
+            selected.delete(page.id);
+          }
+          updateSelection();
+        },
+      });
       row.append(
+          makeElement('td', {className: 'pfp-col-select'}, [tick]),
           draggable ?
               makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
               '',
@@ -3414,6 +3746,130 @@
   }
 
   // ==========================================================================
+  // === Navbar item (PLAN D9-B) ==============================================
+  // ==========================================================================
+
+  /**
+   * Shows on a save button whether its page is saved: a filled bookmark and
+   * an edit label once it is, the reason when the page cannot be saved
+   * (PLAN D9-A3). The click still runs, so touch users see the reason too.
+   * @param {!HTMLElement} button
+   * @param {boolean} saved
+   * @param {?string} blockedReason A REJECT_MESSAGES key.
+   * @param {string} noun What the button saves: 'page' or 'post'.
+   */
+  function showSavedState(button, saved, blockedReason, noun) {
+    const label = blockedReason ? REJECT_MESSAGES[blockedReason] :
+        saved ? `Edit this ${noun} in Favorite Pages` :
+        `Save this ${noun} to Favorite Pages`;
+    button.classList.toggle('pfp-saved', saved);
+    button.classList.toggle('pfp-blocked', blockedReason !== null);
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+
+  /**
+   * Keeps a button that saves the page being viewed in step with the list:
+   * now, and after every save, removal or bfcache restore.
+   * @param {{id: number}} user
+   * @param {!HTMLElement} button
+   * @param {string} noun 'page' or 'post', for its labels.
+   */
+  function trackCurrentPage(user, button, noun) {
+    const update = async () => {
+      const checked = checkCurrentPage();
+      let saved = false;
+      if (checked.ok) {
+        try {
+          saved = (await getPageByUrl(user.id, checked.url)) !== null;
+        } catch (err) {
+          console.error(LOG_PREFIX, err);
+        }
+      }
+      showSavedState(button, saved, checked.ok ? null : checked.reason, noun);
+    };
+    stateRefreshers.add(update);
+    update();
+  }
+
+  /**
+   * "Favorite Pages" in Danbooru's main menu right after "More »", with a
+   * button that saves the page being viewed. The mobile menu shows the same
+   * #main-menu, so this one insertion covers both (Resolved 13).
+   * @param {{id: number}} user
+   */
+  function initNavItem(user) {
+    if (document.getElementById(NAV_LINK_ID)) return;
+    const menu = document.getElementById('main-menu');
+    if (!menu) {
+      console.warn(LOG_PREFIX, 'navbar #main-menu not found');
+      return;
+    }
+    const onList = location.pathname === LIST_PATH;
+    const link = makeElement('a', {
+      id: NAV_LINK_ID,
+      // Danbooru's nav_link_to classes; "current font-bold" marks the page
+      // being viewed.
+      className: onList ? 'py-1.5 px-3 current font-bold' : 'py-1.5 px-3',
+      href: LIST_PATH,
+      text: 'Favorite Pages',
+    });
+    // The list itself cannot be saved, so it gets no button.
+    const button = onList ? null : makeElement('button', {
+      type: 'button',
+      id: NAV_SAVE_ID,
+      className: 'pfp-nav-save',
+      onclick: saveCurrentPage,
+    }, [makeIcon('bookmark')]);
+    const item =
+        makeElement('span', {className: 'pfp-nav-item'}, [link, button]);
+    const more = document.getElementById('nav-more');
+    if (more) {
+      more.after(item);
+      // Danbooru marks "More »" as current on every static page, and the
+      // list is drawn over its static 404 page.
+      if (onList) more.classList.remove('current', 'font-bold');
+    } else {
+      console.warn(LOG_PREFIX, 'navbar "More »" not found');
+      menu.appendChild(item);
+    }
+    if (button) trackCurrentPage(user, button, 'page');
+  }
+
+  // ==========================================================================
+  // === Post bookmark button (PLAN D9-A) =====================================
+  // ==========================================================================
+
+  /**
+   * A bookmark next to the post page's heart. It wears the heart buttons'
+   * classes, so Danbooru styles it the same. Favoriting only toggles the
+   * two heart forms and a class on .fav-buttons (favorites/_update.js.erb),
+   * so the bookmark stays put.
+   * @param {{id: number}} user
+   */
+  function initPostBookmarkButton(user) {
+    if (!POST_DETAIL_PATTERN.test(location.pathname)) return;
+    const favButtons =
+        document.querySelector('.fav-buttons-container .fav-buttons');
+    if (!favButtons) {
+      console.warn(LOG_PREFIX, 'post heart buttons (.fav-buttons) not found');
+      return;
+    }
+    if (favButtons.querySelector('.pfp-bookmark-btn')) return;
+    const button = makeElement('button', {
+      type: 'button',
+      id: BOOKMARK_BUTTON_ID,
+      className: 'pfp-bookmark-btn text-lg py-1 px-3',
+      onclick: saveCurrentPage,
+    }, [makeIcon('bookmark')]);
+    // Danbooru stacks the heart forms as blocks; this lays them out in a
+    // row with the bookmark.
+    favButtons.classList.add('pfp-fav-buttons');
+    favButtons.appendChild(button);
+    trackCurrentPage(user, button, 'post');
+  }
+
+  // ==========================================================================
   // === Lifecycle (PLAN D11, Resolved 16) ====================================
   // ==========================================================================
   // Danbooru has no Turbo: every navigation is a full page load, so init()
@@ -3455,6 +3911,8 @@
     // The list page also answers logged-out visitors (with a message).
     if (location.pathname === LIST_PATH) initListPage(user);
     if (!user) return;
+    initNavItem(user);
+    initPostBookmarkButton(user);
     initProfileRow(user);
     initSiteMapLink();
   }
@@ -3473,7 +3931,7 @@
   window.pfpDebug = {
     getCurrentUser, sanitizeUrl, checkCurrentPage, classify, extractTitle,
     fallbackTitle, toSitePath, listPages, listAllRecords, getPageByUrl,
-    countPages, savePage, updatePage, deletePage, purgeTombstones,
+    countPages, savePage, updatePage, deletePage, deletePages, purgeTombstones,
     reorderPage, renumberAll, getSettings, saveSettings, openSaveDialog,
     REJECT_MESSAGES,
   };
