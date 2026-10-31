@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.3.0
+// @version      0.4.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -33,8 +33,10 @@
   const STORE_SETTINGS = 'settings';
   const SETTINGS_KEY = 'global';
 
-  const TITLE_MAX = 200;
-  const MEMO_MAX = 2000;
+  // Character limits, shown as counters in the save dialog (Resolved 29).
+  // Danbooru's own titles for posts and searches stay well under 100.
+  const TITLE_MAX = 100;
+  const MEMO_MAX = 500;
   /** Gap between neighbouring sortOrder values (PLAN D8). */
   const SORT_STEP = 1000;
   /** Tombstones older than this are purged (PLAN D1-6). */
@@ -142,6 +144,10 @@
   const LIST_CLOAK_CSS =
       '#a-not-found:not(.pfp-ready) > * { display: none; }';
   const DIALOG_ID = 'pfp-dialog';
+  const POPOVER_ID = 'pfp-popover';
+  const POPOVER_LIST_ID = 'pfp-popover-list';
+  /** Most pages the popover lists at once; the filter narrows the rest. */
+  const POPOVER_LIMIT = 50;
   const TOAST_ID = 'pfp-toast';
   const TOAST_MS = 1500;
   const TOAST_ERROR_MS = 3000;
@@ -210,6 +216,18 @@
     .pfp-field-label {
       font-size: 0.85em;
       font-weight: bold;
+    }
+
+    /* "12 / 100" under a field; digits keep their width while typing. */
+    .pfp-count {
+      align-self: flex-end;
+      color: var(--muted-text-color);
+      font-size: 0.8em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .pfp-count.pfp-count-over {
+      color: var(--error-color);
     }
 
     .pfp-dialog input[type="text"],
@@ -289,6 +307,137 @@
       outline-offset: -2px;
     }
 
+    /* Quick-jump popover (Shift+L). The backdrop reuses .pfp-overlay. Focus
+       stays in the filter, so the highlighted row is aria-selected, which
+       the script also sets on hover: no separate :hover colour. */
+    .pfp-popover {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      box-sizing: border-box;
+      width: min(560px, 100%);
+      max-height: calc(100vh - min(12vh, 96px) - 16px);
+      max-height: calc(100dvh - min(12vh, 96px) - 16px);
+      margin: 0;
+      padding: var(--pfp-gap);
+      overflow: hidden;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color);
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .pfp-popover [hidden] {
+      display: none !important;
+    }
+
+    .pfp-popover input.pfp-popover-filter {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0;
+    }
+
+    /* Only the list scrolls; the filter and footer stay put. */
+    .pfp-popover-list {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    /* Not selectable: macOS browsers select a link's text on right-click,
+       and the press handling that keeps focus in the filter would leave
+       that selection stuck. The context menu still offers Copy link. */
+    .pfp-popover .pfp-option {
+      display: block;
+      padding: 6px var(--pfp-gap);
+      border-radius: var(--pfp-radius);
+      color: var(--text-color);
+      text-decoration: none;
+      user-select: none;
+    }
+
+    .pfp-popover .pfp-option:hover,
+    .pfp-popover .pfp-option:focus,
+    .pfp-popover .pfp-option:active {
+      color: var(--text-color);
+      text-decoration: none;
+    }
+
+    .pfp-popover .pfp-option[aria-selected="true"] {
+      background: var(--table-row-hover-background);
+    }
+
+    /* Title and chip share a row: the title ellipsizes, the chip never
+       shrinks or wraps. */
+    .pfp-option-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .pfp-option-title {
+      flex: 1 1 0%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pfp-option-url,
+    .pfp-option-memo {
+      display: block;
+      overflow: hidden;
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+      text-overflow: ellipsis;
+      /* nowrap also collapses newlines in the memo to single spaces. */
+      white-space: nowrap;
+    }
+
+    .pfp-popover .pfp-popover-message {
+      margin: 0;
+      padding: 0 var(--pfp-gap);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-popover-footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 4px var(--pfp-gap);
+      padding-top: var(--pfp-gap);
+      border-top: 1px solid var(--default-border-color);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-popover-keys {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px var(--pfp-gap);
+    }
+
+    /* Stays at the right end, also when the key hints are hidden. */
+    .pfp-popover .pfp-popover-manage {
+      margin-left: auto;
+    }
+
+    .pfp-popover-keys kbd {
+      padding: 0 0.4em;
+      border: 1px solid var(--default-border-color);
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+
+    .pfp-popover :focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
     /* Toast. Also shown on JSON documents, where Danbooru's stylesheet and
        variables are absent, so every colour has a system-colour fallback. */
     .pfp-toast {
@@ -321,7 +470,8 @@
     }
 
     @media (prefers-reduced-motion: no-preference) {
-      .pfp-toast {
+      .pfp-toast,
+      .pfp-popover {
         animation: pfp-toast-in 160ms ease-out;
       }
 
@@ -372,12 +522,18 @@
       color: var(--muted-text-color);
     }
 
+    /* One control per line; the sort and its direction share one. */
     .pfp-toolbar {
       display: flex;
-      flex-wrap: wrap;
-      align-items: center;
+      flex-direction: column;
+      align-items: flex-start;
       gap: var(--pfp-gap);
       margin: 0 0 var(--pfp-gap);
+    }
+
+    .pfp-sort-row {
+      display: flex;
+      gap: var(--pfp-gap);
     }
 
     .pfp-page .pfp-sort,
@@ -389,12 +545,14 @@
     }
 
     .pfp-page .pfp-filter {
-      flex: 1 1 12em;
-      min-width: 12em;
+      width: 100%;
+      max-width: 30em;
     }
 
-    .pfp-page .pfp-add-url {
-      margin-left: auto;
+    /* Danbooru's paginator classes do the rest; its arrows are 1em. */
+    .pfp-page .pfp-paginator .pfp-icon {
+      width: 1em;
+      height: 1em;
     }
 
     .pfp-table {
@@ -406,15 +564,24 @@
       vertical-align: middle;
     }
 
+    /* Column widths do not follow the text, so a long title or memo wraps
+       instead of reshaping the table: Memo gets a fixed share, Title the
+       rest, and the small columns fit content that barely varies. Type is
+       wide enough for its longest chip, post-search. */
     .pfp-table .pfp-col-handle,
+    .pfp-table .pfp-col-added,
     .pfp-table .pfp-col-actions {
       width: 1%;
       white-space: nowrap;
     }
 
-    .pfp-table .pfp-col-type,
-    .pfp-table .pfp-col-added {
+    .pfp-table .pfp-col-type {
+      width: 7.5em;
       white-space: nowrap;
+    }
+
+    .pfp-table .pfp-col-memo {
+      width: 30%;
     }
 
     .pfp-table .pfp-col-title,
@@ -462,7 +629,8 @@
       stroke-linejoin: round;
     }
 
-    .pfp-page .pfp-icon-grip {
+    .pfp-page .pfp-icon-grip,
+    .pfp-page .pfp-icon-more {
       fill: currentColor;
       stroke: none;
     }
@@ -519,6 +687,17 @@
       color: var(--error-color);
     }
 
+    /* Muted like Danbooru's own popup menu buttons; link coloured while
+       hovered or open. */
+    .pfp-page .pfp-icon-button.pfp-row-menu-button {
+      color: var(--muted-text-color);
+    }
+
+    .pfp-page .pfp-icon-button.pfp-row-menu-button:hover,
+    .pfp-page .pfp-icon-button.pfp-row-menu-button[aria-expanded="true"] {
+      color: var(--link-color);
+    }
+
     .pfp-page .pfp-handle:focus-visible,
     .pfp-page .pfp-icon-button:focus-visible {
       outline: 2px solid var(--focus-ring-color);
@@ -539,11 +718,86 @@
       user-select: none;
     }
 
+    /* Row menu: the box of Danbooru's popup menus (their common-tooltip
+       theme). It lives on <body>, outside .pfp-page, below our overlays. */
+    .pfp-menu {
+      position: absolute;
+      z-index: calc(var(--pfp-z-overlay) - 1);
+      box-sizing: border-box;
+      min-width: 12em;
+      padding: 4px 0;
+      border: 1px solid var(--post-tooltip-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--post-tooltip-background-color);
+      background-clip: padding-box;
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    /* Items read as links, like Danbooru's menu entries; the resets keep
+       Danbooru's global button style off them. */
+    .pfp-menu .pfp-menu-item {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0;
+      padding: 4px 12px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: 1.5;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .pfp-menu .pfp-menu-item:hover {
+      background: transparent;
+      color: var(--link-hover-color);
+    }
+
+    .pfp-menu .pfp-menu-item:disabled {
+      color: var(--muted-text-color);
+      cursor: default;
+    }
+
+    .pfp-menu .pfp-menu-item:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-menu-separator {
+      height: 1px;
+      margin: 4px 0;
+      background: var(--default-border-color);
+    }
+
     /* Danbooru's mobile breakpoint. */
     @media (max-width: 660px) {
       .pfp-dialog .pfp-dialog-buttons button {
         flex: 1 1 auto;
         box-sizing: border-box;
+        min-height: 44px;
+      }
+
+      .pfp-popover-keys {
+        display: none;
+      }
+
+      .pfp-popover .pfp-option {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 44px;
+      }
+
+      .pfp-popover .pfp-popover-manage {
+        display: inline-flex;
+        align-items: center;
         min-height: 44px;
       }
 
@@ -553,12 +807,15 @@
         max-width: none;
       }
 
-      .pfp-page .pfp-filter {
-        flex-basis: 100%;
-      }
-
       .pfp-table .pfp-col-added {
         display: none;
+      }
+
+      /* Too narrow for fixed shares: a 30% memo would leave the title a
+         sliver, so columns size to their content here. */
+      .pfp-table .pfp-col-type,
+      .pfp-table .pfp-col-memo {
+        width: auto;
       }
 
       .pfp-table .pfp-memo-text {
@@ -572,6 +829,10 @@
 
       .pfp-page .pfp-icon-button {
         min-width: 44px;
+        min-height: 44px;
+      }
+
+      .pfp-menu .pfp-menu-item {
         min-height: 44px;
       }
     }
@@ -1279,7 +1540,8 @@
    * @param {!Element} container
    */
   function trapFocus(event, container) {
-    const focusable = [...container.querySelectorAll('input, textarea, button')]
+    const focusable = [...container.querySelectorAll(
+        'input, textarea, button, a[href]:not([tabindex="-1"])')]
         .filter((node) => !node.disabled);
     if (!focusable.length) return;
     const first = focusable[0];
@@ -1400,6 +1662,27 @@
   }
 
   /**
+   * A live "12 / 100" under a text field. Kept out of the field's label
+   * text for screen readers; red past the limit, which only an entry saved
+   * before the limits were lowered can be.
+   * @param {!HTMLInputElement|!HTMLTextAreaElement} field
+   * @param {number} max The field's maxlength.
+   * @return {!HTMLElement}
+   */
+  function makeCounter(field, max) {
+    const counter = makeElement('span', {
+      'className': 'pfp-count', 'aria-hidden': 'true',
+    });
+    const update = () => {
+      counter.textContent = `${field.value.length} / ${max}`;
+      counter.classList.toggle('pfp-count-over', field.value.length > max);
+    };
+    field.addEventListener('input', update);
+    update();
+    return counter;
+  }
+
+  /**
    * Builds and shows the dialog. Buttons follow Danbooru's order: primary,
    * then Remove, then Cancel.
    * @param {{id: number}} user
@@ -1466,8 +1749,10 @@
         className: 'pfp-dialog-heading',
         text: isEdit ? 'Edit favorite page' : 'Save to Favorite Pages',
       }),
-      makeField('label', 'Title', titleInput),
-      makeField('label', 'Memo', memoInput),
+      makeField(
+          'label', 'Title', titleInput, makeCounter(titleInput, TITLE_MAX)),
+      makeField(
+          'label', 'Memo', memoInput, makeCounter(memoInput, MEMO_MAX)),
       makeField(
           urlInput ? 'label' : 'div',
           'URL',
@@ -1637,6 +1922,278 @@
   }
 
   // ==========================================================================
+  // === Quick-jump popover (PLAN D7) =========================================
+  // ==========================================================================
+
+  /** @type {?function()} Tears down the open popover. */
+  let activePopoverClose = null;
+
+  function closePopover() {
+    if (activePopoverClose) activePopoverClose();
+  }
+
+  /**
+   * The list hotkey: a command-palette list of the account's pages. Typing
+   * filters it, the arrow keys pick one, Enter goes there and Shift+Enter
+   * opens it in a new tab. The popover opens before the pages are read, so
+   * nothing typed in the meantime reaches the page underneath.
+   * @return {boolean} Whether it opened.
+   */
+  function openPopover() {
+    const user = getCurrentUser();
+    if (!user || isOverlayOpen()) return false;
+    renderPopover(user);
+    return true;
+  }
+
+  /** @param {{id: number}} user */
+  function renderPopover(user) {
+    ensureStyles();
+    const returnFocus = document.activeElement;
+    /** @type {?Array<!Object>} In the default order; null until loaded. */
+    let pages = null;
+    /** @type {!Array<!Object>} The pages listed, in option order. */
+    let shown = [];
+    let selected = -1;
+    // Hover selects only when the pointer really moves, so an option that
+    // keyboard scrolling slides under a resting pointer is not picked.
+    let lastPointer = null;
+
+    const filterInput = makeElement('input', {
+      'type': 'search',
+      'className': 'pfp-popover-filter',
+      'placeholder': 'Filter by title, memo or URL',
+      'autocomplete': 'off',
+      'spellcheck': 'false',
+      'role': 'combobox',
+      'aria-label': 'Filter favorite pages',
+      'aria-autocomplete': 'list',
+      'aria-expanded': 'true',
+      'aria-controls': POPOVER_LIST_ID,
+      'oninput': () => render(),
+    });
+    const list = makeElement('div', {
+      'id': POPOVER_LIST_ID,
+      'className': 'pfp-popover-list',
+      'role': 'listbox',
+      'aria-label': 'Favorite pages',
+      'onpointermove': onPointerMove,
+      // Options never hold the focus (the keys work from the filter); a
+      // browser that focuses one anyway, e.g. for a context menu, gives it
+      // straight back.
+      'onfocusin': () => filterInput.focus(),
+    });
+    const message = makeElement('p', {className: 'pfp-popover-message'});
+    const manage = makeElement('a', {
+      className: 'pfp-popover-manage', href: LIST_PATH, text: 'Manage →',
+    });
+    const keyHint = (keys, label) => makeElement('span', {}, [
+      ...keys.map((key) => makeElement('kbd', {text: key})),
+      ` ${label}`,
+    ]);
+    const panel = makeElement('div', {
+      'className': 'pfp-popover',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Favorite Pages',
+      'onkeydown': onKeydown,
+      // Keeps the focus in the filter when an option or the panel itself is
+      // pressed; a click on an option still follows its link.
+      'onmousedown': (event) => {
+        if (event.target !== filterInput) event.preventDefault();
+      },
+    }, [
+      filterInput,
+      list,
+      message,
+      makeElement('div', {className: 'pfp-popover-footer'}, [
+        makeElement('span', {className: 'pfp-popover-keys'}, [
+          keyHint(['↑', '↓'], 'select'),
+          keyHint(['Enter'], 'open'),
+          keyHint(['Shift', 'Enter'], 'new tab'),
+          keyHint(['Esc'], 'close'),
+        ]),
+        manage,
+      ]),
+    ]);
+    // Same backdrop rule as the save dialog: press and release on it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: POPOVER_ID,
+      className: 'pfp-overlay pfp-popover-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [panel]);
+
+    function setMessage(text) {
+      message.textContent = text;
+      message.hidden = !text;
+    }
+
+    async function load() {
+      try {
+        await settingsReady;
+        const {mode, dir} = defaultOrder();
+        pages = sortPages(await listPages(user.id), mode, dir);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(describeError(err));
+        return;
+      }
+      render();
+    }
+
+    function render() {
+      if (pages === null) return;
+      const matches = filterPages(pages, filterInput.value);
+      shown = matches.slice(0, POPOVER_LIMIT);
+      list.replaceChildren(...shown.map(makeOption));
+      manage.textContent = `Manage (${pages.length}) →`;
+      const hidden = matches.length - shown.length;
+      if (!pages.length) {
+        setMessage(emptyListMessage());
+      } else if (!matches.length) {
+        setMessage('No pages match the filter.');
+      } else {
+        setMessage(hidden ? `…and ${hidden} more (refine the filter)` : '');
+      }
+      select(shown.length ? 0 : -1);
+    }
+
+    /**
+     * Options are links, so the browser's own middle-click, Ctrl+click and
+     * link preview work on them; the focus stays in the filter.
+     * @param {!Object} page
+     * @param {number} index
+     * @return {!HTMLElement}
+     */
+    function makeOption(page, index) {
+      return makeElement('a', {
+        'id': `${POPOVER_LIST_ID}-${index}`,
+        'className': 'pfp-option',
+        'role': 'option',
+        'href': page.url,
+        'tabindex': -1,
+        'aria-selected': 'false',
+      }, [
+        makeElement('span', {className: 'pfp-option-head'}, [
+          makeElement('span', {
+            className: 'pfp-option-title', text: page.title,
+          }),
+          makeElement('span', {
+            className: 'pfp-chip', text: classify(page.url),
+          }),
+        ]),
+        makeElement('span', {
+          className: 'pfp-option-url', text: toSitePath(page.url),
+        }),
+        page.memo ?
+            makeElement('span', {
+              className: 'pfp-option-memo', text: page.memo,
+            }) :
+            null,
+      ]);
+    }
+
+    /**
+     * @param {number} index -1 for none.
+     * @param {boolean=} scroll Whether to bring the option into view.
+     */
+    function select(index, scroll = true) {
+      const options = list.children;
+      if (options[selected]) {
+        options[selected].setAttribute('aria-selected', 'false');
+      }
+      selected = index;
+      const option = options[index];
+      if (!option) {
+        filterInput.removeAttribute('aria-activedescendant');
+        return;
+      }
+      option.setAttribute('aria-selected', 'true');
+      filterInput.setAttribute('aria-activedescendant', option.id);
+      if (scroll && option.scrollIntoView) {
+        option.scrollIntoView({block: 'nearest'});
+      }
+    }
+
+    /** @param {number} step 1 or -1; wraps around at either end. */
+    function moveSelection(step) {
+      if (!shown.length) return;
+      select((selected + step + shown.length) % shown.length);
+    }
+
+    /**
+     * @param {number} index
+     * @param {boolean} newTab
+     */
+    function go(index, newTab) {
+      const page = shown[index];
+      if (!page) return;
+      if (newTab) {
+        close();
+        // Opened from a later task: Chromium reads the modifier keys of the
+        // event being handled, and a held Shift would turn the tab into a
+        // new window, as Shift+click does. The key press still counts as
+        // user activation then, so the popup blocker lets it through.
+        setTimeout(() => window.open(page.url, '_blank', 'noopener'));
+      } else {
+        // Stays open until the page unloads; pagehide closes it before the
+        // page can enter the bfcache.
+        location.assign(page.url);
+      }
+    }
+
+    function onPointerMove(event) {
+      const {clientX: x, clientY: y} = event;
+      if (lastPointer && lastPointer.x === x && lastPointer.y === y) return;
+      lastPointer = {x, y};
+      const option = event.target instanceof Element ?
+          event.target.closest('.pfp-option') : null;
+      if (option) select([...list.children].indexOf(option), false);
+    }
+
+    function onKeydown(event) {
+      // Keep Danbooru's shortcuts and our own hotkeys out of the popover.
+      event.stopPropagation();
+      // Enter also confirms an IME composition; that one is not ours.
+      if (event.isComposing) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === 'Tab') {
+        trapFocus(event, panel);
+      } else if (event.target !== filterInput) {
+        return;
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        go(selected, event.shiftKey);
+      }
+    }
+
+    function close() {
+      overlay.remove();
+      activePopoverClose = null;
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    setMessage('');
+    activePopoverClose = close;
+    document.body.appendChild(overlay);
+    filterInput.focus();
+    load();
+  }
+
+  // ==========================================================================
   // === Hotkeys (PLAN D7) ====================================================
   // ==========================================================================
 
@@ -1645,9 +2202,13 @@
   /** Settles once `settings` holds the stored values (or the defaults). */
   let settingsReady = Promise.resolve();
 
-  /** Which setting holds each hotkey, and what it does. */
+  /**
+   * Which setting holds each hotkey, and what it does. `run` returns whether
+   * it reacted; a key that did nothing (e.g. logged out) is left alone.
+   */
   const HOTKEY_ACTIONS = Object.freeze([
     {settingKey: 'hotkeySave', run: saveCurrentPage},
+    {settingKey: 'hotkeyList', run: openPopover},
   ]);
 
   /**
@@ -1673,26 +2234,39 @@
          target.closest('input, textarea, select') !== null);
   }
 
-  /** @param {!KeyboardEvent} event */
-  function onGlobalKeydown(event) {
-    if (event.repeat || event.isComposing || event.defaultPrevented) return;
-    if (isTypingTarget(event.target) || isOverlayOpen()) return;
-    const action = HOTKEY_ACTIONS.find(
-        ({settingKey}) => matchesHotkey(event, settings[settingKey]));
-    if (!action) return;
-    event.preventDefault();
-    action.run();
+  /**
+   * @param {!KeyboardEvent} event
+   * @return {boolean} Whether a hotkey may act on this key press: not while
+   *     typing, composing, repeating or with one of our overlays open.
+   */
+  function isHotkeyEvent(event) {
+    return !event.repeat && !event.isComposing && !event.defaultPrevented &&
+        !isTypingTarget(event.target) && !isOverlayOpen();
   }
 
-  /** The save hotkey: opens the dialog for the page being viewed. */
+  /** @param {!KeyboardEvent} event */
+  function onGlobalKeydown(event) {
+    if (!isHotkeyEvent(event)) return;
+    const action = HOTKEY_ACTIONS.find(
+        ({settingKey}) => matchesHotkey(event, settings[settingKey]));
+    if (action && action.run()) event.preventDefault();
+  }
+
+  /**
+   * The save hotkey: opens the dialog for the page being viewed.
+   * @return {boolean} False for logged-out visitors, who get no reaction at
+   *     all (PLAN D2-2).
+   */
   function saveCurrentPage() {
     const checked = checkCurrentPage();
     if (checked.ok) {
       openSaveDialog({url: checked.url, title: suggestTitle(checked.url)});
-    } else if (checked.reason !== 'loggedOut') {
-      // Logged-out visitors get no reaction at all (PLAN D2-2).
+    } else if (checked.reason === 'loggedOut') {
+      return false;
+    } else {
       showToast(REJECT_MESSAGES[checked.reason], {error: true});
     }
+    return true;
   }
 
   async function loadSettings() {
@@ -1727,6 +2301,12 @@
     ],
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
+    prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
+    next: [['path', {d: 'M9 5l7 7-7 7'}]],
+    more: [
+      ['circle', {cx: 5, cy: 12, r: 1.8}], ['circle', {cx: 12, cy: 12, r: 1.8}],
+      ['circle', {cx: 19, cy: 12, r: 1.8}],
+    ],
   });
 
   /**
@@ -1759,11 +2339,19 @@
     {value: 'title', label: 'Title', dir: 'asc'},
     {value: 'type', label: 'Type', dir: 'asc'},
   ]);
+  /** Rows per list page (Resolved 30). */
+  const PAGE_SIZE = 20;
+  /** Page numbers shown either side of the current one, as on Danbooru. */
+  const PAGER_WINDOW = 4;
+  /** Focuses the list filter, like Danbooru's own search box key. */
+  const FILTER_HOTKEY = Object.freeze({code: 'KeyQ', shiftKey: false});
   /** Distance from the viewport edge that scrolls the page while dragging. */
   const DRAG_EDGE_PX = 48;
   const DRAG_SCROLL_PX = 12;
   /** A little longer than the 150ms slide transition in GLOBAL_CSS. */
   const SETTLE_MS = 170;
+  /** Space between a row's ⋯ button and its menu. */
+  const MENU_GAP_PX = 4;
   const collator =
       new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
 
@@ -1786,6 +2374,22 @@
           collator.compare(a.title, b.title),
     };
     return [...pages].sort(comparators[mode] || comparators.custom);
+  }
+
+  /**
+   * The order the list page and the popover start in (PLAN D8).
+   * @return {{mode: string, dir: string}}
+   */
+  function defaultOrder() {
+    const known = SORT_MODES.some(({value}) => value === settings.defaultSort);
+    const mode = known ? settings.defaultSort : SORT_MODES[0].value;
+    return {mode, dir: mode === 'custom' ? 'asc' : settings.defaultSortDir};
+  }
+
+  /** @return {string} What an account with no saved pages is told. */
+  function emptyListMessage() {
+    return 'No favorite pages yet. Press ' +
+        `${formatHotkey(settings.hotkeySave)} on any page to save it.`;
   }
 
   /**
@@ -1838,6 +2442,26 @@
     await reorderPage(userId, moved.id, sortOrder);
   }
 
+  /** @return {number} The list page number in the address (?page=), or 1. */
+  function pageNumberFromUrl() {
+    const value = Number(new URL(location.href).searchParams.get('page'));
+    return Number.isSafeInteger(value) && value > 0 ? value : 1;
+  }
+
+  /**
+   * @param {number} pageNumber
+   * @return {string} The list address for that page; page 1 has no param.
+   */
+  function listPageHref(pageNumber) {
+    const url = new URL(location.href);
+    if (pageNumber > 1) {
+      url.searchParams.set('page', String(pageNumber));
+    } else {
+      url.searchParams.delete('page');
+    }
+    return url.pathname + url.search;
+  }
+
   /**
    * @param {number} ms
    * @return {!HTMLElement} A <time> showing the date, full time on hover.
@@ -1876,6 +2500,17 @@
       const view = createListView(user);
       root.replaceChildren(view.element);
       stateRefreshers.add(view.reload);
+      overlayClosers.add(() => view.closeMenu());
+      document.addEventListener('keydown', (event) => {
+        if (!isHotkeyEvent(event) || !matchesHotkey(event, FILTER_HOTKEY)) {
+          return;
+        }
+        // Also keeps the key from being typed into the newly focused filter.
+        event.preventDefault();
+        view.focusFilter();
+      });
+      // Back / Forward between list pages (see goToPage).
+      window.addEventListener('popstate', view.showPageFromUrl);
       purgeTombstones(user.id).catch(
           (err) => console.warn(LOG_PREFIX, 'tombstone purge failed', err));
       await view.reload();
@@ -1886,19 +2521,29 @@
   }
 
   /**
-   * Builds the list page: toolbar, table and the drag-to-reorder logic.
+   * Builds the list page: toolbar, table, paginator and the drag-to-reorder
+   * logic.
    * @param {{id: number, name: string}} user
-   * @return {{element: !HTMLElement, reload: function(): !Promise<void>}}
+   * @return {{
+   *   element: !HTMLElement,
+   *   reload: function(): !Promise<void>,
+   *   focusFilter: function(),
+   *   showPageFromUrl: function(),
+   *   closeMenu: function(),
+   * }}
    */
   function createListView(user) {
-    const initial = SORT_MODES.find(({value}) => value === settings.defaultSort)
-        || SORT_MODES[0];
     let pages = [];
-    let mode = initial.value;
-    let dir = initial.value === 'custom' ? 'asc' : settings.defaultSortDir;
+    /** Whether `pages` holds the stored list yet. */
+    let loaded = false;
+    let {mode, dir} = defaultOrder();
     let query = '';
+    /** The list page shown, 1-based; kept in the address as ?page=. */
+    let pageNumber = pageNumberFromUrl();
     /** Row move in progress (pointer drag or arrow key); null when none. */
     let move = null;
+    /** Set while a move is being written, so moves never overlap. */
+    let committing = false;
 
     const sortSelect = makeElement('select', {
       'className': 'pfp-sort',
@@ -1906,7 +2551,7 @@
       'onchange': () => {
         mode = sortSelect.value;
         dir = SORT_MODES.find(({value}) => value === mode).dir;
-        render();
+        resetPage();
       },
     }, SORT_MODES.map(({value, label}) =>
       makeElement('option', {value, text: label})));
@@ -1916,7 +2561,7 @@
       className: 'pfp-sort-dir',
       onclick: () => {
         dir = dir === 'asc' ? 'desc' : 'asc';
-        render();
+        resetPage();
       },
     });
     const filterInput = makeElement('input', {
@@ -1924,9 +2569,11 @@
       'className': 'pfp-filter',
       'placeholder': 'Filter by title, memo or URL',
       'aria-label': 'Filter',
+      // Danbooru's wording for its own shortcut tooltips.
+      'title': 'Shortcut is q',
       'oninput': () => {
         query = filterInput.value;
-        render();
+        resetPage();
       },
     });
     const summary = makeElement('p', {className: 'pfp-summary'});
@@ -1937,9 +2584,13 @@
       makeElement('p', {
         className: 'pfp-page-owner', text: `Saved by ${user.name}`,
       }),
+      // One control per line (Resolved 30); the direction belongs to the
+      // sort, so the two share a line.
       makeElement('div', {className: 'pfp-toolbar'}, [
-        sortSelect,
-        dirButton,
+        makeElement('div', {className: 'pfp-sort-row'}, [
+          sortSelect,
+          dirButton,
+        ]),
         filterInput,
         makeElement('button', {
           type: 'button',
@@ -1952,6 +2603,37 @@
       content,
     ]);
 
+    /** Back to the first page after the sort or filter changed. */
+    function resetPage() {
+      pageNumber = 1;
+      history.replaceState(history.state, '', listPageHref(1));
+      render();
+    }
+
+    /**
+     * A paginator click: one history step per page, like Danbooru's own
+     * page links, and back to the top as a page load would be.
+     * @param {number} n
+     */
+    function goToPage(n) {
+      pageNumber = n;
+      history.pushState(null, '', listPageHref(n));
+      render();
+      window.scrollTo(0, 0);
+    }
+
+    function showPageFromUrl() {
+      pageNumber = pageNumberFromUrl();
+      if (!move) render();
+    }
+
+    /** The q key: straight to typing a filter, caret at the end. */
+    function focusFilter() {
+      filterInput.focus();
+      const end = filterInput.value.length;
+      filterInput.setSelectionRange(end, end);
+    }
+
     async function reload() {
       try {
         pages = await listPages(user.id);
@@ -1962,25 +2644,37 @@
         }));
         return;
       }
+      loaded = true;
       if (!move) render();
     }
 
     function render() {
+      // The rows it belongs to are about to be replaced.
+      closeRowMenu();
       const draggable = mode === 'custom' && !query.trim();
-      const shown = filterPages(sortPages(pages, mode, dir), query);
+      const matches = filterPages(sortPages(pages, mode, dir), query);
+      const lastPage = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
+      // Past the end (an old address, or rows removed meanwhile): show the
+      // last page. Only once loaded, or the empty first render would lose
+      // the page asked for.
+      if (loaded && pageNumber > lastPage) {
+        pageNumber = lastPage;
+        history.replaceState(history.state, '', listPageHref(pageNumber));
+      }
+      const offset = (pageNumber - 1) * PAGE_SIZE;
+      const shown = matches.slice(offset, offset + PAGE_SIZE);
       dirButton.disabled = mode === 'custom';
       dirButton.textContent = dir === 'asc' ? '↑' : '↓';
       dirButton.setAttribute('aria-label',
           dir === 'asc' ? 'Ascending order' : 'Descending order');
-      const total = `${pages.length} ${pages.length === 1 ? 'page' : 'pages'}`;
-      summary.textContent =
-          shown.length === pages.length ? total : `${shown.length} of ${total}`;
+      // "items", not "pages": the paginator below has pages of its own.
+      const total = `${pages.length} ${pages.length === 1 ? 'item' : 'items'}`;
+      summary.textContent = matches.length === pages.length ?
+          total : `${matches.length} of ${total}`;
 
       if (!pages.length) {
         content.replaceChildren(makeElement('p', {
-          className: 'pfp-page-message',
-          text: 'No favorite pages yet. Press ' +
-              `${formatHotkey(settings.hotkeySave)} on any page to save it.`,
+          className: 'pfp-page-message', text: emptyListMessage(),
         }));
         return;
       }
@@ -2010,7 +2704,85 @@
             'aria-label': 'Actions'}),
         ])]),
         tbody,
-      ]));
+      ]), makePager(pageNumber, lastPage));
+    }
+
+    /**
+     * Danbooru's numbered paginator with its own classes, so it looks the
+     * same in every theme: arrows, the first and last page, PAGER_WINDOW
+     * pages either side of the current one and an ellipsis for each gap.
+     * Phones show only the first, current and last page (desktop-only /
+     * mobile-only), as on Danbooru.
+     * @param {number} current
+     * @param {number} last
+     * @return {!HTMLElement}
+     */
+    function makePager(current, last) {
+      const left = Math.max(2, current - PAGER_WINDOW);
+      const right = Math.min(last - 1, current + PAGER_WINDOW);
+      const gap = (mobileOnly) => makeElement('span', {
+        'className': mobileOnly ?
+            'paginator-ellipsis mobile-only' : 'paginator-ellipsis',
+        'aria-hidden': 'true',
+        'text': '…',
+      });
+      const number = (n) => {
+        if (n === current) {
+          return makeElement('span', {
+            'className': 'paginator-current font-bold',
+            'aria-current': 'page',
+            'text': String(n),
+          });
+        }
+        const edge = n === 1 || n === last;
+        return makePageLink(n,
+            edge ? 'paginator-page' : 'paginator-page desktop-only',
+            String(n));
+      };
+      const arrow = (n, name, label) => (n >= 1 && n <= last ?
+          makePageLink(n, `paginator-${name}`, makeIcon(name), label) :
+          makeElement('span', {className: `paginator-${name}`},
+              [makeIcon(name)]));
+
+      const items = [arrow(current - 1, 'prev', 'Previous page'), number(1)];
+      if (left === 2 && current > 2) items.push(gap(true));
+      if (left > 2) items.push(gap(false));
+      for (let n = left; n <= right; n++) items.push(number(n));
+      if (right < last - 1) items.push(gap(false));
+      if (right === last - 1 && current < last - 1) items.push(gap(true));
+      if (last > 1) items.push(number(last));
+      items.push(arrow(current + 1, 'next', 'Next page'));
+      return makeElement('div', {
+        'className': 'paginator numbered-paginator mt-8 mb-4 space-x-2 ' +
+            'flex justify-center items-center pfp-paginator',
+        'role': 'navigation',
+        'aria-label': 'Pages',
+      }, items);
+    }
+
+    /**
+     * A real link, so middle-click and Ctrl+click open that page in a new
+     * tab; a plain click turns the page in place.
+     * @param {number} n
+     * @param {string} className
+     * @param {string|!Node} content
+     * @param {string=} label
+     * @return {!HTMLElement}
+     */
+    function makePageLink(n, className, content, label) {
+      return makeElement('a', {
+        'className': className,
+        'href': listPageHref(n),
+        'aria-label': label,
+        'onclick': (event) => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey ||
+              event.shiftKey || event.altKey) {
+            return;
+          }
+          event.preventDefault();
+          goToPage(n);
+        },
+      }, [content]);
     }
 
     /**
@@ -2072,6 +2844,19 @@
               'aria-label': `Remove "${page.title}"`,
               'onclick': () => removePage(page),
             }, [makeIcon('remove')]),
+            // Moves to other list pages, alongside the drag handle.
+            draggable ?
+                makeElement('button', {
+                  'type': 'button',
+                  'className': 'pfp-icon-button pfp-row-menu-button',
+                  'title': 'Move',
+                  'aria-label': `Move "${page.title}" to another page`,
+                  'aria-haspopup': 'menu',
+                  'aria-expanded': 'false',
+                  'onclick': (event) =>
+                    toggleRowMenu(event.currentTarget, page.id),
+                }, [makeIcon('more')]) :
+                null,
           ]));
       return row;
     }
@@ -2092,22 +2877,220 @@
 
     /**
      * Saves a new position, then re-reads the list (also on failure, which
-     * puts the rows back where the stored order has them).
-     * @param {number} from
+     * puts the rows back where the stored order has them). Positions count
+     * across all list pages; a keyboard move that crossed into the next or
+     * previous page turns to that page so the row stays in view.
+     * @param {number} from Position in the whole custom order.
      * @param {number} to
      * @param {?string=} focusId Row whose handle gets focus afterwards.
+     * @return {!Promise<boolean>} Whether the move was saved.
      */
     async function commitMove(from, to, focusId = null) {
+      committing = true;
+      let saved = true;
       try {
         await movePage(user.id, sortPages(pages, 'custom', 'asc'), from, to);
       } catch (err) {
+        saved = false;
         console.error(LOG_PREFIX, err);
         showToast(describeError(err), {error: true});
       }
-      await reload();
-      const row = focusId &&
+      try {
+        await reload();
+      } finally {
+        committing = false;
+      }
+      if (!focusId) return saved;
+      const index = sortPages(pages, 'custom', 'asc')
+          .findIndex((page) => page.id === focusId);
+      const target = Math.floor(index / PAGE_SIZE) + 1;
+      if (index >= 0 && target !== pageNumber) {
+        pageNumber = target;
+        history.replaceState(history.state, '', listPageHref(target));
+        render();
+      }
+      const row =
           tableRows().find((candidate) => candidate.dataset.id === focusId);
       if (row) row.querySelector('.pfp-handle').focus();
+      return saved;
+    }
+
+    /** @return {number} Position of the first row shown in the order. */
+    function pageOffset() {
+      return (pageNumber - 1) * PAGE_SIZE;
+    }
+
+    // --- Row menu: moves to other list pages (Resolved 31) ---
+    // The ⋯ button opens a small menu in Danbooru's popup-menu style. It
+    // sits on <body>, placed under the button, so the table cannot clip it.
+    // Danbooru's own menu script only binds the buttons present at load,
+    // so this one is ours.
+
+    /** @type {?{button: !HTMLElement, menu: !HTMLElement}} */
+    let rowMenu = null;
+
+    /**
+     * @param {{restoreFocus: (boolean|undefined)}=} options Focus goes back
+     *     to the ⋯ button, for Esc and Tab.
+     */
+    function closeRowMenu({restoreFocus = false} = {}) {
+      if (!rowMenu) return;
+      const {button, menu} = rowMenu;
+      rowMenu = null;
+      menu.remove();
+      button.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onOutsidePointer, true);
+      window.removeEventListener('resize', onMenuResize);
+      if (restoreFocus && button.isConnected) button.focus();
+    }
+
+    /**
+     * @param {!HTMLElement} button
+     * @param {string} id The row's page id.
+     */
+    function toggleRowMenu(button, id) {
+      const wasOpen = rowMenu !== null && rowMenu.button === button;
+      closeRowMenu();
+      if (!wasOpen && !move && !committing) openRowMenu(button, id);
+    }
+
+    /**
+     * Previous / next page put the row on the last / first place of that
+     * page, pushing that page's row there into this one; top and bottom
+     * are the ends of the whole list. The view stays on this page.
+     * @param {!HTMLElement} button
+     * @param {string} id
+     */
+    function openRowMenu(button, id) {
+      const ordered = sortPages(pages, 'custom', 'asc');
+      const from = ordered.findIndex((page) => page.id === id);
+      if (from < 0) return;
+      const offset = pageOffset();
+      const lastPage = Math.ceil(ordered.length / PAGE_SIZE);
+      const actions = [
+        {
+          label: 'Move to previous page', enabled: pageNumber > 1,
+          to: offset - 1, done: `Moved to page ${pageNumber - 1}.`,
+        },
+        {
+          label: 'Move to next page', enabled: pageNumber < lastPage,
+          to: offset + PAGE_SIZE, done: `Moved to page ${pageNumber + 1}.`,
+        },
+        null,
+        {label: 'Move to top', enabled: from > 0, to: 0,
+          done: 'Moved to the top.'},
+        {label: 'Move to bottom', enabled: from < ordered.length - 1,
+          to: ordered.length - 1, done: 'Moved to the bottom.'},
+      ];
+      const menu = makeElement('div', {
+        'className': 'pfp-menu',
+        'role': 'menu',
+        'aria-label': button.getAttribute('aria-label'),
+        'tabindex': -1,
+        'onkeydown': onMenuKeydown,
+      }, actions.map((action) => (action ?
+          makeElement('button', {
+            'type': 'button',
+            'className': 'pfp-menu-item',
+            'role': 'menuitem',
+            'disabled': !action.enabled,
+            'text': action.label,
+            'onclick': () => sendRow(from, action.to, action.done),
+          }) :
+          makeElement('div', {
+            className: 'pfp-menu-separator', role: 'separator',
+          }))));
+      document.body.appendChild(menu);
+      placeRowMenu(menu, button);
+      rowMenu = {button, menu};
+      button.setAttribute('aria-expanded', 'true');
+      document.addEventListener('pointerdown', onOutsidePointer, true);
+      window.addEventListener('resize', onMenuResize);
+      (menuItems(menu)[0] || menu).focus();
+    }
+
+    /**
+     * Under the button, right edges aligned (the button is the last thing
+     * in the row); above it when there is no room below.
+     * @param {!HTMLElement} menu
+     * @param {!HTMLElement} button
+     */
+    function placeRowMenu(menu, button) {
+      const anchor = button.getBoundingClientRect();
+      const size = menu.getBoundingClientRect();
+      const fitsBelow =
+          anchor.bottom + MENU_GAP_PX + size.height <= window.innerHeight;
+      const fitsAbove = anchor.top - MENU_GAP_PX - size.height >= 0;
+      const top = !fitsBelow && fitsAbove ?
+          anchor.top - MENU_GAP_PX - size.height :
+          anchor.bottom + MENU_GAP_PX;
+      const left = Math.max(MENU_GAP_PX, anchor.right - size.width);
+      menu.style.top = `${top + window.scrollY}px`;
+      menu.style.left = `${left + window.scrollX}px`;
+    }
+
+    /**
+     * @param {!Element} menu
+     * @return {!Array<!HTMLElement>} The menu's enabled items.
+     */
+    function menuItems(menu) {
+      return [...menu.querySelectorAll('.pfp-menu-item:not(:disabled)')];
+    }
+
+    function onMenuKeydown(event) {
+      // Keep Danbooru's shortcuts and ours (q, Shift+B, ...) out of it.
+      event.stopPropagation();
+      const items = menuItems(event.currentTarget);
+      const index = items.indexOf(document.activeElement);
+      const focusAt = (i) => {
+        if (items.length) items[(i + items.length) % items.length].focus();
+      };
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        event.preventDefault();
+        closeRowMenu({restoreFocus: true});
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusAt(index + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusAt(index < 0 ? -1 : index - 1);
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        focusAt(0);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        focusAt(-1);
+      }
+    }
+
+    function onOutsidePointer(event) {
+      if (!rowMenu || rowMenu.menu.contains(event.target) ||
+          rowMenu.button.contains(event.target)) {
+        return;
+      }
+      closeRowMenu();
+    }
+
+    function onMenuResize() {
+      closeRowMenu();
+    }
+
+    /**
+     * Runs a menu move, then hands the keyboard to the row that took the
+     * moved row's place on this page.
+     * @param {number} from
+     * @param {number} to
+     * @param {string} done Toast text.
+     */
+    async function sendRow(from, to, done) {
+      const place = from - pageOffset();
+      closeRowMenu();
+      if (move || committing) return;
+      if (await commitMove(from, to)) showToast(done);
+      const rows = tableRows();
+      const row = rows[Math.min(place, rows.length - 1)];
+      const next = row && row.querySelector('.pfp-row-menu-button');
+      if (next) next.focus({preventScroll: true});
     }
 
     // --- Moving rows (PLAN D8-2, D8-3, Resolved 22) ---
@@ -2193,16 +3176,30 @@
       }
     }
 
-    /** Arrow keys on a focused handle move the row one place (D8-5). */
+    /**
+     * Arrow keys on a focused handle move the row one place (D8-5), across
+     * into the neighbouring list page at either edge.
+     */
     function onHandleKeydown(event, id) {
       const step = {ArrowUp: -1, ArrowDown: 1}[event.key];
-      if (!step || move) return;
+      if (!step) return;
       event.preventDefault();
       event.stopPropagation();
+      if (move || committing) return;
       const rows = tableRows();
       const from = rows.findIndex((row) => row.dataset.id === id);
+      if (from < 0) return;
       const to = from + step;
-      if (from < 0 || to < 0 || to >= rows.length) return;
+      const offset = pageOffset();
+      if (to < 0 || to >= rows.length) {
+        // No slide to show: the row leaves this page, and commitMove turns
+        // to the page it lands on.
+        const target = offset + to;
+        if (target >= 0 && target < pages.length) {
+          commitMove(offset + from, target, id);
+        }
+        return;
+      }
       move = beginMove(rows[from]);
       move.to = to;
       settleMove(move, () => {
@@ -2210,7 +3207,7 @@
         // back so keyboard users never lose their place.
         rows[from].querySelector('.pfp-handle').focus({preventScroll: true});
         move = null;
-        commitMove(from, to, id);
+        commitMove(offset + from, offset + to, id);
       });
     }
 
@@ -2219,8 +3216,13 @@
     // scrolls the page. The lifted row follows the pointer; the gap opens
     // where its centre has passed a neighbour's midpoint.
 
+    /**
+     * Drags stay within the list page shown; the arrow keys cross pages.
+     * @param {!PointerEvent} event
+     * @param {!HTMLElement} row
+     */
     function startDrag(event, row) {
-      if (move || event.button !== 0) return;
+      if (move || committing || event.button !== 0) return;
       event.preventDefault();
       try {
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -2293,9 +3295,10 @@
       if (!isDragEvent(event)) return;
       releasePointer();
       const {from, to} = move;
+      const offset = pageOffset();
       settleMove(move, () => {
         move = null;
-        if (from !== to) commitMove(from, to);
+        if (from !== to) commitMove(offset + from, offset + to);
       });
     }
 
@@ -2317,7 +3320,9 @@
     }
 
     render();
-    return {element, reload};
+    return {
+      element, reload, focusFilter, showPageFromUrl, closeMenu: closeRowMenu,
+    };
   }
 
   // ==========================================================================
@@ -2438,6 +3443,7 @@
 
   function init() {
     overlayClosers.add(closeSaveDialog);
+    overlayClosers.add(closePopover);
     overlayClosers.add(hideToast);
     // Registered on JSON documents too, so the save key can explain why it
     // does nothing there.
