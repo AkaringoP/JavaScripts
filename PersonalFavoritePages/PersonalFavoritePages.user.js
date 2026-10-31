@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.6.0
+// @version      0.6.1
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -193,6 +193,8 @@
       position: fixed;
       inset: 0;
       z-index: var(--pfp-z-overlay);
+      /* fitToVisualViewport sets its width and height: padding inside. */
+      box-sizing: border-box;
       display: flex;
       justify-content: center;
       align-items: flex-start;
@@ -383,6 +385,9 @@
       align-items: stretch;
       padding: 0;
       overflow: hidden;
+      /* Not even a script can scroll it, so nothing moves the panel but
+         its own slide (Resolved 44). */
+      overflow: clip;
     }
 
     .pfp-popover.pfp-drawer {
@@ -411,6 +416,15 @@
     .pfp-popover .pfp-popover-dir {
       box-sizing: border-box;
       margin: 0;
+    }
+
+    /* The drawer is narrow: filter on its own line, the order under it. */
+    .pfp-popover.pfp-drawer input.pfp-popover-filter {
+      flex-basis: 100%;
+    }
+
+    .pfp-popover.pfp-drawer .pfp-popover-sort {
+      flex: 1 1 auto;
     }
 
     /* Only the list scrolls; the filter and footer stay put. */
@@ -944,6 +958,41 @@
       color: var(--link-color);
     }
 
+    /* A ⋯ with no moves to offer (another order, or a filter) is only for
+       the phone layout's Edit / Remove (Resolved 43). */
+    .pfp-page .pfp-icon-button.pfp-phone-only {
+      display: none;
+    }
+
+    /* The phone list's memo button; desktops show the memo column. */
+    .pfp-page .pfp-memo-toggle {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      margin: 0 0 0 6px;
+      padding: 0 0.5em;
+      border: 1px solid var(--default-border-color);
+      border-radius: 999px;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      font-size: 0.8em;
+      line-height: 1.6;
+      vertical-align: middle;
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-memo-toggle[aria-expanded="true"] {
+      background: var(--table-row-hover-background);
+    }
+
+    .pfp-page .pfp-memo-toggle .pfp-icon {
+      display: block;
+      width: 1.1em;
+      height: 1.1em;
+    }
+
     .pfp-page .pfp-handle:focus-visible,
     .pfp-page .pfp-icon-button:focus-visible {
       outline: 2px solid var(--focus-ring-color);
@@ -1040,6 +1089,21 @@
 
     /* Danbooru's mobile breakpoint. */
     @media (max-width: 660px) {
+      /* Dialogs use nearly the whole phone screen; the overlay follows
+         what is visible (keyboard, zoom), so 100% is what is left. */
+      .pfp-overlay {
+        padding: 8px;
+      }
+
+      .pfp-dialog {
+        max-height: 100%;
+        padding: 12px;
+      }
+
+      .pfp-popover {
+        max-height: 100%;
+      }
+
       .pfp-dialog .pfp-dialog-buttons button {
         flex: 1 1 auto;
         box-sizing: border-box;
@@ -1083,15 +1147,89 @@
         grid-template-columns: max-content minmax(0, 1fr);
       }
 
-      /* Too narrow for fixed shares: a 30% memo would leave the title a
-         sliver, so columns size to their content here. */
-      .pfp-table .pfp-col-type,
-      .pfp-table .pfp-col-memo {
-        width: auto;
+      /* Each row becomes a card (Resolved 43): the title and its link,
+         under them the type chip with a Memo button, and the memo itself
+         only once that is pressed; ⋯ (with Edit / Remove) on the right.
+         Grid on the row keeps Danbooru's row border and stripes, which sit
+         on the <tr>. */
+      .pfp-table,
+      .pfp-table tbody {
+        display: block;
       }
 
-      .pfp-table .pfp-memo-text {
-        -webkit-line-clamp: 2;
+      .pfp-table thead {
+        display: none;
+      }
+
+      .pfp-table .pfp-row {
+        display: grid;
+        grid-template-columns: auto auto minmax(0, 1fr) auto;
+        grid-template-areas:
+          "select handle title actions"
+          "select handle type actions"
+          "select handle memo actions";
+        align-items: start;
+      }
+
+      .pfp-page .pfp-memo-toggle {
+        display: inline-flex;
+      }
+
+      .pfp-table .pfp-row:not(.pfp-memo-open) .pfp-col-memo {
+        display: none;
+      }
+
+      /* Unfolded: the whole memo, newlines kept. */
+      .pfp-table .pfp-memo-open .pfp-memo-text {
+        display: block;
+        -webkit-line-clamp: none;
+        overflow: visible;
+      }
+
+      /* The desktop column sizes (1%, 30%, 12em) mean nothing in a card. */
+      .pfp-table .pfp-row > td {
+        width: auto;
+        min-width: 0;
+        max-width: none;
+      }
+
+      .pfp-table .pfp-col-select {
+        grid-area: select;
+        align-self: center;
+      }
+
+      .pfp-table .pfp-col-handle {
+        grid-area: handle;
+        align-self: center;
+      }
+
+      .pfp-table .pfp-col-title {
+        grid-area: title;
+      }
+
+      .pfp-table .pfp-col-type {
+        grid-area: type;
+        padding-top: 0;
+      }
+
+      .pfp-table .pfp-col-memo {
+        grid-area: memo;
+        padding-top: 0;
+      }
+
+      .pfp-table .pfp-col-actions {
+        grid-area: actions;
+        align-self: center;
+      }
+
+      /* ✎ ✕ move into ⋯, which is always there. */
+      .pfp-page .pfp-icon-button.pfp-edit,
+      .pfp-page .pfp-icon-button.pfp-remove {
+        display: none;
+      }
+
+      .pfp-page .pfp-icon-button.pfp-phone-only {
+        display: inline-flex;
       }
 
       .pfp-page .pfp-handle {
@@ -1889,6 +2027,36 @@
         window.matchMedia(MOBILE_QUERY).matches;
   }
 
+  /**
+   * Keeps a fixed overlay over the part of the page actually on screen. On
+   * phones the on-screen keyboard and pinch zoom shrink and shift the
+   * visual viewport while position: fixed follows the layout viewport, so
+   * a dialog could sit half under the keyboard or off the side
+   * (Resolved 45).
+   * @param {!HTMLElement} overlay
+   * @return {function()} Stops following.
+   */
+  function fitToVisualViewport(overlay) {
+    const viewport = window.visualViewport;
+    if (!viewport) return () => {};
+    const fit = () => {
+      Object.assign(overlay.style, {
+        inset: 'auto',
+        left: `${viewport.offsetLeft}px`,
+        top: `${viewport.offsetTop}px`,
+        width: `${viewport.width}px`,
+        height: `${viewport.height}px`,
+      });
+    };
+    fit();
+    viewport.addEventListener('resize', fit);
+    viewport.addEventListener('scroll', fit);
+    return () => {
+      viewport.removeEventListener('resize', fit);
+      viewport.removeEventListener('scroll', fit);
+    };
+  }
+
   /** @return {boolean} Whether the viewer asked the OS for less motion. */
   function prefersReducedMotion() {
     return Boolean(window.matchMedia) &&
@@ -2301,9 +2469,12 @@
       }
     }
 
+    let stopFitting = () => {};
+
     function close() {
       clearTimeout(checkTimer);
       checkSeq++;
+      stopFitting();
       overlay.remove();
       activeDialogClose = null;
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
@@ -2317,6 +2488,7 @@
     updateButtons();
     activeDialogClose = close;
     document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
     titleInput.focus();
     titleInput.select();
   }
@@ -2570,8 +2742,23 @@
       }
       option.setAttribute('aria-selected', 'true');
       filterInput.setAttribute('aria-activedescendant', option.id);
-      if (scroll && option.scrollIntoView) {
-        option.scrollIntoView({block: 'nearest'});
+      if (scroll) revealOption(option);
+    }
+
+    /**
+     * Brings an option into view by scrolling the list alone. Not
+     * scrollIntoView: that also scrolls every ancestor, and while the
+     * phone drawer slides in it scrolled the overlay sideways, which made
+     * the panel jump into place and then drift (Resolved 44).
+     * @param {!HTMLElement} option
+     */
+    function revealOption(option) {
+      const box = list.getBoundingClientRect();
+      const rect = option.getBoundingClientRect();
+      if (rect.top < box.top) {
+        list.scrollTop -= box.top - rect.top;
+      } else if (rect.bottom > box.bottom) {
+        list.scrollTop += rect.bottom - box.bottom;
       }
     }
 
@@ -2632,7 +2819,10 @@
       }
     }
 
+    let stopFitting = () => {};
+
     function close() {
+      stopFitting();
       overlay.remove();
       activePopoverClose = null;
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
@@ -2644,6 +2834,7 @@
     showOrder();
     activePopoverClose = close;
     document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
     (focusFilter ? filterInput : panel).focus({preventScroll: true});
     load();
   }
@@ -2757,6 +2948,8 @@
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
     prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
+    // A note: the phone list's memo button.
+    memo: [['path', {d: 'M5 4h14v16H5z M8.5 9h7M8.5 13h7M8.5 17h4'}]],
     // Bulleted lines: the navbar's panel button.
     list: [
       ['path', {d: 'M9 6h11M9 12h11M9 18h11'}],
@@ -3210,7 +3403,7 @@
     function render() {
       // The rows it belongs to are about to be replaced.
       closeRowMenu();
-      const draggable = mode === 'custom' && !query.trim();
+      const draggable = canMoveRows();
       const matches = filterPages(sortPages(pages, mode, dir), query);
       const lastPage = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
       // Past the end (an old address, or rows removed meanwhile): show the
@@ -3435,6 +3628,21 @@
             makeElement('span', {
               className: 'pfp-chip', text: classify(page.url),
             }),
+            // Phone only: the memo column gives way to this, which unfolds
+            // the whole memo under the title (Resolved 43). Tooltips do not
+            // reach a touch screen.
+            page.memo ?
+                makeElement('button', {
+                  'type': 'button',
+                  'className': 'pfp-memo-toggle',
+                  'aria-expanded': 'false',
+                  'onclick': (event) => {
+                    const open = row.classList.toggle('pfp-memo-open');
+                    event.currentTarget.setAttribute(
+                        'aria-expanded', String(open));
+                  },
+                }, [makeIcon('memo'), 'Memo']) :
+                null,
           ]),
           makeElement('td', {className: 'pfp-col-memo'}, [
             // The line clamp has to sit on an inner element: table cells
@@ -3461,19 +3669,21 @@
               'aria-label': `Remove "${page.title}"`,
               'onclick': () => removePage(page),
             }, [makeIcon('remove')]),
-            // Moves to other list pages, alongside the drag handle.
-            draggable ?
-                makeElement('button', {
-                  'type': 'button',
-                  'className': 'pfp-icon-button pfp-row-menu-button',
-                  'title': 'Move',
-                  'aria-label': `Move "${page.title}" to another page`,
-                  'aria-haspopup': 'menu',
-                  'aria-expanded': 'false',
-                  'onclick': (event) =>
-                    toggleRowMenu(event.currentTarget, page.id),
-                }, [makeIcon('more')]) :
-                null,
+            // Moves to other list pages, alongside the drag handle; on a
+            // phone also Edit and Remove, so it is always there, while ✎ ✕
+            // are hidden (Resolved 43).
+            makeElement('button', {
+              'type': 'button',
+              'className': draggable ?
+                  'pfp-icon-button pfp-row-menu-button' :
+                  'pfp-icon-button pfp-row-menu-button pfp-phone-only',
+              'title': 'More actions',
+              'aria-label': `More actions for "${page.title}"`,
+              'aria-haspopup': 'menu',
+              'aria-expanded': 'false',
+              'onclick': (event) =>
+                toggleRowMenu(event.currentTarget, page.id),
+            }, [makeIcon('more')]),
           ]));
       return row;
     }
@@ -3532,12 +3742,23 @@
       return saved;
     }
 
+    /**
+     * Rows move (drag, arrow keys, ⋯ moves) only in the custom order with no
+     * filter: in a filtered part of the list, where a row lands among the
+     * hidden ones is undefined (PLAN D8).
+     * @return {boolean}
+     */
+    function canMoveRows() {
+      return mode === 'custom' && !query.trim();
+    }
+
     /** @return {number} Position of the first row shown in the order. */
     function pageOffset() {
       return (pageNumber - 1) * PAGE_SIZE;
     }
 
-    // --- Row menu: moves to other list pages (Resolved 31) ---
+    // --- Row menu: moves to other list pages (Resolved 31), and on a phone
+    // Edit / Remove as well (Resolved 43) ---
     // The ⋯ button opens a small menu in Danbooru's popup-menu style. It
     // sits on <body>, placed under the button, so the table cannot clip it.
     // Danbooru's own menu script only binds the buttons present at load,
@@ -3574,31 +3795,32 @@
     /**
      * Previous / next page put the row on the last / first place of that
      * page, pushing that page's row there into this one; top and bottom
-     * are the ends of the whole list. The view stays on this page.
+     * are the ends of the whole list. The view stays on this page. The
+     * phone layout hides the row's ✎ ✕, so Edit and Remove lead the menu
+     * there (Resolved 43).
      * @param {!HTMLElement} button
      * @param {string} id
      */
     function openRowMenu(button, id) {
-      const ordered = sortPages(pages, 'custom', 'asc');
-      const from = ordered.findIndex((page) => page.id === id);
-      if (from < 0) return;
-      const offset = pageOffset();
-      const lastPage = Math.ceil(ordered.length / PAGE_SIZE);
-      const actions = [
-        {
-          label: 'Move to previous page', enabled: pageNumber > 1,
-          to: offset - 1, done: `Moved to page ${pageNumber - 1}.`,
-        },
-        {
-          label: 'Move to next page', enabled: pageNumber < lastPage,
-          to: offset + PAGE_SIZE, done: `Moved to page ${pageNumber + 1}.`,
-        },
-        null,
-        {label: 'Move to top', enabled: from > 0, to: 0,
-          done: 'Moved to the top.'},
-        {label: 'Move to bottom', enabled: from < ordered.length - 1,
-          to: ordered.length - 1, done: 'Moved to the bottom.'},
-      ];
+      const page = pages.find((candidate) => candidate.id === id);
+      if (!page) return;
+      // Closing first hands the focus back to ⋯, where the dialog (or the
+      // confirm) returns it.
+      const rowActions = isMobileLayout() ? [
+        {label: 'Edit', enabled: true, run: () => {
+          closeRowMenu({restoreFocus: true});
+          openSaveDialog({url: page.url, editable: true});
+        }},
+        {label: 'Remove', enabled: true, run: () => {
+          closeRowMenu({restoreFocus: true});
+          removePage(page);
+        }},
+      ] : [];
+      const moveActions = canMoveRows() ? rowMoveActions(id) : [];
+      const actions = rowActions.length && moveActions.length ?
+          [...rowActions, null, ...moveActions] :
+          [...rowActions, ...moveActions];
+      if (!actions.length) return;
       const menu = makeElement('div', {
         'className': 'pfp-menu',
         'role': 'menu',
@@ -3612,7 +3834,7 @@
             'role': 'menuitem',
             'disabled': !action.enabled,
             'text': action.label,
-            'onclick': () => sendRow(from, action.to, action.done),
+            'onclick': action.run,
           }) :
           makeElement('div', {
             className: 'pfp-menu-separator', role: 'separator',
@@ -3624,6 +3846,32 @@
       document.addEventListener('pointerdown', onOutsidePointer, true);
       window.addEventListener('resize', onMenuResize);
       (menuItems(menu)[0] || menu).focus();
+    }
+
+    /**
+     * The ⋯ menu's moves for a row, as in Resolved 31; null entries are
+     * separators.
+     * @param {string} id
+     * @return {!Array<?Object>}
+     */
+    function rowMoveActions(id) {
+      const ordered = sortPages(pages, 'custom', 'asc');
+      const from = ordered.findIndex((page) => page.id === id);
+      if (from < 0) return [];
+      const offset = pageOffset();
+      const lastPage = Math.ceil(ordered.length / PAGE_SIZE);
+      const action = (label, enabled, to, done) =>
+        ({label, enabled, run: () => sendRow(from, to, done)});
+      return [
+        action('Move to previous page', pageNumber > 1, offset - 1,
+            `Moved to page ${pageNumber - 1}.`),
+        action('Move to next page', pageNumber < lastPage, offset + PAGE_SIZE,
+            `Moved to page ${pageNumber + 1}.`),
+        null,
+        action('Move to top', from > 0, 0, 'Moved to the top.'),
+        action('Move to bottom', from < ordered.length - 1,
+            ordered.length - 1, 'Moved to the bottom.'),
+      ];
     }
 
     /**
