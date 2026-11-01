@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.7.0
+// @version      0.8.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -141,6 +141,19 @@
   const FORUM_POSTS_PER_PAGE = 20;
   // Danbooru's paginate() clamps ?limit= to this.
   const FORUM_LIMIT_MAX = 1000;
+  // A report saved with search[to]=latest ends on tomorrow whenever it opens
+  // (Resolved 48): Danbooru counts up to the start of the end date
+  // (Aggregatable, to.to_date), so only tomorrow takes in today. Danbooru
+  // cannot read the word itself; links and arrivals swap in the date.
+  const REPORT_PATTERN = /^\/reports\/[a-z_]+$/;
+  const REPORT_END_PARAM = 'search[to]';
+  const LATEST_DATE = 'latest';
+
+  // An aliased tag's wiki (Resolved 49): the old address and the notice
+  // that names the new tag (tag_relationships/_alias_and_implication_list).
+  const WIKI_PAGE_PATH = '/wiki_pages/';
+  const WIKI_PAGE_PATTERN = /^\/wiki_pages\/([^/]+)$/;
+  const ALIAS_NOTICE = 'This tag has been aliased to';
 
   // Characters that must stay percent-encoded when a URL part is shown
   // decoded, because they would change how the text parses back.
@@ -182,9 +195,11 @@
   const DRAWER_SLIDE_MS = 200;
   // Saving without the dialog (Resolved 47): a second mouse click within
   // this time, or a touch held this long on the navbar save button. The
-  // hold time also drives the progress fill (--pfp-hold-ms).
+  // hold time also drives the progress fill (--pfp-hold-ms); the flash
+  // after a quick save matches pfp-quick-saved in GLOBAL_CSS.
   const DOUBLE_CLICK_MS = 250;
-  const LONG_PRESS_MS = 1500;
+  const LONG_PRESS_MS = 1200;
+  const QUICK_SAVED_MS = 600;
   const TOAST_ID = 'pfp-toast';
   const TOAST_MS = 1500;
   const TOAST_ERROR_MS = 3000;
@@ -634,6 +649,24 @@
       }
     }
 
+    /* Saved: the full fill flashes brighter and fades. */
+    .pfp-nav-item .pfp-nav-save.pfp-quick-saved::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: currentColor;
+      animation: pfp-quick-saved 600ms ease-out forwards;
+    }
+
+    @keyframes pfp-quick-saved {
+      from {
+        opacity: 0.6;
+      }
+      to {
+        opacity: 0;
+      }
+    }
+
     .pfp-nav-item .pfp-nav-save.pfp-blocked {
       color: var(--muted-text-color);
     }
@@ -779,10 +812,12 @@
       font-size: 0.85em;
     }
 
+    /* Indented like the row boxes below it (.pfp-col-select). */
     .pfp-page .pfp-select-all-label {
       display: inline-flex;
       align-items: center;
       gap: 0.5em;
+      padding-left: var(--pfp-gap);
       cursor: pointer;
     }
 
@@ -801,6 +836,19 @@
     .pfp-page .pfp-select-all {
       margin: 0;
       cursor: pointer;
+    }
+
+    /* The phone list's round marks, "Select all" and "2 / 6" (Resolved
+       50); desktops keep the checkboxes and "2 items selected". */
+    .pfp-page .pfp-select-box {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .pfp-page .pfp-select-mark,
+    .pfp-page .pfp-select-all-text,
+    .pfp-page .pfp-count-narrow {
+      display: none;
     }
 
     /* The list's subnav "New": reads as one of Danbooru's subnav links;
@@ -852,10 +900,11 @@
       white-space: nowrap;
     }
 
-    /* No left padding, so the row boxes line up with the select-all box in
-       the count line above the table. */
+    /* A little room before the row boxes, and the same before the
+       select-all box in the count line above, so they line up. The phone
+       mark sits inside a 44px tap box, which is room enough. */
     .pfp-table .pfp-col-select {
-      padding-left: 0;
+      padding-left: var(--pfp-gap);
     }
 
     /* A ticked row, marked like a hovered one. */
@@ -937,7 +986,6 @@
       height: 18px;
     }
 
-    .pfp-page .pfp-icon-grip,
     .pfp-page .pfp-icon-more {
       fill: currentColor;
       stroke: none;
@@ -1209,14 +1257,127 @@
         display: none;
       }
 
+      /* Laid out like a phone app's reorder list (Resolved 50): the round
+         mark on the left, ⋯ and then the drag bars on the right. */
       .pfp-table .pfp-row {
         display: grid;
-        grid-template-columns: auto auto minmax(0, 1fr) auto;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
         grid-template-areas:
-          "select handle title actions"
-          "select handle type actions"
-          "select handle memo actions";
+          "select title actions handle"
+          "select type actions handle"
+          "select memo actions handle";
         align-items: start;
+      }
+
+      /* The box stays the tap target, invisible over the mark. */
+      .pfp-page .pfp-select-box {
+        position: relative;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        flex: none;
+      }
+
+      .pfp-page .pfp-select-box > input {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+      }
+
+      .pfp-page .pfp-select-mark {
+        display: block;
+        position: relative;
+        box-sizing: border-box;
+        width: 22px;
+        height: 22px;
+        border: 2px solid var(--muted-text-color);
+        border-radius: 50%;
+        pointer-events: none;
+      }
+
+      .pfp-page input:checked + .pfp-select-mark,
+      .pfp-page input:indeterminate + .pfp-select-mark {
+        border-color: var(--button-primary-background-color);
+        background: var(--button-primary-background-color);
+      }
+
+      .pfp-page input:checked + .pfp-select-mark::after {
+        content: '';
+        position: absolute;
+        left: 5.5px;
+        top: 1.5px;
+        width: 5px;
+        height: 10px;
+        border: solid var(--button-text-color);
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+      }
+
+      .pfp-page input:indeterminate + .pfp-select-mark::after {
+        content: '';
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        top: 8px;
+        height: 2px;
+        background: var(--button-text-color);
+      }
+
+      .pfp-page input:focus-visible + .pfp-select-mark {
+        outline: 2px solid var(--focus-ring-color);
+        outline-offset: 2px;
+      }
+
+      .pfp-page input:disabled + .pfp-select-mark {
+        opacity: 0.5;
+      }
+
+      /* "○ Select all ............ 6 items" across the line. Once rows are
+         ticked, "○ 2 / 6 [Remove selected] [Clear]" on that same line, so
+         the list under it does not shift as the first row is ticked. */
+      .pfp-page .pfp-summary {
+        flex-wrap: nowrap;
+        font-size: 1em;
+      }
+
+      .pfp-page .pfp-select-all-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.25em;
+        padding-left: 0;
+      }
+
+      .pfp-page .pfp-has-selection .pfp-select-all-text {
+        display: none;
+      }
+
+      .pfp-page .pfp-bulk-actions {
+        flex: none;
+      }
+
+      /* Small enough to share the line at 320px. */
+      .pfp-page .pfp-bulk-actions button {
+        font-size: 0.85em;
+      }
+
+      .pfp-page .pfp-select-all-text {
+        display: inline;
+        color: var(--text-color);
+      }
+
+      .pfp-page .pfp-summary-text {
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      .pfp-page .pfp-count-wide {
+        display: none;
+      }
+
+      .pfp-page .pfp-count-narrow {
+        display: inline;
       }
 
       .pfp-page .pfp-memo-toggle {
@@ -1244,6 +1405,7 @@
       .pfp-table .pfp-col-select {
         grid-area: select;
         align-self: center;
+        padding-left: 0;
       }
 
       .pfp-table .pfp-col-handle {
@@ -1513,16 +1675,28 @@
   /**
    * The account's saved entry for `url`. On a forum topic page this falls
    * back to the topic's latest-page entry, so the topic counts as saved on
-   * whichever page it is open (Resolved 34).
+   * whichever page it is open (Resolved 34); a report likewise falls back
+   * to its latest-date entry, whatever end date it shows (Resolved 48).
    * @param {number} userId
    * @param {string} url A sanitized URL.
    * @return {!Promise<?Object>}
    */
   async function findSavedPage(userId, url) {
     const exact = await getPageByUrl(userId, url);
-    if (exact || !isForumTopicUrl(url)) return exact;
-    const latest = withLatestPage(url, true);
+    if (exact || !latestKind(url)) return exact;
+    const latest = withLatest(url, true);
     return latest === url ? null : getPageByUrl(userId, latest);
+  }
+
+  /**
+   * What saving the page being viewed stores by default: following its
+   * newest state where it can (latestByDefault), as the dialog's box
+   * starts out.
+   * @param {string} url A sanitized URL.
+   * @return {string}
+   */
+  function defaultSaveUrl(url) {
+    return latestByDefault(url) ? withLatest(url, true) : url;
   }
 
   /**
@@ -1980,25 +2154,105 @@
 
   /**
    * @param {string} url An absolute or site-relative URL.
-   * @return {boolean} Whether it asks for the newest page (?page=last).
+   * @return {boolean} Whether it is one of Danbooru's reports.
    */
-  function isLatestPage(url) {
-    return new URL(url, SITE_ORIGIN).searchParams.get('page') === LATEST_PAGE;
+  function isReportUrl(url) {
+    return REPORT_PATTERN.test(new URL(url, SITE_ORIGIN).pathname);
   }
 
   /**
-   * A forum topic URL set to open at its newest page, or taken off it
-   * (?page=last dropped, which is page 1) (Resolved 34). Other pages are
-   * kept as they are when `on` is false.
-   * @param {string} url A sanitized forum topic URL.
+   * Pages that can be saved to follow their newest state: a forum topic
+   * opens at its last page (Resolved 34), a report ends on the latest date
+   * (Resolved 48).
+   * @param {string} url An absolute or site-relative URL.
+   * @return {?string} 'page', 'date', or null for any other page.
+   */
+  function latestKind(url) {
+    if (isForumTopicUrl(url)) return 'page';
+    if (isReportUrl(url)) return 'date';
+    return null;
+  }
+
+  /** The save dialog's checkbox for each latestKind. */
+  const LATEST_LABELS = Object.freeze({
+    page: 'Open the latest page',
+    date: 'End on the latest date',
+  });
+
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it asks for the newest page (?page=last) or,
+   *     on a report, the latest end date.
+   */
+  function isLatest(url) {
+    const params = new URL(url, SITE_ORIGIN).searchParams;
+    return latestKind(url) === 'date' ?
+        params.get(REPORT_END_PARAM) === LATEST_DATE :
+        params.get('page') === LATEST_PAGE;
+  }
+
+  /**
+   * @param {number} days From today: 0 today, 1 tomorrow.
+   * @return {string} That local date as YYYY-MM-DD, the form of Danbooru's
+   *     date fields.
+   */
+  function localDate(days) {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-` +
+        pad(date.getDate());
+  }
+
+  /**
+   * Whether a page saved from here follows its newest state unless the
+   * dialog's box is unticked: always for a forum topic; for a report only
+   * when it already ends today or later (or has no end date), so a range
+   * in the past stays as it was.
+   * @param {string} url A sanitized URL.
+   * @return {boolean}
+   */
+  function latestByDefault(url) {
+    const kind = latestKind(url);
+    if (kind !== 'date') return kind === 'page';
+    const end = new URL(url).searchParams.get(REPORT_END_PARAM);
+    if (!end || end === LATEST_DATE) return true;
+    // ISO dates compare as text.
+    return /^\d{4}-\d{2}-\d{2}$/.test(end) && end >= localDate(0);
+  }
+
+  /**
+   * The address to open a saved page at: a report's latest end becomes
+   * tomorrow's date, so Danbooru never sees the word (Resolved 48). A
+   * topic's ?page=last needs the post count, which the topic page fetches
+   * on arrival (openLatestForumPage), so it is left for that.
+   * @param {string} url A saved URL.
+   * @return {string}
+   */
+  function openableUrl(url) {
+    if (latestKind(url) !== 'date' || !isLatest(url)) return url;
+    const next = new URL(url, SITE_ORIGIN);
+    next.searchParams.set(REPORT_END_PARAM, localDate(1));
+    return next.href;
+  }
+
+  /**
+   * A URL set to follow its newest state, or taken off it (Resolved 34,
+   * 48). Off drops ?page=last (page 1) on a topic, and fixes a report's end
+   * on the date it would open with now. Other URLs pass through.
+   * @param {string} url A sanitized URL.
    * @param {boolean} on
    * @return {string} Still in sanitizeUrl's canonical form.
    */
-  function withLatestPage(url, on) {
+  function withLatest(url, on) {
+    const kind = latestKind(url);
+    if (!kind || (!on && !isLatest(url))) return url;
     const next = new URL(url);
-    if (on) {
+    if (kind === 'date') {
+      next.searchParams.set(REPORT_END_PARAM, on ? LATEST_DATE : localDate(1));
+    } else if (on) {
       next.searchParams.set('page', LATEST_PAGE);
-    } else if (isLatestPage(url)) {
+    } else {
       next.searchParams.delete('page');
     }
     return next.href;
@@ -2143,9 +2397,10 @@
    * Shows a short message at the top right; a new one replaces the last.
    * Works on JSON documents too, where Danbooru's styles are absent.
    * @param {string} message
-   * @param {{error: (boolean|undefined)}=} options
+   * @param {{error: (boolean|undefined), long: (boolean|undefined)}=} options
+   *     `long` keeps a notice up as long as an error, to be read in full.
    */
-  function showToast(message, {error = false} = {}) {
+  function showToast(message, {error = false, long = false} = {}) {
     ensureStyles();
     let toast = document.getElementById(TOAST_ID);
     if (!toast) {
@@ -2161,7 +2416,8 @@
     toast.textContent = message;
     toast.classList.toggle('pfp-toast-error', error);
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(hideToast, error ? TOAST_ERROR_MS : TOAST_MS);
+    toastTimer = setTimeout(
+        hideToast, error || long ? TOAST_ERROR_MS : TOAST_MS);
   }
 
   function hideToast() {
@@ -2286,11 +2542,11 @@
       name: 'memo', rows: 3, maxlength: MEMO_MAX,
     });
     memoInput.value = isEdit ? existing.memo : memo;
-    // A forum topic page is saved to open at its newest page unless the box
-    // below is unticked (Resolved 34).
+    // A forum topic is saved to open at its newest page, and a report
+    // running up to today to end on the latest date, unless the box below
+    // is unticked (Resolved 34, 48).
     let fixedUrl = isEdit ? existing.url :
-        url && !editable && isForumTopicUrl(url) ?
-        withLatestPage(url, true) : url;
+        url && !editable ? defaultSaveUrl(url) : url;
     const shownPath = fixedUrl ? toSitePath(fixedUrl) : '';
     // A fixed URL is plain wrapped text rather than a disabled input, so a
     // long link stays fully visible and can still be selected and copied.
@@ -2306,12 +2562,14 @@
         makeElement('span', {className: 'pfp-url-text', text: shownPath});
     const typeChip = makeElement('span', {className: 'pfp-chip'});
     const urlError = makeElement('p', {className: 'pfp-field-error'});
-    // Shown for forum topics only; ticked when the URL asks for ?page=last.
+    // Shown for forum topics and reports only (latestKind); ticked when the
+    // URL asks for the newest page or the latest end date.
     const latestBox = makeElement('input', {
       type: 'checkbox', name: 'latest', onchange: onLatestToggle,
     });
+    const latestText = makeElement('span');
     const latestField = makeElement('label', {className: 'pfp-check'},
-        [latestBox, 'Open the latest page']);
+        [latestBox, latestText]);
     const formError = makeElement('p', {
       className: 'pfp-form-error', role: 'alert',
     });
@@ -2397,9 +2655,10 @@
     function applyGate() {
       const raw = urlInput ? urlInput.value : fixedUrl;
       const checked = sanitizeUrl(raw);
-      const topic = checked.ok && isForumTopicUrl(checked.url);
-      latestField.hidden = !topic;
-      latestBox.checked = topic && isLatestPage(checked.url);
+      const kind = checked.ok ? latestKind(checked.url) : null;
+      latestField.hidden = !kind;
+      latestText.textContent = kind ? LATEST_LABELS[kind] : '';
+      latestBox.checked = Boolean(kind) && isLatest(checked.url);
       if (!checked.ok) {
         typeChip.textContent = '?';
         // An empty Add URL form waits for input before complaining.
@@ -2415,17 +2674,17 @@
     }
 
     /**
-     * Writes the latest-page choice into the URL. Unticking a fixed URL goes
-     * back to the page the dialog was opened on.
+     * Writes the latest-page or latest-date choice into the URL. Unticking
+     * a fixed URL goes back to the page the dialog was opened on.
      */
     function onLatestToggle() {
       if (urlInput) {
         const checked = sanitizeUrl(urlInput.value);
         if (!checked.ok) return;
         urlInput.value =
-            toSitePath(withLatestPage(checked.url, latestBox.checked));
+            toSitePath(withLatest(checked.url, latestBox.checked));
       } else {
-        fixedUrl = withLatestPage(url, latestBox.checked);
+        fixedUrl = withLatest(url, latestBox.checked);
         urlView.textContent = toSitePath(fixedUrl);
       }
       scheduleUrlCheck();
@@ -2751,7 +3010,7 @@
         'id': `${POPOVER_LIST_ID}-${index}`,
         'className': 'pfp-option',
         'role': 'option',
-        'href': page.url,
+        'href': openableUrl(page.url),
         'tabindex': -1,
         'aria-selected': 'false',
       }, [
@@ -2824,17 +3083,18 @@
     function go(index, newTab) {
       const page = shown[index];
       if (!page) return;
+      const url = openableUrl(page.url);
       if (newTab) {
         close();
         // Opened from a later task: Chromium reads the modifier keys of the
         // event being handled, and a held Shift would turn the tab into a
         // new window, as Shift+click does. The key press still counts as
         // user activation then, so the popup blocker lets it through.
-        setTimeout(() => window.open(page.url, '_blank', 'noopener'));
+        setTimeout(() => window.open(url, '_blank', 'noopener'));
       } else {
         // Stays open until the page unloads; pagehide closes it before the
         // page can enter the bfcache.
-        navigate(page.url);
+        navigate(url);
       }
     }
 
@@ -3112,32 +3372,34 @@
 
   /**
    * Saves the page being viewed without the dialog: title suggested, no
-   * memo, a forum topic opening at its latest page like the dialog's
-   * default. A page that is already saved opens the dialog instead, so a
-   * slip never removes or overwrites anything (Resolved 47).
-   * @return {!Promise<void>}
+   * memo, a forum topic or report following its latest state like the
+   * dialog's default. A page that is already saved opens the dialog
+   * instead, so a slip never removes or overwrites anything (Resolved 47).
+   * @return {!Promise<boolean>} Whether it saved.
    */
   async function quickSaveCurrentPage() {
     const checked = checkCurrentPage();
     if (!checked.ok) {
       saveCurrentPage();
-      return;
+      return false;
     }
     const user = getCurrentUser();
-    if (!user || isOverlayOpen()) return;
+    if (!user || isOverlayOpen()) return false;
     try {
       if (await findSavedPage(user.id, checked.url)) {
         saveCurrentPage();
-        return;
+        return false;
       }
-      const url = isForumTopicUrl(checked.url) ?
-          withLatestPage(checked.url, true) : checked.url;
-      await savePage(user.id, {url, title: suggestTitle(checked.url)});
+      await savePage(user.id, {
+        url: defaultSaveUrl(checked.url), title: suggestTitle(checked.url),
+      });
       showToast('Saved to Favorite Pages.');
       notifyPagesChanged();
+      return true;
     } catch (err) {
       console.error(LOG_PREFIX, err);
       showToast(describeError(err), {error: true});
+      return false;
     }
   }
 
@@ -3166,11 +3428,8 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const ICON_SHAPES = Object.freeze({
-    grip: [
-      ['circle', {cx: 9, cy: 6, r: 1.6}], ['circle', {cx: 15, cy: 6, r: 1.6}],
-      ['circle', {cx: 9, cy: 12, r: 1.6}], ['circle', {cx: 15, cy: 12, r: 1.6}],
-      ['circle', {cx: 9, cy: 18, r: 1.6}], ['circle', {cx: 15, cy: 18, r: 1.6}],
-    ],
+    // Three bars: the list's drag handle, at the row's right end.
+    lines: [['path', {d: 'M5 8h14M5 12h14M5 16h14'}]],
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
     prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
@@ -3212,6 +3471,20 @@
       svg.appendChild(shape);
     }
     return svg;
+  }
+
+  /**
+   * A select checkbox with the round mark the phone list draws in its place
+   * (Resolved 50); desktops show the checkbox itself.
+   * @param {!HTMLInputElement} input
+   * @return {!HTMLElement}
+   */
+  function makeSelectBox(input) {
+    return makeElement('span', {className: 'pfp-select-box'}, [
+      input,
+      makeElement('span', {'className': 'pfp-select-mark',
+        'aria-hidden': 'true'}),
+    ]);
   }
 
   // ==========================================================================
@@ -3530,7 +3803,13 @@
         updateSelection();
       },
     });
-    const countLabel = makeElement('span', {className: 'pfp-summary-text'});
+    // Desktop: "6 items", then "2 items selected". Phone (Resolved 50):
+    // "Select all" by the box and the count at the line's end, "2 / 6"
+    // while rows are ticked.
+    const countWide = makeElement('span', {className: 'pfp-count-wide'});
+    const countNarrow = makeElement('span', {className: 'pfp-count-narrow'});
+    const countLabel = makeElement('span', {className: 'pfp-summary-text'},
+        [countWide, countNarrow]);
     const bulkActions = makeElement('span', {className: 'pfp-bulk-actions'}, [
       makeElement('button', {
         type: 'button',
@@ -3551,8 +3830,13 @@
     // The count doubles as the select-all label; with rows ticked it turns
     // into "N items selected" and the bulk actions show.
     const summary = makeElement('div', {className: 'pfp-summary'}, [
-      makeElement('label', {className: 'pfp-select-all-label'},
-          [selectAll, countLabel]),
+      makeElement('label', {className: 'pfp-select-all-label'}, [
+        makeSelectBox(selectAll),
+        makeElement('span', {
+          className: 'pfp-select-all-text', text: 'Select all',
+        }),
+        countLabel,
+      ]),
       bulkActions,
     ]);
     const content = makeElement('div', {className: 'pfp-list'});
@@ -3679,16 +3963,17 @@
         makeElement('thead', {}, [makeElement('tr', {}, [
           makeElement('th', {'className': 'pfp-col-select',
             'aria-label': 'Select'}),
-          draggable ?
-              makeElement('th', {'className': 'pfp-col-handle',
-                'aria-label': 'Reorder'}) :
-              null,
           makeElement('th', {className: 'pfp-col-title', text: 'Title'}),
           makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
           makeElement('th', {className: 'pfp-col-memo', text: 'Memo'}),
           makeElement('th', {className: 'pfp-col-added', text: 'Added'}),
           makeElement('th', {'className': 'pfp-col-actions',
             'aria-label': 'Actions'}),
+          // The handle ends the row, as on the phone (Resolved 50).
+          draggable ?
+              makeElement('th', {'className': 'pfp-col-handle',
+                'aria-label': 'Reorder'}) :
+              null,
         ])]),
         tbody,
       ]), makePager(pageNumber, lastPage));
@@ -3710,9 +3995,11 @@
       selectAll.disabled = rows.length === 0;
       selectAll.checked = count > 0 && count === rows.length;
       selectAll.indeterminate = count > 0 && count < rows.length;
-      countLabel.textContent = count ?
+      countWide.textContent = count ?
           `${count} ${count === 1 ? 'item' : 'items'} selected` : countText;
+      countNarrow.textContent = count ? `${count} / ${rows.length}` : countText;
       bulkActions.hidden = count === 0;
+      summary.classList.toggle('pfp-has-selection', count > 0);
     }
 
     async function removeSelected() {
@@ -3817,6 +4104,7 @@
     function makeRow(page, draggable) {
       const row = makeElement('tr', {'className': 'pfp-row',
         'data-id': page.id});
+      // Bars at the row's right end, next to ⋯ (Resolved 50).
       const handle = draggable ?
           makeElement('button', {
             'type': 'button',
@@ -3824,7 +4112,7 @@
             'aria-label': `Move "${page.title}" (arrow keys)`,
             'onpointerdown': (event) => startDrag(event, row),
             'onkeydown': (event) => onHandleKeydown(event, page.id),
-          }, [makeIcon('grip')]) :
+          }, [makeIcon('lines')]) :
           null;
       const tick = makeElement('input', {
         'type': 'checkbox',
@@ -3840,13 +4128,11 @@
         },
       });
       row.append(
-          makeElement('td', {className: 'pfp-col-select'}, [tick]),
-          draggable ?
-              makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
-              '',
+          makeElement('td', {className: 'pfp-col-select'},
+              [makeSelectBox(tick)]),
           makeElement('td', {className: 'pfp-col-title'}, [
             makeElement('a', {
-              href: page.url, title: page.title, text: page.title,
+              href: openableUrl(page.url), title: page.title, text: page.title,
             }),
             makeElement('span', {
               className: 'pfp-row-url', text: toSitePath(page.url),
@@ -3914,7 +4200,12 @@
               'onclick': (event) =>
                 toggleRowMenu(event.currentTarget, page.id),
             }, [makeIcon('more')]),
-          ]));
+          ]),
+          // Last on desktops too (Resolved 50); the phone grid places it
+          // by name.
+          draggable ?
+              makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
+              '');
       return row;
     }
 
@@ -4098,9 +4389,11 @@
         action('Move to next page', pageNumber < lastPage, offset + PAGE_SIZE,
             `Moved to page ${pageNumber + 1}.`),
         null,
-        action('Move to top', from > 0, 0, 'Moved to the top.'),
-        action('Move to bottom', from < ordered.length - 1,
-            ordered.length - 1, 'Moved to the bottom.'),
+        // "of list": the whole list's ends, not this page's.
+        action('Move to top of list', from > 0, 0,
+            'Moved to the top of the list.'),
+        action('Move to bottom of list', from < ordered.length - 1,
+            ordered.length - 1, 'Moved to the bottom of the list.'),
       ];
     }
 
@@ -4566,11 +4859,21 @@
     let pointerType = '';
     let held = false;
     let start = null;
+    let flashTimer = 0;
     const stopHold = () => {
       clearTimeout(holdTimer);
       holdTimer = 0;
       button.classList.remove('pfp-pressing');
       start = null;
+    };
+    // Firefox on Android ignores navigator.vibrate (turned off there since
+    // 2020), so a flash on the button is what tells the finger it saved.
+    const quickSave = async () => {
+      if (!await quickSaveCurrentPage()) return;
+      clearTimeout(flashTimer);
+      button.classList.add('pfp-quick-saved');
+      flashTimer = setTimeout(
+          () => button.classList.remove('pfp-quick-saved'), QUICK_SAVED_MS);
     };
     button.style.setProperty('--pfp-hold-ms', `${LONG_PRESS_MS}ms`);
     button.addEventListener('pointerdown', (event) => {
@@ -4584,7 +4887,7 @@
         stopHold();
         held = true;
         if (navigator.vibrate) navigator.vibrate(30);
-        quickSaveCurrentPage();
+        quickSave();
       }, LONG_PRESS_MS);
     });
     button.addEventListener('pointermove', (event) => {
@@ -4615,7 +4918,7 @@
       if (clickTimer) {
         clearTimeout(clickTimer);
         clickTimer = 0;
-        quickSaveCurrentPage();
+        quickSave();
         return;
       }
       clickTimer = setTimeout(() => {
@@ -4929,7 +5232,78 @@
   }
 
   // ==========================================================================
-  // === Latest forum page (Resolved 34) ======================================
+  // === Aliased wiki pages (Resolved 49) =====================================
+  // ==========================================================================
+
+  /**
+   * When a tag is aliased, Danbooru moves its wiki to the new tag but does
+   * not redirect the old address, which then reads "This wiki page does not
+   * exist." (wiki_pages/show, tag_relationships/_alias_and_implication_list).
+   * The notice there names the new tag, so a saved entry for the old
+   * address moves on to the new tag's wiki when it is opened. A title that
+   * was the page's own suggested one follows the new name; one the user
+   * wrote stays.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
+   */
+  async function updateAliasedWiki(user) {
+    const {controller, action} = document.body.dataset;
+    const match = WIKI_PAGE_PATTERN.exec(location.pathname);
+    if (controller !== 'wiki-pages' || action !== 'show' || !match) return;
+    const notice = [
+      ...document.querySelectorAll('#wiki-page-body > p.fineprint'),
+    ].find((p) => p.textContent.trim().startsWith(ALIAS_NOTICE));
+    const link = notice && notice.querySelector('a.wiki-link');
+    const newName = link ? link.textContent.trim() : '';
+    if (!newName) return;
+    const here = sanitizeUrl(location.href);
+    const target =
+        sanitizeUrl(`${WIKI_PAGE_PATH}${encodeURIComponent(newName)}`);
+    if (!here.ok || !target.ok || here.url === target.url) return;
+    try {
+      const saved = await getPageByUrl(user.id, here.url);
+      if (!saved) return;
+      if (await getPageByUrl(user.id, target.url)) {
+        showToast(`This tag was aliased to ${newName}, which is already ` +
+            'in Favorite Pages.', {long: true});
+        return;
+      }
+      const changes = {url: target.url};
+      if (saved.title === extractTitle(here.url)) {
+        changes.title = renameTag(saved.title,
+            decodeURIComponent(match[1]), newName);
+      }
+      await updatePage(user.id, saved.id, changes);
+      showToast(`Favorite Pages: moved to ${newName}, the tag this one ` +
+          'was aliased to.', {long: true});
+      notifyPagesChanged();
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+    }
+  }
+
+  /**
+   * A wiki's suggested title ("Avoiding Eye Contact Wiki") with the tag
+   * swapped for another, written the way Danbooru writes it there: words
+   * apart and capitalized.
+   * @param {string} title
+   * @param {string} oldTag e.g. avoiding_eye_contact
+   * @param {string} newTag
+   * @return {string} `title` unchanged when the old tag is not in it.
+   */
+  function renameTag(title, oldTag, newTag) {
+    const pretty = (tag) => tag.replace(/_/g, ' ');
+    const start = title.toLowerCase().indexOf(pretty(oldTag).toLowerCase());
+    if (start < 0) return title;
+    const words = pretty(newTag).replace(/(^|\s)(\S)/g,
+        (_, space, first) => space + first.toUpperCase());
+    return clampText(title.slice(0, start) + words +
+        title.slice(start + pretty(oldTag).length), TITLE_MAX);
+  }
+
+  // ==========================================================================
+  // === Latest forum page and report end (Resolved 34, 48) ===================
   // ==========================================================================
 
   /**
@@ -4941,7 +5315,7 @@
    */
   function openLatestForumPage() {
     const match = FORUM_TOPIC_PATTERN.exec(location.pathname);
-    if (!match || !isLatestPage(location.href)) return;
+    if (!match || !isLatest(location.href)) return;
     injectStyles(LATEST_CLOAK_ID, LATEST_CLOAK_CSS);
     const here = new URL(location.href);
     const limit = here.searchParams.get('limit');
@@ -4984,6 +5358,17 @@
         report();
       }
     });
+  }
+
+  /**
+   * Moves a report opened with search[to]=latest on to tomorrow's end date
+   * (Resolved 48). The script's own links already carry the date
+   * (openableUrl); this catches the address typed, pasted or opened from
+   * elsewhere. No lookup is needed, so it moves at once.
+   */
+  function openLatestReport() {
+    if (!isReportUrl(location.href) || !isLatest(location.href)) return;
+    location.replace(openableUrl(location.href));
   }
 
   // ==========================================================================
@@ -5032,6 +5417,7 @@
     initMessageMenus(user);
     initProfileRow(user);
     initSiteMapLink();
+    updateAliasedWiki(user);
   }
 
   // Close overlays before the page goes into the bfcache, and re-read saved
@@ -5061,6 +5447,7 @@
     retitleListPage();
   }
   openLatestForumPage();
+  openLatestReport();
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, {once: true});
   } else {
