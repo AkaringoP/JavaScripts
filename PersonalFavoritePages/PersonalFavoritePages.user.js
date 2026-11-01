@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.13.0
+// @version      0.13.1
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -51,6 +51,8 @@
   /** Tombstones older than this are purged (PLAN D1-6). */
   const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+  // The hotkeys are fixed (Resolved 57); only the order is ever stored
+  // (readSettings).
   const DEFAULT_SETTINGS = Object.freeze({
     hotkeySave: Object.freeze({code: 'KeyB', shiftKey: true}),
     hotkeyList: Object.freeze({code: 'KeyL', shiftKey: true}),
@@ -179,15 +181,24 @@
   const EXPORT_SCHEMA_VERSION = 1;
   const EXPORT_FILE_PREFIX = 'danbooru-favorite-pages';
 
-  // Import (PLAN D10, Resolved 36, 53). Files and pasted text are
+  // Import (PLAN D10, Resolved 36, 53, 60). Files and pasted text are
   // untrusted: nothing over these limits is read, and no field is taken as
   // it is. A file may hold ENTRY_LIMIT saved pages; removals do not count
   // towards that, so the entries overall get a ceiling of their own, and
-  // a rough count of "{" turns away a flood of tiny ones before parsing.
+  // a count of the values in the text turns away a flood of tiny ones
+  // before parsing would build them.
   const IMPORT_MAX_CHARS = 20 * 1024 * 1024;
   const IMPORT_MAX_ENTRIES = 50000;
-  const IMPORT_MAX_BRACES = 2 * IMPORT_MAX_ENTRIES;
+  /** An entry holds about a dozen values; this leaves room for more. */
+  const IMPORT_MAX_VALUES = 20 * IMPORT_MAX_ENTRIES;
   const IMPORT_MAX_URL = 8192;
+  /**
+   * How much of an imported text field is read, as a multiple of its limit
+   * in characters: room for characters two code units long and for what
+   * cleaning drops, while a field millions of characters long is never
+   * split into characters whole (Resolved 60).
+   */
+  const IMPORT_TEXT_FACTOR = 4;
   /** The owner's name a file gives, as shown in the preview. */
   const IMPORT_NAME_MAX = 64;
   /** Record ids as newId() makes them (UUIDs, or the fallback form). */
@@ -1100,10 +1111,6 @@
       font-size: 0.85em;
     }
 
-    .pfp-page .pfp-select-banner[hidden] {
-      display: none;
-    }
-
     .pfp-page .pfp-link-button {
       margin: 0;
       padding: 0;
@@ -1118,10 +1125,6 @@
     .pfp-page .pfp-link-button:hover {
       background: transparent;
       color: var(--link-hover-color);
-    }
-
-    .pfp-page .pfp-link-button[hidden] {
-      display: none;
     }
 
     /* The phone list's round marks, "Select all" and "2 / 6" (Resolved
@@ -1412,7 +1415,6 @@
       height: 1.1em;
     }
 
-    .pfp-page .pfp-handle:focus-visible,
     .pfp-page .pfp-icon-button:focus-visible {
       outline: 2px solid var(--focus-ring-color);
       outline-offset: -2px;
@@ -2257,45 +2259,81 @@
   async function getSettings() {
     const row = await withStore(STORE_SETTINGS, 'readonly', (store) =>
       requestToPromise(store.get(SETTINGS_KEY)));
-    return {...DEFAULT_SETTINGS, ...(row ? row.value : {})};
+    return readSettings(row ? row.value : null);
   }
 
   /**
-   * @param {!Object} partial Settings to change.
-   * @return {!Promise<!Object>} The full stored settings.
+   * The settings a stored row gives. Only the order last picked is ever
+   * stored (Resolved 37); the hotkeys stay the defaults, as there is no
+   * Settings window to change them (Resolved 57). Anything unknown or
+   * damaged in the row falls back to its default, so it cannot break the
+   * list (Resolved 60).
+   * @param {*} stored
+   * @return {!Object}
+   */
+  function readSettings(stored) {
+    const row = isPlainObject(stored) ? stored : {};
+    const knownSort = SORT_MODES.some(({value}) => value === row.defaultSort);
+    const knownDir = ['asc', 'desc'].includes(row.defaultSortDir);
+    return {
+      ...DEFAULT_SETTINGS,
+      defaultSort: knownSort ? row.defaultSort : DEFAULT_SETTINGS.defaultSort,
+      defaultSortDir: knownDir ?
+          row.defaultSortDir : DEFAULT_SETTINGS.defaultSortDir,
+    };
+  }
+
+  /**
+   * Stores the order last picked, the only setting kept (Resolved 37).
+   * @param {{defaultSort: (string|undefined),
+   *     defaultSortDir: (string|undefined)}} partial
+   * @return {!Promise<!Object>} The full settings now in effect.
    */
   function saveSettings(partial) {
     return withStore(STORE_SETTINGS, 'readwrite', async (store) => {
       const row = await requestToPromise(store.get(SETTINGS_KEY));
-      const value = {
-        ...DEFAULT_SETTINGS,
-        ...(row ? row.value : {}),
-        ...partial,
-      };
-      await requestToPromise(store.put({key: SETTINGS_KEY, value}));
-      return value;
+      const stored = row && isPlainObject(row.value) ? row.value : {};
+      const next = readSettings({...stored, ...partial});
+      await requestToPromise(store.put({key: SETTINGS_KEY, value: {
+        defaultSort: next.defaultSort,
+        defaultSortDir: next.defaultSortDir,
+      }}));
+      return next;
     });
   }
 
   /**
-   * When this browser last checked the account's saved wiki pages for
-   * aliased tags (Resolved 51). A row of its own in the settings store, so
-   * it never mixes with the settings or travels in an export.
+   * Claims this browser's daily check of the account's saved wiki pages
+   * for aliased tags (Resolved 51): when the last one is a day old, `now`
+   * is recorded as its time, in one transaction, so of two tabs opening
+   * the list together only one checks (Resolved 60). The time is a row of
+   * its own in the settings store, so it never mixes with the settings or
+   * travels in an export.
    * @param {number} userId
-   * @return {!Promise<number>} 0 if never.
+   * @param {number} now
+   * @return {!Promise<?number>} The last check's time (0 if never) once
+   *     claimed; null when the next check is not due yet.
    */
-  async function getAliasCheckTime(userId) {
-    const row = await withStore(STORE_SETTINGS, 'readonly', (store) =>
-      requestToPromise(store.get(`${ALIAS_CHECK_KEY}:${userId}`)));
-    return row ? row.value : 0;
+  function claimAliasCheck(userId, now) {
+    const key = `${ALIAS_CHECK_KEY}:${userId}`;
+    return withStore(STORE_SETTINGS, 'readwrite', async (store) => {
+      const row = await requestToPromise(store.get(key));
+      const last = row && Number.isFinite(row.value) ? row.value : 0;
+      // A time ahead of now (a clock set back since) holds nothing up.
+      if (last <= now && now - last < ALIAS_CHECK_INTERVAL_MS) return null;
+      await requestToPromise(store.put({key, value: now}));
+      return last;
+    });
   }
 
   /**
+   * Puts back the time claimAliasCheck replaced, after a failed check, so
+   * the next list page tries again.
    * @param {number} userId
    * @param {number} time
    * @return {!Promise<void>}
    */
-  async function setAliasCheckTime(userId, time) {
+  async function restoreAliasCheckTime(userId, time) {
     await withStore(STORE_SETTINGS, 'readwrite', (store) => requestToPromise(
         store.put({key: `${ALIAS_CHECK_KEY}:${userId}`, value: time})));
   }
@@ -2345,7 +2383,11 @@
     if (url.protocol === 'http:' && url.host === SITE_HOST) {
       url.protocol = 'https:';
     }
-    if (url.origin !== SITE_ORIGIN) return {ok: false, reason: 'external'};
+    // The scheme as well: a blob: URL made on the site has the site's
+    // origin, yet is no Danbooru page (Resolved 60).
+    if (url.protocol !== 'https:' || url.origin !== SITE_ORIGIN) {
+      return {ok: false, reason: 'external'};
+    }
     if (TOKEN_PARAMS.some((name) => url.searchParams.has(name))) {
       return {ok: false, reason: 'token'};
     }
@@ -2493,14 +2535,25 @@
   /**
    * The page's own search form: a GET form from Danbooru's search_form_for
    * with a submit button, whose action is this page. That skips the subnav
-   * quick search, which has no submit button (Resolved 15, 16).
+   * quick search, which has no submit button (Resolved 15, 16). Read from
+   * the attributes: a field named "method" or "action" inside a form takes
+   * over form.method and form.action (Resolved 60).
    * @return {?HTMLFormElement}
    */
   function findSearchForm() {
+    const actionPath = (form) => {
+      try {
+        return new URL(form.getAttribute('action') || '', location.href)
+            .pathname;
+      } catch (err) {
+        return '';
+      }
+    };
     return [...document.querySelectorAll('form.search-form')].find(
-        (form) => form.method.toLowerCase() === 'get' &&
-            form.querySelector('[type="submit"]') !== null &&
-            new URL(form.action, SITE_ORIGIN).pathname === location.pathname) ||
+        (form) =>
+          (form.getAttribute('method') || 'get').toLowerCase() === 'get' &&
+          form.querySelector('[type="submit"]') !== null &&
+          actionPath(form) === location.pathname) ||
         null;
   }
 
@@ -2860,7 +2913,7 @@
 
   /**
    * A modal in the save dialog's frame, for the list page's Export, Import
-   * and Settings (D10): the same backdrop rule, Esc, Tab kept inside, fit
+   * and Help (D10): the same backdrop rule, Esc, Tab kept inside, fit
    * to the part of the screen that shows, focus handed back on close. It
    * takes the save dialog's slot, so pagehide closes it as well.
    * @param {{heading: string, body: !Array<?Node>, buttons: !Array<?Node>,
@@ -4228,6 +4281,15 @@
           (err) => console.warn(LOG_PREFIX, 'tombstone purge failed', err));
       checkWikiAliases(user);
       await view.reload();
+    } catch (err) {
+      // A list that could not be drawn says so, instead of a blank page
+      // or a half-drawn one that reads as empty (Resolved 60).
+      console.error(LOG_PREFIX, err);
+      root.replaceChildren(makeElement('p', {
+        className: 'pfp-page-message',
+        text: 'Favorite Pages could not be shown. The browser console ' +
+            'has the details.',
+      }));
     } finally {
       // Lifts LIST_CLOAK_CSS once the list (or a message) is in place.
       root.classList.add('pfp-ready');
@@ -4305,13 +4367,14 @@
     let query = '';
     /** The list page shown, 1-based; kept in the address as ?page=. */
     let pageNumber = pageNumberFromUrl();
-    /** Row move in progress (pointer drag or arrow key); null when none. */
+    /** Row drag in progress; null when none. */
     let move = null;
     /** Set while a move is being written, so moves never overlap. */
     let committing = false;
     /**
-     * Ids of the rows ticked for removal; only rows on view, so nothing
-     * unseen is ever removed (Resolved 32).
+     * Ids of the rows ticked for removal: rows on view, or every match
+     * once "Select all N" is pressed, which the line above the table then
+     * says, so nothing unseen is removed unannounced (Resolved 32, 54).
      * @type {!Set<string>}
      */
     const selected = new Set();
@@ -5751,9 +5814,41 @@
    * @return {string}
    */
   function cleanImportedText(value, max, multiline) {
-    const text = value.replace(UNSAFE_TEXT, '');
+    // Only as much as could ever be kept is read (IMPORT_TEXT_FACTOR).
+    const text = value.slice(0, max * IMPORT_TEXT_FACTOR)
+        .replace(UNSAFE_TEXT, '');
     return clampText(multiline ? text.replace(/\r\n?/g, '\n') :
         text.replace(/\s+/g, ' '), max);
+  }
+
+  /**
+   * Counts the values in JSON text without parsing it: each value after
+   * the first in an array or object follows a comma, and each array or
+   * object opens with a bracket. Text inside strings is skipped, so
+   * DText's [[wiki]] and {{search}} in a memo count for nothing
+   * (Resolved 60).
+   * @param {string} text
+   * @param {number} max Counting stops past this.
+   * @return {number} Exact for valid JSON, up to `max` + 1.
+   */
+  function countJsonValues(text, max) {
+    let count = 0;
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (inString) {
+        if (code === 0x5C) {
+          i++;  // A backslash: the escaped character cannot end the string.
+        } else if (code === 0x22) {
+          inString = false;
+        }
+      } else if (code === 0x22) {
+        inString = true;
+      } else if (code === 0x2C || code === 0x5B || code === 0x7B) {
+        if (++count > max) return count;
+      }
+    }
+    return count;
   }
 
   /**
@@ -5829,15 +5924,12 @@
     if (text.length > IMPORT_MAX_CHARS) {
       return fail('This is too large to import (over 20 MB).');
     }
-    // Every entry is an object: far more "{" than an export could hold is a
-    // flood of tiny entries, turned away before parsing would build them.
-    let braces = 0;
-    let at = text.indexOf('{');
-    while (at !== -1 && braces <= IMPORT_MAX_BRACES) {
-      braces++;
-      at = text.indexOf('{', at + 1);
+    // Far more values than an export could hold is a flood of tiny ones
+    // (objects, arrays, strings), turned away before parsing would build
+    // them all.
+    if (countJsonValues(text, IMPORT_MAX_VALUES) > IMPORT_MAX_VALUES) {
+      return fail('This has too many entries.');
     }
-    if (braces > IMPORT_MAX_BRACES) return fail('This has too many entries.');
     let data;
     try {
       data = JSON.parse(text);
@@ -6161,7 +6253,14 @@
    */
   function openImportDialog(user, file = null) {
     if (isOverlayOpen()) {
-      if (file && importFileHandler) importFileHandler(file);
+      // A file dropped over another window is not lost without a word
+      // (Resolved 60).
+      if (file && importFileHandler) {
+        importFileHandler(file);
+      } else if (file) {
+        showToast('Close the open window first, then drop the file again.',
+            {error: true});
+      }
       return;
     }
     let parsed = null;
@@ -7141,17 +7240,16 @@
    * @return {!Promise<void>}
    */
   async function checkWikiAliases(user) {
-    let last = 0;
+    let last;
     try {
-      last = await getAliasCheckTime(user.id);
-      if (Date.now() - last < ALIAS_CHECK_INTERVAL_MS) return;
       // Claimed before asking, so a second tab opening the list meanwhile
       // does not check too (and report the moves as "saved already").
-      await setAliasCheckTime(user.id, Date.now());
+      last = await claimAliasCheck(user.id, Date.now());
     } catch (err) {
       console.warn(LOG_PREFIX, 'wiki alias check unavailable', err);
       return;
     }
+    if (last === null) return;
     try {
       /** @type {!Map<string, !Array<!Object>>} Saved entries by tag. */
       const wikis = new Map();
@@ -7180,7 +7278,7 @@
     } catch (err) {
       console.warn(LOG_PREFIX, 'wiki alias check failed', err);
       // Try again the next time the list opens.
-      setAliasCheckTime(user.id, last).catch(() => {});
+      restoreAliasCheckTime(user.id, last).catch(() => {});
     }
   }
 
