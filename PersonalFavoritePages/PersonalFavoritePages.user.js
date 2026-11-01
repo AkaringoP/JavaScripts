@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.12.1
+// @version      0.13.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -170,6 +170,10 @@
   const ALIAS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const ALIAS_QUERY_MAX_CHARS = 4000;
   const ALIAS_QUERY_LIMIT = 1000;
+
+  /** The README, the Help window's "More" (Resolved 58). */
+  const README_URL = 'https://github.com/AkaringoP/JavaScripts/blob/main/' +
+      'PersonalFavoritePages/README.md';
 
   // Export files (PLAN D10).
   const EXPORT_SCHEMA_VERSION = 1;
@@ -432,6 +436,34 @@
       margin: 0;
       color: var(--muted-text-color);
       font-size: 0.9em;
+    }
+
+    /* Help: short sections; the keys are Danbooru's kbd.key. */
+    .pfp-help {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      font-size: 0.9em;
+    }
+
+    .pfp-help .pfp-help-section h3 {
+      margin: 0 0 4px;
+      color: var(--header-color);
+      font-size: 1em;
+    }
+
+    .pfp-help ul {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+      padding-left: 1.2em;
+      list-style: disc;
+    }
+
+    .pfp-help .pfp-help-more {
+      margin: 0;
+      color: var(--muted-text-color);
     }
 
     /* Export's storage protection line, apart from the export itself. */
@@ -2832,13 +2864,14 @@
    * to the part of the screen that shows, focus handed back on close. It
    * takes the save dialog's slot, so pagehide closes it as well.
    * @param {{heading: string, body: !Array<?Node>, buttons: !Array<?Node>,
-   *     onClose: (function()|undefined)}} spec Buttons in Danbooru's order
-   *     (primary first); Cancel is added at the end. `onClose` runs
-   *     however the modal closes.
+   *     onClose: (function()|undefined),
+   *     closeText: (string|undefined)}} spec Buttons in Danbooru's order
+   *     (primary first); Cancel (or `closeText`) is added at the end.
+   *     `onClose` runs however the modal closes.
    * @return {?function()} Closes the modal; null when another overlay is
    *     open already.
    */
-  function openModal({heading, body, buttons, onClose}) {
+  function openModal({heading, body, buttons, onClose, closeText = 'Cancel'}) {
     if (isOverlayOpen()) return null;
     ensureStyles();
     const returnFocus = document.activeElement;
@@ -2868,7 +2901,7 @@
       ...body,
       makeElement('div', {className: 'pfp-dialog-buttons'}, [
         ...buttons,
-        makeElement('button', {type: 'button', text: 'Cancel',
+        makeElement('button', {type: 'button', text: closeText,
           onclick: () => close()}),
       ]),
     ]);
@@ -4243,6 +4276,12 @@
           'Shortcut is i',
       text: 'Import',
       onclick: () => openImportDialog(user),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'How Favorite Pages works',
+      text: 'Help',
+      onclick: () => openHelpDialog(),
     }));
   }
 
@@ -4730,14 +4769,16 @@
         // on its empty part stays there and does nothing.
         'onclick': () => {},
       });
-      // Bars at the row's right end, next to ⋯ (Resolved 50).
+      // Bars at the row's right end, next to ⋯ (Resolved 50), for dragging
+      // only: out of the Tab order, as no key works on it (Resolved 59).
       const handle = draggable ?
           makeElement('button', {
             'type': 'button',
             'className': 'pfp-handle',
-            'aria-label': `Move "${page.title}" (arrow keys)`,
+            'tabindex': -1,
+            'title': 'Drag to move',
+            'aria-label': `Drag to move "${page.title}"`,
             'onpointerdown': (event) => startDrag(event, row),
-            'onkeydown': (event) => onHandleKeydown(event, page.id),
           }, [makeIcon('lines')]) :
           null;
       const tick = makeElement('input', {
@@ -4902,16 +4943,13 @@
     /**
      * Saves a new position, then re-reads the list (also on failure, which
      * puts the rows back where the stored order has them). Positions count
-     * across all list pages; a keyboard move that crossed into the next or
-     * previous page turns to that page so the row stays in view. A row
-     * stays within its part, pinned or not (Resolved 52): `to` past the
-     * part's end stops at it.
+     * across all list pages. A row stays within its part, pinned or not
+     * (Resolved 52): `to` past the part's end stops at it.
      * @param {number} from Position in the whole custom order.
      * @param {number} to
-     * @param {?string=} focusId Row whose handle gets focus afterwards.
      * @return {!Promise<boolean>} Whether the move was saved.
      */
-    async function commitMove(from, to, focusId = null) {
+    async function commitMove(from, to) {
       committing = true;
       let saved = true;
       try {
@@ -4930,23 +4968,11 @@
       } finally {
         committing = false;
       }
-      if (!focusId) return saved;
-      const index = sortPages(pages, 'custom', 'asc')
-          .findIndex((page) => page.id === focusId);
-      const target = Math.floor(index / PAGE_SIZE) + 1;
-      if (index >= 0 && target !== pageNumber) {
-        pageNumber = target;
-        history.replaceState(history.state, '', listPageHref(target));
-        render();
-      }
-      const row =
-          tableRows().find((candidate) => candidate.dataset.id === focusId);
-      if (row) row.querySelector('.pfp-handle').focus();
       return saved;
     }
 
     /**
-     * Rows move (drag, arrow keys, ⋯ moves) only in the custom order with no
+     * Rows move (drag, ⋯ moves) only in the custom order with no
      * filter: in a filtered part of the list, where a row lands among the
      * hidden ones is undefined (PLAN D8).
      * @return {boolean}
@@ -5268,49 +5294,16 @@
       }
     }
 
-    /**
-     * Arrow keys on a focused handle move the row one place (D8-5), across
-     * into the neighbouring list page at either edge.
-     */
-    function onHandleKeydown(event, id) {
-      const step = {ArrowUp: -1, ArrowDown: 1}[event.key];
-      if (!step) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (move || committing) return;
-      const rows = tableRows();
-      const from = rows.findIndex((row) => row.dataset.id === id);
-      if (from < 0) return;
-      const to = from + step;
-      const offset = pageOffset();
-      // Not past the end of its part, pinned or not (Resolved 52).
-      const {start, end} =
-          partBounds(sortPages(pages, 'custom', 'asc'), offset + from);
-      if (offset + to < start || offset + to > end) return;
-      if (to < 0 || to >= rows.length) {
-        // No slide to show: the row leaves this page, and commitMove turns
-        // to the page it lands on.
-        commitMove(offset + from, offset + to, id);
-        return;
-      }
-      move = beginMove(rows[from]);
-      move.to = to;
-      settleMove(move, () => {
-        // Re-inserting the row in finishMove drops focus; give it straight
-        // back so keyboard users never lose their place.
-        rows[from].querySelector('.pfp-handle').focus({preventScroll: true});
-        move = null;
-        commitMove(offset + from, offset + to, id);
-      });
-    }
-
     // Pointer Events cover mouse, touch and pen with one code path; the
     // handle alone has touch-action: none, so the rest of a row still
     // scrolls the page. The lifted row follows the pointer; the gap opens
-    // where its centre has passed a neighbour's midpoint.
+    // where its centre has passed a neighbour's midpoint. Dragging is the
+    // only way to move a row a place or two; the arrow keys on the handle
+    // were dropped as too many steps to reach (Resolved 59), and the ⋯
+    // menu takes rows to other list pages or to either end.
 
     /**
-     * Drags stay within the list page shown; the arrow keys cross pages.
+     * Drags stay within the list page shown.
      * @param {!PointerEvent} event
      * @param {!HTMLElement} row
      */
@@ -5643,6 +5636,91 @@
       storage.persisted().then((persisted) => showStorage(persisted),
           (err) => console.warn(LOG_PREFIX, 'storage state unknown', err));
     }
+  }
+
+  // ==========================================================================
+  // === Help (Resolved 58) ===================================================
+  // ==========================================================================
+
+  /**
+   * The list page's Help: how the script is used, in short sections, with
+   * the keys drawn as Danbooru draws them, and the README for the rest.
+   * Built from text nodes like everything else (no HTML strings).
+   */
+  async function openHelpDialog() {
+    if (isOverlayOpen()) return;
+    await settingsReady;
+    const item = (...parts) => makeElement('li', {}, parts);
+    const section = (title, items) => makeElement('section', {
+      className: 'pfp-help-section',
+    }, [
+      makeElement('h3', {text: title}),
+      makeElement('ul', {}, items),
+    ]);
+    const limit = ENTRY_LIMIT.toLocaleString('en');
+    openModal({
+      heading: 'Favorite Pages help',
+      body: [makeElement('div', {className: 'pfp-help'}, [
+        section('Saving a page', [
+          item('The bookmark in the navbar (or ',
+              ...hotkeyKeys(settings.hotkeySave), ') saves the page you ' +
+              'are on, with a title and a memo; on a saved page it edits it.'),
+          item('Double-click it (or hold it on a phone) to save at once, ' +
+              'without the dialog.'),
+          item('A forum post\'s or comment\'s "…" menu has "Save to ' +
+              'Favorite Pages" too.'),
+          item('New, above, adds any Danbooru address by hand.'),
+          item('A forum topic can open at its latest page, and a report ' +
+              'can end on the latest date: tick the box when saving.'),
+        ]),
+        section('Finding a page', [
+          item('The list button in the navbar (or ',
+              ...hotkeyKeys(settings.hotkeyList), ') opens the quick ' +
+              'panel: type to filter, ↑ ↓ and Enter to open, Shift+Enter ' +
+              'for a new tab.'),
+          item('This page lists everything: filter it (',
+              ...hotkeyKeys(FILTER_HOTKEY), '), sort it, and turn its pages.'),
+        ]),
+        section('Arranging the list', [
+          item('The pin keeps a page at the top; new pages go right under ' +
+              'the pinned ones.'),
+          item('In Custom order, drag ≡ to move a page; ⋯ moves it to ' +
+              'another list page or to either end.'),
+          item('Tick pages to remove several at once. After ticking a ' +
+              'whole page, "Select all" takes every match, on every page.'),
+        ]),
+        section('Other devices and backups', [
+          item('Export (', ...hotkeyKeys(EXPORT_HOTKEY), '): Sync / Backup ' +
+              'takes everything, for your other devices or a backup; Share ' +
+              'takes the saved pages only, for another user.'),
+          item('Download the file, or Copy it and paste it into Import on ' +
+              'the other device.'),
+          item('Import (', ...hotkeyKeys(IMPORT_HOTKEY), '): choose the ' +
+              'file, drop it on this page, or paste the text. A preview ' +
+              'shows what would change before you Apply.'),
+          item('Your own Sync export merges (the newer change wins); any ' +
+              'other file only adds pages.'),
+        ]),
+        section('Where your list is kept', [
+          item('In this browser only, for each Danbooru account. Other ' +
+              'browsers and devices have lists of their own: use Export ' +
+              'and Import to carry it over.'),
+          item(`Up to ${limit} pages.`),
+          item('Export → Protect asks the browser not to clear the list ' +
+              'when disk space runs low. Export now and then to keep a ' +
+              'copy.'),
+        ]),
+        makeElement('p', {className: 'pfp-help-more'}, [
+          'More: ',
+          makeElement('a', {
+            href: README_URL, target: '_blank', rel: 'noopener noreferrer',
+            text: 'Favorite Pages on GitHub',
+          }),
+        ]),
+      ])],
+      buttons: [],
+      closeText: 'Close',
+    });
   }
 
   // ==========================================================================
