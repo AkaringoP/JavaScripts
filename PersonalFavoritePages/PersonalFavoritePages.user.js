@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.0
+// @version      1.0.1
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -113,7 +113,7 @@
     form: 'Writing and editing forms are not saved.',
     self: 'This is the Favorite Pages list itself.',
     errorPage: 'This is an error page.',
-    notHtml: 'Open Favorite Pages and use Add URL to save API addresses.',
+    notHtml: 'Open Favorite Pages and use New to save API addresses.',
     loggedOut: 'Log in to use Favorite Pages.',
   });
 
