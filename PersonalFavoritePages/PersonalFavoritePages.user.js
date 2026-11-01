@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.13.1
+// @version      1.0.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
 // @match        *://danbooru.donmai.us/*
 // @icon         https://danbooru.donmai.us/favicon.ico
-// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/feature/personal-favorite-pages/PersonalFavoritePages/PersonalFavoritePages.user.js
-// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/feature/personal-favorite-pages/PersonalFavoritePages/PersonalFavoritePages.user.js
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PersonalFavoritePages/PersonalFavoritePages.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PersonalFavoritePages/PersonalFavoritePages.user.js
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
@@ -7473,17 +7473,6 @@
     runAll(overlayClosers);
     runAll(stateRefreshers);
   });
-
-  // DEV-ONLY: console access for the Phase 1 manual checks (Task 1.2).
-  // Removed before release (Task 7.3).
-  window.pfpDebug = {
-    getCurrentUser, sanitizeUrl, checkCurrentPage, classify, extractTitle,
-    fallbackTitle, toSitePath, listPages, listAllRecords, getPageByUrl,
-    countPages, savePage, updatePage, deletePage, deletePages, purgeTombstones,
-    reorderPage, renumberAll, getSettings, saveSettings, openSaveDialog,
-    setPagePinned, parseImport, planSync, planAdd, applyImport,
-    REJECT_MESSAGES,
-  };
 
   // The script runs at document-start so the list page can hide Danbooru's
   // 404 content before it is ever painted (Resolved 25); everything else

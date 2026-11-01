@@ -100,7 +100,7 @@ The keys also show in Danbooru's own keyboard shortcuts window (`?`), under **Fa
 
 ## Changelog
 
-- **v1.0** (unreleased) — Initial release: saving from the navbar, `Shift+B` or a message's `…` menu; the list page with pins, custom order and bulk removal; the quick panel (`Shift+L`) and phone drawer; Export / Import; latest forum pages and report dates; aliased wiki pages followed.
+- **v1.0.0** (2026-11-01) — Initial release: saving from the navbar, `Shift+B` or a message's `…` menu; the list page with pins, custom order and bulk removal; the quick panel (`Shift+L`) and phone drawer; Export / Import; latest forum pages and report dates; aliased wiki pages followed.
 
 ## License
 
