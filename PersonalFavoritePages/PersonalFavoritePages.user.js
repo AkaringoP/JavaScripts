@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.11.0
+// @version      0.11.1
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -535,8 +535,8 @@
       min-width: 0;
     }
 
-    /* ★ after the chip of a pinned page (Resolved 52); the column is there
-       only while a page in the list is pinned. */
+    /* A pin after the chip of a pinned page (Resolved 52); the column is
+       there only while a page in the list is pinned. */
     .pfp-option-pin {
       display: none;
       flex: none;
@@ -1112,8 +1112,8 @@
       color: var(--error-color);
     }
 
-    /* ★ pins a row to the top (Resolved 52): filled when pinned, a faint
-       outline offering it otherwise, outlined in colour while pointed at. */
+    /* The pin (Resolved 52): filled when pinned, a faint outline offering
+       it otherwise, outlined in colour while pointed at. */
     .pfp-page .pfp-icon-button.pfp-pin {
       color: var(--muted-text-color);
       opacity: 0.5;
@@ -1351,13 +1351,14 @@
         grid-template-columns: auto auto minmax(0, 1fr) auto auto;
         grid-template-areas:
           "select title title actions handle"
-          "select type pin actions handle"
+          "select pin type actions handle"
           "select memo memo actions handle";
         align-items: start;
       }
 
-      /* ★ right after the type chip (and Memo), without making the line
-         taller than the chip: the 44px tap box overhangs it. */
+      /* The pin opens the line under the title, ahead of the type chip, so
+         the pins of the pinned rows stand in a column (Resolved 52). The
+         44px tap box overhangs the line rather than making it taller. */
       .pfp-table .pfp-col-pin {
         grid-area: pin;
         align-self: center;
@@ -1366,8 +1367,9 @@
         padding-bottom: 0;
       }
 
+      /* Pulled left so the pin sits under the title's first letter. */
       .pfp-table .pfp-col-pin .pfp-pin {
-        margin: -10px 0;
+        margin: -10px 0 -10px -7px;
       }
 
       /* The box stays the tap target, invisible over the mark. */
@@ -1387,14 +1389,18 @@
         opacity: 0;
       }
 
+      /* As big as the ⋯ and bar icons beside it; the tick or dash inside
+         is an icon centred in it (Resolved 50). */
       .pfp-page .pfp-select-mark {
-        display: block;
-        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         box-sizing: border-box;
-        width: 22px;
-        height: 22px;
+        width: 18px;
+        height: 18px;
         border: 2px solid var(--muted-text-color);
         border-radius: 50%;
+        color: var(--button-text-color);
         pointer-events: none;
       }
 
@@ -1404,26 +1410,16 @@
         background: var(--button-primary-background-color);
       }
 
-      .pfp-page input:checked + .pfp-select-mark::after {
-        content: '';
-        position: absolute;
-        left: 5.5px;
-        top: 1.5px;
-        width: 5px;
-        height: 10px;
-        border: solid var(--button-text-color);
-        border-width: 0 2px 2px 0;
-        transform: rotate(45deg);
+      .pfp-page .pfp-select-mark .pfp-icon {
+        display: none;
+        width: 12px;
+        height: 12px;
+        stroke-width: 3.5;
       }
 
-      .pfp-page input:indeterminate + .pfp-select-mark::after {
-        content: '';
-        position: absolute;
-        left: 4px;
-        right: 4px;
-        top: 8px;
-        height: 2px;
-        background: var(--button-text-color);
+      .pfp-page input:checked + .pfp-select-mark .pfp-icon-check,
+      .pfp-page input:indeterminate + .pfp-select-mark .pfp-icon-dash {
+        display: block;
       }
 
       .pfp-page input:focus-visible + .pfp-select-mark {
@@ -3222,7 +3218,7 @@
       const matches = filterPages(pages, filterInput.value);
       shown = matches.slice(0, POPOVER_LIMIT);
       list.replaceChildren(...shown.map(makeOption));
-      // The ★ column takes room only while something is pinned.
+      // The pin column takes room only while something is pinned.
       list.classList.toggle('pfp-has-pinned', shown.some(isPinned));
       manage.textContent = `Manage (${pages.length}) →`;
       const hidden = matches.length - shown.length;
@@ -3259,16 +3255,17 @@
           makeElement('span', {
             className: 'pfp-chip', text: classify(page.url),
           }),
-          // ★ for a pinned page, a blank of the same width otherwise, so
-          // the chips stay in a column (Resolved 52). Pinning itself is on
-          // the list page.
+          // A pin for a pinned page, a blank of the same width otherwise,
+          // so the chips stay in a column (Resolved 52). Last in the line,
+          // so the pins line up whatever the chip's length. Pinning itself
+          // is on the list page.
           isPinned(page) ?
               makeElement('span', {
                 'className': 'pfp-option-pin',
                 'role': 'img',
                 'aria-label': 'Pinned',
                 'title': 'Pinned',
-              }, [makeIcon('star')]) :
+              }, [makeIcon('pin')]) :
               makeElement('span', {
                 className: 'pfp-option-pin pfp-option-pin-off',
               }),
@@ -3681,9 +3678,17 @@
   const ICON_SHAPES = Object.freeze({
     // Three bars: the list's drag handle, at the row's right end.
     lines: [['path', {d: 'M5 8h14M5 12h14M5 16h14'}]],
-    // Pinned to the top (Resolved 52); CSS fills it when pinned.
-    star: [['path', {d: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 ' +
-        '2.7 1-5.8-4.3-4.1 5.9-.9z'}]],
+    // The phone list's round select mark, ticked or partly ticked: drawn
+    // with their ink centred on 12,12 so they sit in the middle of the
+    // circle (Resolved 50).
+    check: [['path', {d: 'M6 12.5l4 4 8-9'}]],
+    dash: [['path', {d: 'M7 12h10'}]],
+    // A pushpin: pinned to the top (Resolved 52). CSS fills its head when
+    // pinned; the needle is a line either way.
+    pin: [
+      ['path', {d: 'M8.5 3h7l-1 2.5V10l3 3v2h-11v-2l3-3V5.5z'}],
+      ['path', {d: 'M12 15v6'}],
+    ],
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
     prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
@@ -3737,7 +3742,7 @@
     return makeElement('span', {className: 'pfp-select-box'}, [
       input,
       makeElement('span', {'className': 'pfp-select-mark',
-        'aria-hidden': 'true'}),
+        'aria-hidden': 'true'}, [makeIcon('check'), makeIcon('dash')]),
     ]);
   }
 
@@ -4241,9 +4246,9 @@
           makeElement('th', {'className': 'pfp-col-select',
             'aria-label': 'Select'}),
           makeElement('th', {className: 'pfp-col-title', text: 'Title'}),
-          makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
           makeElement('th', {'className': 'pfp-col-pin',
             'aria-label': 'Pinned'}),
+          makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
           makeElement('th', {className: 'pfp-col-memo', text: 'Memo'}),
           makeElement('th', {className: 'pfp-col-added', text: 'Added'}),
           makeElement('th', {'className': 'pfp-col-actions',
@@ -4384,6 +4389,11 @@
       const row = makeElement('tr', {
         'className': isPinned(page) ? 'pfp-row pfp-row-pinned' : 'pfp-row',
         'data-id': page.id,
+        // Firefox on Android hands a tap on empty space to a button a few
+        // millimetres away, which opened ⋯ from a tap beside it. With a
+        // click listener of its own the row counts as tappable, so a tap
+        // on its empty part stays there and does nothing.
+        'onclick': () => {},
       });
       // Bars at the row's right end, next to ⋯ (Resolved 50).
       const handle = draggable ?
@@ -4419,6 +4429,19 @@
               className: 'pfp-row-url', text: toSitePath(page.url),
             }),
           ]),
+          // The pin, ahead of the type: filled when pinned, a faint
+          // outline offering it otherwise (Resolved 52).
+          makeElement('td', {className: 'pfp-col-pin'}, [
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-pin',
+              'title': isPinned(page) ? 'Unpin' : 'Pin to top',
+              'aria-label': isPinned(page) ?
+                  `Unpin "${page.title}"` : `Pin "${page.title}" to top`,
+              'aria-pressed': String(isPinned(page)),
+              'onclick': () => togglePin(page),
+            }, [makeIcon('pin')]),
+          ]),
           makeElement('td', {className: 'pfp-col-type'}, [
             // Computed, not stored: records saved under older type rules
             // still show the current type (Resolved 24).
@@ -4440,18 +4463,6 @@
                   },
                 }, [makeIcon('memo'), 'Memo']) :
                 null,
-          ]),
-          // ★ pins the page to the top, ☆ (faint) offers it (Resolved 52).
-          makeElement('td', {className: 'pfp-col-pin'}, [
-            makeElement('button', {
-              'type': 'button',
-              'className': 'pfp-icon-button pfp-pin',
-              'title': isPinned(page) ? 'Unpin' : 'Pin to top',
-              'aria-label': isPinned(page) ?
-                  `Unpin "${page.title}"` : `Pin "${page.title}" to top`,
-              'aria-pressed': String(isPinned(page)),
-              'onclick': () => togglePin(page),
-            }, [makeIcon('star')]),
           ]),
           makeElement('td', {className: 'pfp-col-memo'}, [
             // The line clamp has to sit on an inner element: table cells
@@ -4503,7 +4514,7 @@
     }
 
     /**
-     * The ★ button: pins or unpins, then the list re-reads, so the row
+     * The pin button: pins or unpins, then the list re-reads, so the row
      * moves to where the pinned pages and the rest meet (Resolved 52).
      * @param {!Object} page
      * @return {!Promise<void>}
@@ -4520,12 +4531,12 @@
       }
       // Nothing else on the page shows the pin, so only the list re-reads.
       await reload();
-      // The row was redrawn: keep the keyboard on its ★.
+      // The row was redrawn: keep the keyboard on its pin.
       const row = tableRows().find((candidate) =>
         candidate.dataset.id === page.id);
-      const star = row && row.querySelector('.pfp-pin');
-      if (star && document.activeElement === document.body) {
-        star.focus({preventScroll: true});
+      const pinButton = row && row.querySelector('.pfp-pin');
+      if (pinButton && document.activeElement === document.body) {
+        pinButton.focus({preventScroll: true});
       }
     }
 
