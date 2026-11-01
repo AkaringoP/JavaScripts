@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      1.0.1
+// @version      1.0.2
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -6920,9 +6920,12 @@
   // so an item added to the <ul> before then is part of the menu. Adding it
   // as the button is pressed also covers messages that arrive or get
   // re-rendered later (Show more comments, votes, edits) without watching
-  // the DOM (Resolved 13).
+  // the DOM (Resolved 13). While a message is being edited, its DText editor
+  // sits inside it with popup menus of its own (Insert image, Insert emoji,
+  // more formatting): only the menu holding the message's Copy Link is its
+  // "…" menu.
 
-  /** The "…" button of a forum post's or a comment's menu. */
+  /** A menu button inside a forum post or comment: its "…", or an editor's. */
   const MESSAGE_MENU_BUTTON = 'article.forum-post a.popup-menu-button, ' +
       'article.comment a.popup-menu-button';
   const MESSAGE_SAVE_LABEL = 'Save to Favorite Pages';
@@ -7019,19 +7022,23 @@
   }
 
   /**
-   * Adds "Save to Favorite Pages" under the menu's Copy Link.
+   * Adds "Save to Favorite Pages" under the menu's Copy Link. A menu
+   * without the message's Copy Link is not its "…" menu (an editor's, see
+   * above) and gets nothing.
    * @param {!Element} menu div.popup-menu.
-   * @param {!HTMLElement} button Its "…" button.
+   * @param {!HTMLElement} button Its button.
    * @return {?{link: !HTMLElement, url: string}}
    */
   function addMessageMenuItem(menu, button) {
     // No list here means tippy already took it: the menu was opened before
     // this script was ready.
     const list = menu.querySelector('ul.popup-menu-content');
-    const message = describeMessage(
+    const message = list && describeMessage(
         button.closest('article.forum-post, article.comment'));
-    const checked = message && sanitizeUrl(message.path);
-    if (!list || !checked || !checked.ok) return null;
+    const copyItem =
+        message && list.querySelector(message.copyLink)?.closest('li');
+    const checked = copyItem && sanitizeUrl(message.path);
+    if (!checked || !checked.ok) return null;
     const icon = makeIcon('bookmark');
     // Danbooru's own menu icon classes size it like the icons around it.
     icon.classList.add('icon', 'svg-icon');
@@ -7053,15 +7060,8 @@
         event.currentTarget.click();
       },
     }, [icon, ' ', makeElement('span', {text: MESSAGE_SAVE_LABEL})]);
-    const item =
-        makeElement('li', {className: 'pfp-message-menu-item'}, [link]);
-    const copyLink = list.querySelector(message.copyLink);
-    if (copyLink) {
-      copyLink.closest('li').after(item);
-    } else {
-      console.warn(LOG_PREFIX, 'menu "Copy Link" item not found');
-      list.appendChild(item);
-    }
+    copyItem.after(
+        makeElement('li', {className: 'pfp-message-menu-item'}, [link]));
     return {link, url: checked.url};
   }
 
