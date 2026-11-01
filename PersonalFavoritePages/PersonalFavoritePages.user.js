@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.9.0
+// @version      0.10.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -505,6 +505,31 @@
       min-width: 0;
     }
 
+    /* ★ after the chip of a pinned page (Resolved 52); the column is there
+       only while a page in the list is pinned. */
+    .pfp-option-pin {
+      display: none;
+      flex: none;
+      width: 16px;
+      height: 16px;
+      color: var(--warning-color);
+    }
+
+    .pfp-has-pinned .pfp-option-pin {
+      display: block;
+    }
+
+    .pfp-option-pin.pfp-option-pin-off {
+      visibility: hidden;
+    }
+
+    .pfp-option-pin .pfp-icon {
+      display: block;
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
     .pfp-option-title {
       flex: 1 1 0%;
       min-width: 0;
@@ -925,6 +950,12 @@
       white-space: nowrap;
     }
 
+    .pfp-table .pfp-col-pin {
+      width: 1%;
+      padding-left: 0;
+      padding-right: 0;
+    }
+
     .pfp-table .pfp-col-memo {
       width: 30%;
     }
@@ -1049,6 +1080,24 @@
 
     .pfp-page .pfp-icon-button.pfp-remove:hover {
       color: var(--error-color);
+    }
+
+    /* ★ pins a row to the top (Resolved 52): filled when pinned, a faint
+       outline offering it otherwise, outlined in colour while pointed at. */
+    .pfp-page .pfp-icon-button.pfp-pin {
+      color: var(--muted-text-color);
+      opacity: 0.5;
+    }
+
+    .pfp-page .pfp-icon-button.pfp-pin:hover,
+    .pfp-page .pfp-icon-button.pfp-pin:focus-visible,
+    .pfp-page .pfp-icon-button.pfp-pin[aria-pressed="true"] {
+      color: var(--warning-color);
+      opacity: 1;
+    }
+
+    .pfp-page .pfp-pin[aria-pressed="true"] .pfp-icon {
+      fill: currentColor;
     }
 
     /* Muted like Danbooru's own popup menu buttons; link coloured while
@@ -1269,12 +1318,26 @@
          mark on the left, ⋯ and then the drag bars on the right. */
       .pfp-table .pfp-row {
         display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        grid-template-columns: auto auto minmax(0, 1fr) auto auto;
         grid-template-areas:
-          "select title actions handle"
-          "select type actions handle"
-          "select memo actions handle";
+          "select title title actions handle"
+          "select type pin actions handle"
+          "select memo memo actions handle";
         align-items: start;
+      }
+
+      /* ★ right after the type chip (and Memo), without making the line
+         taller than the chip: the 44px tap box overhangs it. */
+      .pfp-table .pfp-col-pin {
+        grid-area: pin;
+        align-self: center;
+        justify-self: start;
+        padding-top: 0;
+        padding-bottom: 0;
+      }
+
+      .pfp-table .pfp-col-pin .pfp-pin {
+        margin: -10px 0;
       }
 
       /* The box stays the tap target, invisible over the mark. */
@@ -1739,8 +1802,11 @@
       if (existing && isActive(existing)) {
         record = {...existing, ...values, updatedAt: now};
       } else {
+        // Unpinned, so it lands just under the pinned pages, which are
+        // shown first whatever their sortOrder (Resolved 52).
         const placement = {
           sortOrder: await topSortOrder(store, userId),
+          pinned: false,
           createdAt: now,
           updatedAt: now,
           deletedAt: null,
@@ -1861,6 +1927,36 @@
   }
 
   /**
+   * Pins a page to the top of the list or unpins it (Resolved 52). It goes
+   * next to where the two parts meet: a newly pinned page to the end of
+   * the pinned ones, an unpinned one to the start of the rest.
+   * @param {number} userId
+   * @param {string} id
+   * @param {boolean} pinned
+   * @return {!Promise<!Object>} The stored record.
+   */
+  function setPagePinned(userId, id, pinned) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const all = await getAllForUser(store, userId);
+      const record = all.find((candidate) => candidate.id === id);
+      if (!record || !isActive(record)) throw new Error('page not found');
+      if (isPinned(record) === pinned) return record;
+      const orders = all
+          .filter((page) => isActive(page) && page.id !== id &&
+              isPinned(page) === pinned)
+          .map((page) => page.sortOrder);
+      let sortOrder = record.sortOrder;
+      if (orders.length) {
+        sortOrder = pinned ? Math.max(...orders) + SORT_STEP :
+            Math.min(...orders) - SORT_STEP;
+      }
+      const next = {...record, pinned, sortOrder, updatedAt: Date.now()};
+      await requestToPromise(store.put(next));
+      return next;
+    });
+  }
+
+  /**
    * Re-spaces the custom order SORT_STEP apart once midpoint inserts run out
    * of room (PLAN D8-4). Every moved record gets a new updatedAt so the order
    * wins in a later Sync merge.
@@ -1870,9 +1966,11 @@
   function renumberAll(userId) {
     return withStore(STORE_PAGES, 'readwrite', async (store) => {
       const now = Date.now();
+      // Pinned pages first, as they are shown (Resolved 52).
       const ordered = (await getAllForUser(store, userId))
           .filter(isActive)
-          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)) ||
+              a.sortOrder - b.sortOrder)
           .map((record, i) => ({
             ...record,
             sortOrder: i * SORT_STEP,
@@ -3017,6 +3115,8 @@
       const matches = filterPages(pages, filterInput.value);
       shown = matches.slice(0, POPOVER_LIMIT);
       list.replaceChildren(...shown.map(makeOption));
+      // The ★ column takes room only while something is pinned.
+      list.classList.toggle('pfp-has-pinned', shown.some(isPinned));
       manage.textContent = `Manage (${pages.length}) →`;
       const hidden = matches.length - shown.length;
       if (!pages.length) {
@@ -3052,6 +3152,19 @@
           makeElement('span', {
             className: 'pfp-chip', text: classify(page.url),
           }),
+          // ★ for a pinned page, a blank of the same width otherwise, so
+          // the chips stay in a column (Resolved 52). Pinning itself is on
+          // the list page.
+          isPinned(page) ?
+              makeElement('span', {
+                'className': 'pfp-option-pin',
+                'role': 'img',
+                'aria-label': 'Pinned',
+                'title': 'Pinned',
+              }, [makeIcon('star')]) :
+              makeElement('span', {
+                className: 'pfp-option-pin pfp-option-pin-off',
+              }),
         ]),
         makeElement('span', {
           className: 'pfp-option-url', text: toSitePath(page.url),
@@ -3461,6 +3574,9 @@
   const ICON_SHAPES = Object.freeze({
     // Three bars: the list's drag handle, at the row's right end.
     lines: [['path', {d: 'M5 8h14M5 12h14M5 16h14'}]],
+    // Pinned to the top (Resolved 52); CSS fills it when pinned.
+    star: [['path', {d: 'M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 ' +
+        '2.7 1-5.8-4.3-4.1 5.9-.9z'}]],
     edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
     remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
     prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
@@ -3546,8 +3662,18 @@
       new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
 
   /**
-   * Orders pages for display. The custom order has a single direction: a
-   * reversed view of an order you arrange by hand only confuses (PLAN D8).
+   * @param {!Object} page
+   * @return {boolean} Whether it is pinned to the top (Resolved 52).
+   */
+  function isPinned(page) {
+    return page.pinned === true;
+  }
+
+  /**
+   * Orders pages for display: pinned pages first in every order, then the
+   * rest, each part sorted on its own (Resolved 52). The custom order has a
+   * single direction: a reversed view of an order you arrange by hand only
+   * confuses (PLAN D8).
    * @param {!Array<!Object>} pages
    * @param {string} mode A SORT_MODES value.
    * @param {string} dir 'asc' or 'desc'.
@@ -3563,7 +3689,9 @@
         sign * collator.compare(classify(a.url), classify(b.url)) ||
           collator.compare(a.title, b.title),
     };
-    return [...pages].sort(comparators[mode] || comparators.custom);
+    const compare = comparators[mode] || comparators.custom;
+    return [...pages].sort((a, b) =>
+      Number(isPinned(b)) - Number(isPinned(a)) || compare(a, b));
   }
 
   /**
@@ -3624,21 +3752,24 @@
   }
 
   /**
-   * Moves the page at `from` to position `to` of the custom order.
+   * Moves the page at `from` to position `to` within its part of the
+   * custom order: the pinned pages, or the rest. Pages never cross from
+   * one part to the other by a move (Resolved 52).
    * @param {number} userId
-   * @param {!Array<!Object>} ordered Active pages in custom order.
+   * @param {!Array<!Object>} group The moved page's part, in custom order.
    * @param {number} from
-   * @param {number} to Index in the order after the move.
+   * @param {number} to Index in the part after the move.
    * @return {!Promise<void>}
    */
-  async function movePage(userId, ordered, from, to) {
+  async function movePage(userId, group, from, to) {
     if (from === to) return;
-    const moved = ordered[from];
+    const moved = group[from];
     const neighbours = (list) => {
-      const rest = list.filter((page) => page.id !== moved.id);
+      const rest = list.filter((page) => page.id !== moved.id &&
+          isPinned(page) === isPinned(moved));
       return [rest[to - 1] || null, rest[to] || null];
     };
-    let sortOrder = sortOrderBetween(...neighbours(ordered));
+    let sortOrder = sortOrderBetween(...neighbours(group));
     if (sortOrder === null) {
       sortOrder = sortOrderBetween(...neighbours(await renumberAll(userId)));
     }
@@ -3997,6 +4128,8 @@
             'aria-label': 'Select'}),
           makeElement('th', {className: 'pfp-col-title', text: 'Title'}),
           makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
+          makeElement('th', {'className': 'pfp-col-pin',
+            'aria-label': 'Pinned'}),
           makeElement('th', {className: 'pfp-col-memo', text: 'Memo'}),
           makeElement('th', {className: 'pfp-col-added', text: 'Added'}),
           makeElement('th', {'className': 'pfp-col-actions',
@@ -4134,8 +4267,10 @@
      * @return {!HTMLElement}
      */
     function makeRow(page, draggable) {
-      const row = makeElement('tr', {'className': 'pfp-row',
-        'data-id': page.id});
+      const row = makeElement('tr', {
+        'className': isPinned(page) ? 'pfp-row pfp-row-pinned' : 'pfp-row',
+        'data-id': page.id,
+      });
       // Bars at the row's right end, next to ⋯ (Resolved 50).
       const handle = draggable ?
           makeElement('button', {
@@ -4192,6 +4327,18 @@
                 }, [makeIcon('memo'), 'Memo']) :
                 null,
           ]),
+          // ★ pins the page to the top, ☆ (faint) offers it (Resolved 52).
+          makeElement('td', {className: 'pfp-col-pin'}, [
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-pin',
+              'title': isPinned(page) ? 'Unpin' : 'Pin to top',
+              'aria-label': isPinned(page) ?
+                  `Unpin "${page.title}"` : `Pin "${page.title}" to top`,
+              'aria-pressed': String(isPinned(page)),
+              'onclick': () => togglePin(page),
+            }, [makeIcon('star')]),
+          ]),
           makeElement('td', {className: 'pfp-col-memo'}, [
             // The line clamp has to sit on an inner element: table cells
             // ignore it. The tooltip shows a clamped memo in full.
@@ -4241,6 +4388,33 @@
       return row;
     }
 
+    /**
+     * The ★ button: pins or unpins, then the list re-reads, so the row
+     * moves to where the pinned pages and the rest meet (Resolved 52).
+     * @param {!Object} page
+     * @return {!Promise<void>}
+     */
+    async function togglePin(page) {
+      if (move || committing) return;
+      const pinned = !isPinned(page);
+      try {
+        await setPagePinned(user.id, page.id, pinned);
+        showToast(pinned ? 'Pinned to the top.' : 'Unpinned.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      // Nothing else on the page shows the pin, so only the list re-reads.
+      await reload();
+      // The row was redrawn: keep the keyboard on its ★.
+      const row = tableRows().find((candidate) =>
+        candidate.dataset.id === page.id);
+      const star = row && row.querySelector('.pfp-pin');
+      if (star && document.activeElement === document.body) {
+        star.focus({preventScroll: true});
+      }
+    }
+
     async function removePage(page) {
       if (!window.confirm(`Remove "${page.title}" from Favorite Pages?`)) {
         return;
@@ -4259,7 +4433,9 @@
      * Saves a new position, then re-reads the list (also on failure, which
      * puts the rows back where the stored order has them). Positions count
      * across all list pages; a keyboard move that crossed into the next or
-     * previous page turns to that page so the row stays in view.
+     * previous page turns to that page so the row stays in view. A row
+     * stays within its part, pinned or not (Resolved 52): `to` past the
+     * part's end stops at it.
      * @param {number} from Position in the whole custom order.
      * @param {number} to
      * @param {?string=} focusId Row whose handle gets focus afterwards.
@@ -4269,7 +4445,11 @@
       committing = true;
       let saved = true;
       try {
-        await movePage(user.id, sortPages(pages, 'custom', 'asc'), from, to);
+        const ordered = sortPages(pages, 'custom', 'asc');
+        const {start, end} = partBounds(ordered, from);
+        const group = ordered.slice(start, end + 1);
+        await movePage(user.id, group, from - start,
+            Math.min(Math.max(to, start), end) - start);
       } catch (err) {
         saved = false;
         console.error(LOG_PREFIX, err);
@@ -4303,6 +4483,20 @@
      */
     function canMoveRows() {
       return mode === 'custom' && !query.trim();
+    }
+
+    /**
+     * Where the part a position belongs to (the pinned pages, or the rest)
+     * starts and ends in the custom order (Resolved 52).
+     * @param {!Array<!Object>} ordered Pages in custom order.
+     * @param {number} index
+     * @return {{start: number, end: number}} Inclusive positions.
+     */
+    function partBounds(ordered, index) {
+      const pinnedCount = ordered.filter(isPinned).length;
+      return isPinned(ordered[index]) ?
+          {start: 0, end: pinnedCount - 1} :
+          {start: pinnedCount, end: ordered.length - 1};
     }
 
     /** @return {number} Position of the first row shown in the order. */
@@ -4411,21 +4605,24 @@
       const ordered = sortPages(pages, 'custom', 'asc');
       const from = ordered.findIndex((page) => page.id === id);
       if (from < 0) return [];
+      // Moves stay within the row's part, pinned or not (Resolved 52).
+      const {start, end} = partBounds(ordered, from);
       const offset = pageOffset();
-      const lastPage = Math.ceil(ordered.length / PAGE_SIZE);
       const action = (label, enabled, to, done) =>
         ({label, enabled, run: () => sendRow(from, to, done)});
+      // "of list": the whole list's ends, not this page's; under the
+      // pinned pages for the rest.
+      const part = isPinned(ordered[from]) ? 'pinned pages' : 'list';
       return [
-        action('Move to previous page', pageNumber > 1, offset - 1,
+        action('Move to previous page', offset - 1 >= start, offset - 1,
             `Moved to page ${pageNumber - 1}.`),
-        action('Move to next page', pageNumber < lastPage, offset + PAGE_SIZE,
-            `Moved to page ${pageNumber + 1}.`),
+        action('Move to next page', offset + PAGE_SIZE <= end,
+            offset + PAGE_SIZE, `Moved to page ${pageNumber + 1}.`),
         null,
-        // "of list": the whole list's ends, not this page's.
-        action('Move to top of list', from > 0, 0,
-            'Moved to the top of the list.'),
-        action('Move to bottom of list', from < ordered.length - 1,
-            ordered.length - 1, 'Moved to the bottom of the list.'),
+        action(`Move to top of ${part}`, from > start, start,
+            `Moved to the top of the ${part}.`),
+        action(`Move to bottom of ${part}`, from < end, end,
+            `Moved to the bottom of the ${part}.`),
       ];
     }
 
@@ -4540,7 +4737,12 @@
       if (table) table.classList.add('pfp-table-sorting');
       row.classList.add('pfp-row-dragging');
       const from = rows.indexOf(row);
-      return {row, slots, from, to: from};
+      // The rows of its own part (pinned or not) it may move among.
+      const pinned = row.classList.contains('pfp-row-pinned');
+      const own = rows.map((candidate) =>
+        candidate.classList.contains('pfp-row-pinned') === pinned);
+      return {row, slots, from, to: from,
+        min: own.indexOf(true), max: own.lastIndexOf(true)};
     }
 
     /**
@@ -4611,13 +4813,14 @@
       if (from < 0) return;
       const to = from + step;
       const offset = pageOffset();
+      // Not past the end of its part, pinned or not (Resolved 52).
+      const {start, end} =
+          partBounds(sortPages(pages, 'custom', 'asc'), offset + from);
+      if (offset + to < start || offset + to > end) return;
       if (to < 0 || to >= rows.length) {
         // No slide to show: the row leaves this page, and commitMove turns
         // to the page it lands on.
-        const target = offset + to;
-        if (target >= 0 && target < pages.length) {
-          commitMove(offset + from, target, id);
-        }
+        commitMove(offset + from, offset + to, id);
         return;
       }
       move = beginMove(rows[from]);
@@ -4674,7 +4877,7 @@
         if (i > move.from && middle < centre) to = Math.max(to, i);
         if (i < move.from && middle > centre) to = Math.min(to, i);
       });
-      move.to = to;
+      move.to = Math.min(Math.max(to, move.min), move.max);
       layoutMove(move);
       move.row.style.transform = `translateY(${offset}px)`;
     }
@@ -5608,7 +5811,7 @@
     fallbackTitle, toSitePath, listPages, listAllRecords, getPageByUrl,
     countPages, savePage, updatePage, deletePage, deletePages, purgeTombstones,
     reorderPage, renumberAll, getSettings, saveSettings, openSaveDialog,
-    REJECT_MESSAGES,
+    setPagePinned, REJECT_MESSAGES,
   };
 
   // The script runs at document-start so the list page can hide Danbooru's
