@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.10.0
+// @version      0.11.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -162,6 +162,10 @@
   const ALIAS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const ALIAS_QUERY_MAX_CHARS = 4000;
   const ALIAS_QUERY_LIMIT = 1000;
+
+  // Export files (PLAN D10).
+  const EXPORT_SCHEMA_VERSION = 1;
+  const EXPORT_FILE_PREFIX = 'danbooru-favorite-pages';
 
   // Characters that must stay percent-encoded when a URL part is shown
   // decoded, because they would change how the text parses back.
@@ -359,6 +363,32 @@
 
     .pfp-check input {
       margin: 0;
+    }
+
+    /* Export's choices (D10): a radio, a bold name, a line saying what it
+       is for; Include memos sits under Share. */
+    .pfp-check.pfp-choice {
+      align-items: flex-start;
+    }
+
+    .pfp-check.pfp-choice input {
+      margin-top: 0.2em;
+    }
+
+    .pfp-choice-hint {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+    }
+
+    .pfp-check.pfp-choice-sub {
+      margin-left: 1.6em;
+    }
+
+    .pfp-export-summary {
+      margin: 0;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
     }
 
     .pfp-dialog [hidden] {
@@ -2587,6 +2617,83 @@
   }
 
   /**
+   * A modal in the save dialog's frame, for the list page's Export, Import
+   * and Settings (D10): the same backdrop rule, Esc, Tab kept inside, fit
+   * to the part of the screen that shows, focus handed back on close. It
+   * takes the save dialog's slot, so pagehide closes it as well.
+   * @param {{heading: string, body: !Array<?Node>,
+   *     buttons: !Array<?Node>}} spec Buttons in Danbooru's order (primary
+   *     first); Cancel is added at the end.
+   * @return {?function()} Closes the modal; null when another overlay is
+   *     open already.
+   */
+  function openModal({heading, body, buttons}) {
+    if (isOverlayOpen()) return null;
+    ensureStyles();
+    const returnFocus = document.activeElement;
+    const form = makeElement('form', {
+      'className': 'pfp-dialog',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'pfp-dialog-heading',
+      'novalidate': true,
+      'onsubmit': (event) => event.preventDefault(),
+      'onkeydown': (event) => {
+        // Keep Danbooru's shortcuts and ours out of the modal.
+        event.stopPropagation();
+        if (event.isComposing) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          close();
+        } else if (event.key === 'Tab') {
+          trapFocus(event, form);
+        }
+      },
+    }, [
+      makeElement('h2', {
+        id: 'pfp-dialog-heading', className: 'pfp-dialog-heading',
+        text: heading,
+      }),
+      ...body,
+      makeElement('div', {className: 'pfp-dialog-buttons'}, [
+        ...buttons,
+        makeElement('button', {type: 'button', text: 'Cancel',
+          onclick: () => close()}),
+      ]),
+    ]);
+    // Same backdrop rule as the save dialog: press and release on it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: DIALOG_ID,
+      className: 'pfp-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [form]);
+    let stopFitting = () => {};
+
+    function close() {
+      if (!overlay.isConnected) return;
+      stopFitting();
+      overlay.remove();
+      activeDialogClose = null;
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    activeDialogClose = close;
+    document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
+    const first = form.querySelector('input, select, textarea, button');
+    if (first) first.focus();
+    return close;
+  }
+
+  /**
    * Opens the save dialog for `url`: edit mode when the account already has
    * it, otherwise a new entry. The URL is fixed by default, because every
    * entry point (hotkey, buttons, menus) is about one specific page; only the
@@ -3831,7 +3938,7 @@
         return;
       }
       // Before the wait, so the header does not shift once the list shows.
-      initListSubnav();
+      initListSubnav(user);
       await settingsReady;
       const view = createListView(user);
       root.replaceChildren(view.element);
@@ -3863,8 +3970,9 @@
    * page (Resolved 32). Danbooru's 404 page has no subnav, so one is made
    * with Danbooru's id and classes under the main menu. On phones it sits
    * in the menu, as on every Danbooru page.
+   * @param {{id: number, name: string}} user
    */
-  function initListSubnav() {
+  function initListSubnav(user) {
     if (document.getElementById(SUBNAV_NEW_ID)) return;
     const nav = document.getElementById('nav');
     if (!nav) {
@@ -3878,13 +3986,19 @@
       });
       nav.appendChild(subnav);
     }
-    subnav.appendChild(makeElement('button', {
+    subnav.append(makeElement('button', {
       type: 'button',
       id: SUBNAV_NEW_ID,
       className: 'pfp-subnav-action py-1.5 px-3',
       title: 'Add a page by its URL',
       text: 'New',
       onclick: () => openSaveDialog({editable: true}),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Save your list to a file, the share sheet or the clipboard',
+      text: 'Export',
+      onclick: () => openExportDialog(user),
     }));
   }
 
@@ -4946,6 +5060,180 @@
     return {
       element, reload, focusFilter, showPageFromUrl, closeMenu: closeRowMenu,
     };
+  }
+
+  // ==========================================================================
+  // === Export (PLAN D10) ====================================================
+  // ==========================================================================
+
+  /**
+   * The export file (D10). Sync / Backup takes every record, removals
+   * (tombstones) included, so another device can follow edits, moves and
+   * removals; Share takes the saved pages alone, memos only on request.
+   * Pins travel too (Resolved 52). `type` is informative: an import works
+   * it out again from the URL.
+   * @param {{id: number, name: string}} user
+   * @param {!Array<!Object>} records Every record of the account.
+   * @param {{kind: string, includeMemos: boolean}} options `kind` is
+   *     'sync' or 'share'; `includeMemos` matters for Share only.
+   * @return {!Object}
+   */
+  function exportData(user, records, {kind, includeMemos}) {
+    const sync = kind === 'sync';
+    // Saved pages in the list's order, then the removals.
+    const taken = [
+      ...sortPages(records.filter(isActive), 'custom', 'asc'),
+      ...(sync ? records.filter((record) => !isActive(record)) : []),
+    ];
+    return {
+      schema_version: EXPORT_SCHEMA_VERSION,
+      exported_at: new Date().toISOString(),
+      user_id: user.id,
+      user_name: user.name,
+      kind,
+      pages: taken.map((record) => ({
+        id: record.id,
+        url: record.url,
+        title: record.title,
+        memo: sync || includeMemos ? record.memo : '',
+        type: classify(record.url),
+        sortOrder: record.sortOrder,
+        pinned: isPinned(record),
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        deletedAt: record.deletedAt,
+      })),
+    };
+  }
+
+  /**
+   * @param {{name: string}} user
+   * @param {string} kind 'sync' or 'share'.
+   * @return {string} e.g. danbooru-favorite-pages-AkaringoP-20261101.json
+   */
+  function exportFileName(user, kind) {
+    const name = user.name.replace(/[^\w-]+/g, '_') || 'user';
+    const date = localDate(0).replace(/-/g, '');
+    const share = kind === 'share' ? '-share' : '';
+    return `${EXPORT_FILE_PREFIX}-${name}-${date}${share}.json`;
+  }
+
+  /**
+   * The list page's Export (D10): what to take, then how to hand it over —
+   * a file download, or the clipboard for pasting into Import on another
+   * device. The file is built inside the button press, which the clipboard
+   * needs to be allowed. (No system share sheet: user decision, 2026-11-01.)
+   * @param {{id: number, name: string}} user
+   * @return {!Promise<void>}
+   */
+  async function openExportDialog(user) {
+    if (isOverlayOpen()) return;
+    let records;
+    try {
+      records = await listAllRecords(user.id);
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+      return;
+    }
+    const active = records.filter(isActive);
+    const removed = records.length - active.length;
+    const option = (value, label, hint) => makeElement('label', {
+      className: 'pfp-check pfp-choice',
+    }, [
+      makeElement('input', {
+        type: 'radio', name: 'kind', value, checked: value === 'sync',
+        onchange: update,
+      }),
+      makeElement('span', {}, [
+        makeElement('strong', {text: label}),
+        makeElement('span', {className: 'pfp-choice-hint', text: hint}),
+      ]),
+    ]);
+    const syncOption = option('sync', 'Sync / Backup',
+        'Everything, with memos and removals: for your other devices, ' +
+        'or to keep a copy.');
+    const shareOption = option('share', 'Share',
+        'Your saved pages only: for another user.');
+    const memoBox = makeElement('input', {
+      type: 'checkbox', name: 'memos', onchange: update,
+    });
+    const memoField = makeElement('label', {
+      className: 'pfp-check pfp-choice-sub',
+    }, [memoBox, 'Include memos']);
+    const summary = makeElement('p', {className: 'pfp-export-summary'});
+    const kind = () =>
+      (shareOption.querySelector('input').checked ? 'share' : 'sync');
+
+    /** @return {{name: string, json: string}} Built now, for this press. */
+    function build() {
+      const data = exportData(user, records,
+          {kind: kind(), includeMemos: memoBox.checked});
+      return {name: exportFileName(user, kind()),
+        json: JSON.stringify(data, null, 1)};
+    }
+
+    function download() {
+      const {name, json} = build();
+      const href = URL.createObjectURL(
+          new Blob([json], {type: 'application/json'}));
+      const link = makeElement('a', {href, download: name, hidden: true});
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Some browsers start the download only after the click returns.
+      setTimeout(() => URL.revokeObjectURL(href), 10000);
+      done('Downloaded.');
+    }
+
+    async function copy() {
+      const {json} = build();
+      try {
+        await navigator.clipboard.writeText(json);
+        done('Copied. Paste it into Import on the other device.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(`Could not copy: ${err.message || err}`, {error: true});
+      }
+    }
+
+    function done(message) {
+      close();
+      showToast(message, {long: true});
+    }
+
+    const actions = [
+      makeElement('button', {
+        type: 'button', className: 'button-primary', text: 'Download',
+        onclick: download,
+      }),
+      makeElement('button', {type: 'button', text: 'Copy', onclick: copy}),
+    ];
+
+    function update() {
+      const sharing = kind() === 'share';
+      memoField.hidden = !sharing;
+      summary.textContent = sharing ?
+          `${countOf(active.length, 'page')}, ` +
+              (memoBox.checked ? 'with memos.' : 'without memos.') :
+          `${countOf(active.length, 'page')}` +
+              (removed ? ` and ${countOf(removed, 'removal')}.` : '.');
+      const empty = sharing ? !active.length : !records.length;
+      for (const button of actions) button.disabled = empty;
+    }
+
+    const close = openModal({
+      heading: 'Export Favorite Pages',
+      body: [
+        makeElement('div', {
+          'className': 'pfp-field', 'role': 'radiogroup',
+          'aria-label': 'What to export',
+        }, [syncOption, shareOption, memoField]),
+        summary,
+      ],
+      buttons: actions,
+    });
+    if (close) update();
   }
 
   // ==========================================================================
