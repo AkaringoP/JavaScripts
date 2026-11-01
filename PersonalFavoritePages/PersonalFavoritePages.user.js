@@ -1,0 +1,7491 @@
+// ==UserScript==
+// @name         Danbooru Personal Favorite Pages
+// @namespace    https://github.com/AkaringoP
+// @version      1.0.0
+// @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
+// @author       AkaringoP
+// @license      MIT
+// @match        *://danbooru.donmai.us/*
+// @icon         https://danbooru.donmai.us/favicon.ico
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PersonalFavoritePages/PersonalFavoritePages.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/PersonalFavoritePages/PersonalFavoritePages.user.js
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(() => {
+  'use strict';
+
+  // ==========================================================================
+  // === Constants ============================================================
+  // ==========================================================================
+
+  const LOG_PREFIX = '[PFP]';
+  const SITE_HOST = 'danbooru.donmai.us';
+  const SITE_ORIGIN = `https://${SITE_HOST}`;
+  /** Virtual list page, rendered over Danbooru's 404 page (PLAN D5). */
+  const LIST_PATH = '/favorite_pages';
+
+  const DB_NAME = 'PersonalFavoritePagesDB';
+  // The IndexedDB version doubles as the record schema version (PLAN D1-5).
+  const DB_VERSION = 1;
+  const STORE_PAGES = 'pages';
+  const STORE_SETTINGS = 'settings';
+  const SETTINGS_KEY = 'global';
+
+  // Character limits, shown as counters in the save dialog (Resolved 29,
+  // 36). Forum topic titles run up to 200 (forum_topic.rb), which leaves
+  // room for a message's author after them.
+  const TITLE_MAX = 300;
+  const MEMO_MAX = 1000;
+  /**
+   * Saved pages per account, imported ones included and removals not
+   * counted (Resolved 53): 500 list pages at most, and every export of a
+   * list this size imports again.
+   */
+  const ENTRY_LIMIT = 10000;
+  /** The error savePage and applyImport throw at ENTRY_LIMIT. */
+  const FULL_ERROR = 'list full';
+  /** Gap between neighbouring sortOrder values (PLAN D8). */
+  const SORT_STEP = 1000;
+  /** Tombstones older than this are purged (PLAN D1-6). */
+  const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+  // The hotkeys are fixed (Resolved 57); only the order is ever stored
+  // (readSettings).
+  const DEFAULT_SETTINGS = Object.freeze({
+    hotkeySave: Object.freeze({code: 'KeyB', shiftKey: true}),
+    hotkeyList: Object.freeze({code: 'KeyL', shiftKey: true}),
+    defaultSort: 'custom',
+    // Ignored by the custom order, which has a single direction (PLAN D8).
+    defaultSortDir: 'desc',
+  });
+
+  // --- Save-scope rules (PLAN D13, Resolved 11) -----------------------------
+  // Removed from every saved URL. api_key / login authenticate a request on
+  // their own (session_loader.rb), so keeping them would leak the key through
+  // Share exports. commit=Search is noise added by every search form's
+  // submit button, and z=1/2/5 only records where a search was started from
+  // (tag list links, search box); the server ignores it (Resolved 26).
+  const STRIPPED_PARAMS = new Set(['api_key', 'login', 'commit', 'z']);
+  // URLs carrying these are one-time links and are refused outright.
+  const TOKEN_PARAMS = Object.freeze(['email_verification_key']);
+  // Post links opened from a search keep the search as ?q=...; dropping it
+  // gives one canonical URL per post (Resolved 15).
+  const POST_DETAIL_PATTERN = /^\/posts\/\d+$/;
+  const DATA_EXTENSION_PATTERN = /\.(?:json|xml|atom)$/;
+  const ACCOUNT_SUBPAGES =
+      'email|password|totp|backup_codes|api_keys|change_name';
+  // Form pages that stay savable: the upload page and the message composer,
+  // often kept with a prefilled query such as ?url= or ?dmail[to_name]=
+  // (Resolved 19).
+  const SAVABLE_FORM_PATTERN = /^\/(?:uploads|dmails)\/new$/;
+  // Matched against the pathname with any data extension removed, so the
+  // .json form of a denied page is denied too.
+  const DENY_RULES = Object.freeze([
+    {reason: 'token', pattern: /^\/password_reset(?:\/|$)/},
+    {reason: 'auth', pattern: /^\/(?:login|logout|session)(?:\/|$)/},
+    {
+      reason: 'account',
+      pattern: new RegExp(`^/users/\\d+/(?:${ACCOUNT_SUBPAGES})(?:/|$)`),
+    },
+    {reason: 'account', pattern: /^\/(?:api_keys|password)(?:\/|$)/},
+    {reason: 'account', pattern: /^\/users\/(?:\d+\/)?deactivate$/},
+    // Writing and editing forms: Rails' new / edit routes plus the personal
+    // settings page (Resolved 17), except the two that work as tools.
+    {reason: 'form', pattern: /\/(?:new|edit)$/, except: SAVABLE_FORM_PATTERN},
+    {reason: 'form', pattern: /^\/settings$/},
+    {reason: 'self', pattern: new RegExp(`^${LIST_PATH}/?$`)},
+  ]);
+  // body[data-action] values of Danbooru's static error pages (Resolved 15).
+  const ERROR_ACTIONS = new Set(['not-found', 'error']);
+  // body[data-action] values of a form page. create / update show up when a
+  // failed submit re-renders the form at the collection URL (Resolved 17).
+  const FORM_ACTIONS = new Set(['new', 'edit', 'create', 'update']);
+
+  /** User-facing text for every rejection reason. */
+  const REJECT_MESSAGES = Object.freeze({
+    invalid: 'Not a valid URL.',
+    external: 'Only danbooru.donmai.us pages can be saved.',
+    token: 'This page carries a one-time token.',
+    auth: 'Login and logout pages are not saved.',
+    account: 'Account security pages are not saved.',
+    form: 'Writing and editing forms are not saved.',
+    self: 'This is the Favorite Pages list itself.',
+    errorPage: 'This is an error page.',
+    notHtml: 'Open Favorite Pages and use Add URL to save API addresses.',
+    loggedOut: 'Log in to use Favorite Pages.',
+  });
+
+  // Page types (PLAN D3, Resolved 24). Danbooru's API help: an index (list)
+  // is a plural collection path without an id, a show (single record) adds
+  // the id, and searches go in search[...] parameters.
+  /** Single records; first match wins. */
+  const ITEM_TYPES = Object.freeze([
+    ['post', /^\/posts\/\d+$/],
+    ['pool', /^\/pools\/\d+$/],
+    ['wiki', /^\/wiki_pages\/[^/]+$/],
+    ['artist', /^\/artists\/\d+$/],
+    ['forum', /^\/forum_(?:topics|posts)\/\d+$/],
+    ['user', /^\/(?:users\/\d+|profile)$/],
+    ['comment', /^\/comments\/\d+$/],
+  ]);
+  /** The post search, kept apart from other lists as the most saved one. */
+  const POST_SEARCH_PATTERN = /^\/(?:posts)?$/;
+  /** Index routes end in a plural collection name. */
+  const PLURAL_PATH_PATTERN = /\/[a-z_]+s$/;
+  /** Lists whose collection name is not plural. */
+  const SINGULAR_LIST_PATHS = new Set(['/pools/gallery', '/modqueue']);
+  /** Plural-looking paths that are not lists. */
+  const NOT_LIST_PATTERN = /^\/(?:static\/|statistics$)/;
+
+  const TITLE_SUFFIX_PATTERN = /\s*\|\s*Danbooru\s*$/;
+
+  // A forum topic saved as ?page=last opens at its newest page (Resolved
+  // 34). Danbooru itself has no such address: it shows page 1 for it, and
+  // the script moves on to the last page.
+  const FORUM_TOPIC_PATTERN = /^\/forum_topics\/(\d+)$/;
+  const LATEST_PAGE = 'last';
+  // Danbooru.config.posts_per_page, which both the topic page and its
+  // "page N" link in the forum list (ForumTopic#last_page) go by.
+  const FORUM_POSTS_PER_PAGE = 20;
+  // Danbooru's paginate() clamps ?limit= to this.
+  const FORUM_LIMIT_MAX = 1000;
+  // A report saved with search[to]=latest ends on tomorrow whenever it opens
+  // (Resolved 48): Danbooru counts up to the start of the end date
+  // (Aggregatable, to.to_date), so only tomorrow takes in today. Danbooru
+  // cannot read the word itself; links and arrivals swap in the date.
+  const REPORT_PATTERN = /^\/reports\/[a-z_]+$/;
+  const REPORT_END_PARAM = 'search[to]';
+  const LATEST_DATE = 'latest';
+
+  // An aliased tag's wiki (Resolved 49): the old address and the notice
+  // that names the new tag (tag_relationships/_alias_and_implication_list).
+  const WIKI_PAGE_PATH = '/wiki_pages/';
+  const WIKI_PAGE_PATTERN = /^\/wiki_pages\/([^/]+)$/;
+  const ALIAS_NOTICE = 'This tag has been aliased to';
+  // The list page's daily check of all saved wiki pages (Resolved 51): at
+  // most once a day per browser and account, through /tag_aliases.json.
+  // Tags go in batches that keep the address well under the usual 8KB
+  // request-line limits, and no more than one response page can hold.
+  const ALIAS_CHECK_KEY = 'aliasCheckedAt';
+  const ALIAS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const ALIAS_QUERY_MAX_CHARS = 4000;
+  const ALIAS_QUERY_LIMIT = 1000;
+
+  /** The README, the Help window's "More" (Resolved 58). */
+  const README_URL = 'https://github.com/AkaringoP/JavaScripts/blob/main/' +
+      'PersonalFavoritePages/README.md';
+
+  // Export files (PLAN D10).
+  const EXPORT_SCHEMA_VERSION = 1;
+  const EXPORT_FILE_PREFIX = 'danbooru-favorite-pages';
+
+  // Import (PLAN D10, Resolved 36, 53, 60). Files and pasted text are
+  // untrusted: nothing over these limits is read, and no field is taken as
+  // it is. A file may hold ENTRY_LIMIT saved pages; removals do not count
+  // towards that, so the entries overall get a ceiling of their own, and
+  // a count of the values in the text turns away a flood of tiny ones
+  // before parsing would build them.
+  const IMPORT_MAX_CHARS = 20 * 1024 * 1024;
+  const IMPORT_MAX_ENTRIES = 50000;
+  /** An entry holds about a dozen values; this leaves room for more. */
+  const IMPORT_MAX_VALUES = 20 * IMPORT_MAX_ENTRIES;
+  const IMPORT_MAX_URL = 8192;
+  /**
+   * How much of an imported text field is read, as a multiple of its limit
+   * in characters: room for characters two code units long and for what
+   * cleaning drops, while a field millions of characters long is never
+   * split into characters whole (Resolved 60).
+   */
+  const IMPORT_TEXT_FACTOR = 4;
+  /** The owner's name a file gives, as shown in the preview. */
+  const IMPORT_NAME_MAX = 64;
+  /** Record ids as newId() makes them (UUIDs, or the fallback form). */
+  const IMPORT_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
+  // Characters a file could use to hide or disguise text: control
+  // characters (tab and newlines aside) and the bidirectional overrides
+  // and isolates that make text read differently from how it is stored.
+  const UNSAFE_TEXT = new RegExp('[\\u0000-\\u0008\\u000B\\u000C' +
+      '\\u000E-\\u001F\\u007F-\\u009F\\u202A-\\u202E\\u2066-\\u2069]', 'g');
+  /** Removed titles listed in a Sync preview before "…and N more". */
+  const IMPORT_LIST_MAX = 20;
+  /** Pause after typing or pasting before the text is read. */
+  const IMPORT_PASTE_DELAY_MS = 250;
+  /** Why an imported entry was left out, as the preview says it. */
+  const IMPORT_REASONS = Object.freeze({
+    invalid: 'invalid URLs',
+    external: 'other sites',
+    token: 'one-time tokens',
+    auth: 'login pages',
+    account: 'account security pages',
+    form: 'forms',
+    self: 'the list page itself',
+    malformed: 'malformed',
+    duplicate: 'duplicates',
+  });
+
+  // Characters that must stay percent-encoded when a URL part is shown
+  // decoded, because they would change how the text parses back.
+  const PATH_KEEP_ENCODED = /[/?#%\s]/g;
+  const QUERY_KEEP_ENCODED = /[&=#+%\s]/g;
+
+  const STYLE_ID = 'pfp-style';
+  const LIST_CLOAK_ID = 'pfp-list-cloak';
+  // Injected at document-start on LIST_PATH only: hides the 404 page's own
+  // content (heading, random post image) until the list replaces it, so it
+  // never flashes. Keyed to Danbooru's 404 container, so it hides nothing if
+  // the route ever becomes a real Danbooru page (Resolved 25).
+  const LIST_CLOAK_CSS =
+      '#a-not-found:not(.pfp-ready) > * { display: none !important; }';
+  const LATEST_CLOAK_ID = 'pfp-latest-cloak';
+  // Hides page 1 of a topic opened as ?page=last while the script looks up
+  // its last page, so it does not flash before the move.
+  const LATEST_CLOAK_CSS = '#c-forum-topics { visibility: hidden; }';
+  // Danbooru names its main menu links nav-<text> (nav_link_to).
+  const NAV_LINK_ID = 'nav-favorite-pages';
+  const NAV_SAVE_ID = 'nav-favorite-pages-save';
+  const NAV_PANEL_ID = 'nav-favorite-pages-panel';
+  /** Danbooru's phone breakpoint (020_base.scss: width <= 660px). */
+  const MOBILE_QUERY = '(max-width: 660px)';
+  // Danbooru names subnav links subnav-<text> (subnav_link_to).
+  const SUBNAV_NEW_ID = 'subnav-new';
+  const DIALOG_ID = 'pfp-dialog';
+  const POPOVER_ID = 'pfp-popover';
+  const POPOVER_LIST_ID = 'pfp-popover-list';
+  /** Most pages the popover lists at once; the filter narrows the rest. */
+  const POPOVER_LIMIT = 50;
+  // Swiping the phone drawer closed (Resolved 46): how far a finger moves
+  // before it counts as a swipe, the share of the drawer's width that
+  // closes it on release, and the speed (px/ms) of a flick that does too.
+  const SWIPE_START_PX = 10;
+  const SWIPE_CLOSE_SHARE = 0.3;
+  const SWIPE_FLICK_SPEED = 0.5;
+  /** The drawer's slide, in and out; matches pfp-drawer-in in GLOBAL_CSS. */
+  const DRAWER_SLIDE_MS = 200;
+  // Saving without the dialog (Resolved 47): a second mouse click within
+  // this time, or a touch held this long on the navbar save button. The
+  // hold time also drives the progress fill (--pfp-hold-ms); the flash
+  // after a quick save matches pfp-quick-saved in GLOBAL_CSS.
+  const DOUBLE_CLICK_MS = 250;
+  const LONG_PRESS_MS = 1200;
+  const QUICK_SAVED_MS = 600;
+  const TOAST_ID = 'pfp-toast';
+  const TOAST_MS = 1500;
+  const TOAST_ERROR_MS = 3000;
+  /** Pause after typing before an edited URL is checked against the list. */
+  const URL_CHECK_DELAY_MS = 150;
+
+  // Colours always come from Danbooru's semantic variables (PLAN D5), so the
+  // UI follows the light / dark / auto themes without detection code. Only
+  // layout tokens live here. Never put backticks inside this literal.
+  const GLOBAL_CSS = `
+    :root {
+      --pfp-radius: 4px;
+      --pfp-gap: 8px;
+      --pfp-z-overlay: 10000;
+    }
+
+    /* Save dialog. Only ever on a Danbooru HTML page: no fallbacks. */
+    .pfp-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: var(--pfp-z-overlay);
+      /* fitToVisualViewport sets its width and height: padding inside. */
+      box-sizing: border-box;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 16px;
+      padding-top: min(12vh, 96px);
+      overflow-y: auto;
+      /* Washes the page out like Danbooru's own dialog overlay. */
+      background: color-mix(
+        in srgb, var(--body-background-color) 50%, transparent);
+    }
+
+    .pfp-dialog {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      box-sizing: border-box;
+      width: min(480px, 100%);
+      max-height: calc(100vh - min(12vh, 96px) - 16px);
+      max-height: calc(100dvh - min(12vh, 96px) - 16px);
+      margin: 0;
+      padding: 16px;
+      overflow-y: auto;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color);
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .pfp-dialog-heading {
+      margin: 0;
+      color: var(--header-color);
+      font-size: 1.15em;
+      font-weight: bold;
+      line-height: 1.3;
+    }
+
+    .pfp-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+    }
+
+    .pfp-field-label {
+      font-size: 0.85em;
+      font-weight: bold;
+    }
+
+    /* "12 / 100" under a field; digits keep their width while typing. */
+    .pfp-count {
+      align-self: flex-end;
+      color: var(--muted-text-color);
+      font-size: 0.8em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .pfp-count.pfp-count-over {
+      color: var(--error-color);
+    }
+
+    .pfp-dialog input[type="text"],
+    .pfp-dialog textarea {
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0;
+    }
+
+    .pfp-dialog textarea {
+      resize: vertical;
+    }
+
+    .pfp-dialog input[aria-invalid="true"] {
+      border-color: var(--form-input-validation-error-border-color);
+    }
+
+    .pfp-url-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pfp-dialog .pfp-url-row input[type="text"] {
+      flex: 1 1 0%;
+      min-width: 0;
+    }
+
+    /* Fixed URL: wraps instead of scrolling, still selectable. */
+    .pfp-url-text {
+      flex: 1 1 0%;
+      min-width: 0;
+      color: var(--muted-text-color);
+      overflow-wrap: anywhere;
+      user-select: text;
+    }
+
+    .pfp-chip {
+      flex: none;
+      padding: 0 0.6em;
+      border: 1px solid var(--chip-blue-border-color);
+      border-radius: 999px;
+      background: var(--chip-blue-background-color);
+      color: var(--text-color);
+      font-size: 0.8em;
+      line-height: 1.6;
+      white-space: nowrap;
+    }
+
+    .pfp-field-error,
+    .pfp-form-error {
+      margin: 0;
+      color: var(--error-color);
+      font-size: 0.85em;
+      overflow-wrap: anywhere;
+    }
+
+    /* "Open the latest page" under a forum topic's URL. */
+    .pfp-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      font-size: 0.9em;
+      cursor: pointer;
+    }
+
+    .pfp-check input {
+      margin: 0;
+    }
+
+    /* Export's choices (D10): a radio, a bold name, a line saying what it
+       is for; Include memos sits under Share. */
+    .pfp-check.pfp-choice {
+      align-items: flex-start;
+    }
+
+    .pfp-check.pfp-choice input {
+      margin-top: 0.2em;
+    }
+
+    .pfp-choice-hint {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+    }
+
+    .pfp-check.pfp-choice-sub {
+      margin-left: 1.6em;
+    }
+
+    .pfp-export-summary {
+      margin: 0;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+    }
+
+    /* Help: short sections; the keys are Danbooru's kbd.key. */
+    .pfp-help {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      font-size: 0.9em;
+    }
+
+    .pfp-help .pfp-help-section h3 {
+      margin: 0 0 4px;
+      color: var(--header-color);
+      font-size: 1em;
+    }
+
+    .pfp-help ul {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 0;
+      padding-left: 1.2em;
+      list-style: disc;
+    }
+
+    .pfp-help .pfp-help-more {
+      margin: 0;
+      color: var(--muted-text-color);
+    }
+
+    /* Export's storage protection line, apart from the export itself. */
+    .pfp-storage-line {
+      margin: 0;
+      padding-top: var(--pfp-gap);
+      border-top: 1px solid var(--default-border-color);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-dialog .pfp-link-button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .pfp-dialog .pfp-link-button:hover {
+      background: transparent;
+      color: var(--link-hover-color);
+    }
+
+    /* Import (D10): a file or pasted text, then the preview. */
+    .pfp-import-source {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-import-source button {
+      margin: 0;
+    }
+
+    .pfp-import-file {
+      min-width: 0;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-import-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.9em;
+    }
+
+    .pfp-import-preview p {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-import-preview .pfp-import-warning {
+      color: var(--error-color);
+    }
+
+    .pfp-import-removed {
+      margin: 0;
+      padding-left: 1.4em;
+      overflow-wrap: anywhere;
+    }
+
+    /* Add mode: every page with a tick, in a box that scrolls. */
+    .pfp-import-list {
+      max-height: 40vh;
+      margin: 0;
+      padding: 4px 8px;
+      overflow-y: auto;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      list-style: none;
+    }
+
+    .pfp-check.pfp-import-item {
+      align-items: flex-start;
+      padding: 3px 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-check.pfp-import-item input {
+      margin-top: 0.2em;
+    }
+
+    .pfp-import-item-url {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+    }
+
+    /* A file dragged over the list page. Lets the drag events through. */
+    .pfp-drop-overlay {
+      position: fixed;
+      inset: 8px;
+      z-index: var(--pfp-z-overlay);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 3px dashed var(--link-color);
+      border-radius: var(--pfp-radius);
+      background: color-mix(
+        in srgb, var(--body-background-color) 80%, transparent);
+      color: var(--text-color);
+      font-size: 1.2em;
+      pointer-events: none;
+    }
+
+    .pfp-drop-overlay[hidden] {
+      display: none;
+    }
+
+    .pfp-dialog [hidden] {
+      display: none !important;
+    }
+
+    .pfp-dialog-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--pfp-gap);
+      margin-top: var(--pfp-gap);
+    }
+
+    .pfp-dialog .pfp-dialog-buttons button {
+      margin: 0;
+    }
+
+    /* Danbooru already draws a global :focus-visible ring; this scoped copy
+       keeps it from being out-cascaded by form-level button rules. */
+    .pfp-dialog :focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    /* Quick-jump popover (Shift+L). The backdrop reuses .pfp-overlay. Focus
+       stays in the filter, so the highlighted row is aria-selected, which
+       the script also sets on hover: no separate :hover colour. */
+    .pfp-popover {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pfp-gap);
+      box-sizing: border-box;
+      width: min(560px, 100%);
+      max-height: calc(100vh - min(12vh, 96px) - 16px);
+      max-height: calc(100dvh - min(12vh, 96px) - 16px);
+      margin: 0;
+      padding: var(--pfp-gap);
+      overflow: hidden;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color);
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .pfp-popover [hidden] {
+      display: none !important;
+    }
+
+    /* The panel itself only holds the focus when opened by a tap. */
+    .pfp-popover:focus {
+      outline: none;
+    }
+
+    /* The same list as a drawer from the right edge, opened by the phone
+       menu's panel button (Resolved 39): full height, a strip of the page
+       left visible to tap away. */
+    .pfp-overlay.pfp-drawer-overlay {
+      justify-content: flex-end;
+      align-items: stretch;
+      padding: 0;
+      overflow: hidden;
+      /* Not even a script can scroll it, so nothing moves the panel but
+         its own slide (Resolved 44). */
+      overflow: clip;
+    }
+
+    .pfp-popover.pfp-drawer {
+      width: min(420px, 100% - 48px);
+      max-height: none;
+      height: 100%;
+      border-width: 0 0 0 1px;
+      border-radius: 0;
+      /* Sideways swipes are the script's (closing the drawer, Resolved
+         46); up and down stay the list's scroll. */
+      touch-action: pan-y;
+    }
+
+    /* Filter, then the order picker, on one line (wrapping when narrow). */
+    .pfp-popover-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-popover input.pfp-popover-filter {
+      box-sizing: border-box;
+      flex: 1 1 12em;
+      min-width: 0;
+      margin: 0;
+    }
+
+    .pfp-popover .pfp-popover-sort,
+    .pfp-popover .pfp-popover-dir {
+      box-sizing: border-box;
+      margin: 0;
+    }
+
+    /* The drawer is narrow: filter on its own line, the order under it. */
+    .pfp-popover.pfp-drawer input.pfp-popover-filter {
+      flex-basis: 100%;
+    }
+
+    .pfp-popover.pfp-drawer .pfp-popover-sort {
+      flex: 1 1 auto;
+    }
+
+    /* Only the list scrolls; the filter and footer stay put. */
+    .pfp-popover-list {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+
+    /* Not selectable: macOS browsers select a link's text on right-click,
+       and the press handling that keeps focus in the filter would leave
+       that selection stuck. The context menu still offers Copy link. */
+    .pfp-popover .pfp-option {
+      display: block;
+      padding: 6px var(--pfp-gap);
+      border-radius: var(--pfp-radius);
+      color: var(--text-color);
+      text-decoration: none;
+      user-select: none;
+    }
+
+    .pfp-popover .pfp-option:hover,
+    .pfp-popover .pfp-option:focus,
+    .pfp-popover .pfp-option:active {
+      color: var(--text-color);
+      text-decoration: none;
+    }
+
+    .pfp-popover .pfp-option[aria-selected="true"] {
+      background: var(--table-row-hover-background);
+    }
+
+    /* Title and chip share a row: the title ellipsizes, the chip never
+       shrinks or wraps. */
+    .pfp-option-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    /* A pin after the chip of a pinned page (Resolved 52); the column is
+       there only while a page in the list is pinned. */
+    .pfp-option-pin {
+      display: none;
+      flex: none;
+      width: 16px;
+      height: 16px;
+      color: var(--warning-color);
+    }
+
+    .pfp-has-pinned .pfp-option-pin {
+      display: block;
+    }
+
+    .pfp-option-pin.pfp-option-pin-off {
+      visibility: hidden;
+    }
+
+    .pfp-option-pin .pfp-icon {
+      display: block;
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    .pfp-option-title {
+      flex: 1 1 0%;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pfp-option-url,
+    .pfp-option-memo {
+      display: block;
+      overflow: hidden;
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+      text-overflow: ellipsis;
+      /* nowrap also collapses newlines in the memo to single spaces. */
+      white-space: nowrap;
+    }
+
+    .pfp-popover .pfp-popover-message {
+      margin: 0;
+      padding: 0 var(--pfp-gap);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-popover-footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 4px var(--pfp-gap);
+      padding-top: var(--pfp-gap);
+      border-top: 1px solid var(--default-border-color);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-popover-keys {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px var(--pfp-gap);
+    }
+
+    /* Stays at the right end, also when the key hints are hidden. */
+    .pfp-popover .pfp-popover-manage {
+      margin-left: auto;
+    }
+
+    .pfp-popover-keys kbd {
+      padding: 0 0.4em;
+      border: 1px solid var(--default-border-color);
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 0.9em;
+    }
+
+    .pfp-popover :focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    /* Toast. Also shown on JSON documents, where Danbooru's stylesheet and
+       variables are absent, so every colour has a system-colour fallback. */
+    .pfp-toast {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      z-index: calc(var(--pfp-z-overlay) + 1);
+      box-sizing: border-box;
+      max-width: min(360px, calc(100vw - 32px));
+      margin: 0;
+      padding: 8px 12px;
+      border: 1px solid var(--default-border-color, GrayText);
+      border-radius: var(--pfp-radius);
+      background: var(--card-background-color, Canvas);
+      color: var(--text-color, CanvasText);
+      box-shadow: var(
+        --shadow-lg,
+        0 4px 12px color-mix(in srgb, CanvasText 25%, transparent));
+      font-family: var(--body-font, system-ui, sans-serif);
+      font-size: 14px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+
+    .pfp-toast-error {
+      border-color: var(--error-color, ActiveText);
+      background: var(--error-background-color, Canvas);
+      color: var(--error-color, ActiveText);
+    }
+
+    /* Navbar items: save button, panel button (a list icon), link. The link
+       wears Danbooru's own menu classes; the buttons drop the global button
+       look to read as part of the menu. The wrapper keeps them on one line
+       when the menu wraps. The phone menu rearranges them (see 660px). */
+    .pfp-nav-item {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .pfp-nav-item .pfp-nav-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0.375rem 0.5rem;
+      border: 0;
+      border-radius: var(--pfp-radius);
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .pfp-nav-item .pfp-nav-button:hover,
+    .pfp-nav-item .pfp-nav-button:active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-hover-color);
+    }
+
+    /* Held for a quick save: a fill that grows over the hold time. */
+    .pfp-nav-item .pfp-nav-save {
+      position: relative;
+      overflow: hidden;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
+
+    .pfp-nav-item .pfp-nav-save.pfp-pressing::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: currentColor;
+      opacity: 0.25;
+      transform-origin: left;
+      animation: pfp-hold-fill var(--pfp-hold-ms) linear forwards;
+    }
+
+    @keyframes pfp-hold-fill {
+      from {
+        transform: scaleX(0);
+      }
+      to {
+        transform: scaleX(1);
+      }
+    }
+
+    /* Saved: the full fill flashes brighter and fades. */
+    .pfp-nav-item .pfp-nav-save.pfp-quick-saved::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: currentColor;
+      animation: pfp-quick-saved 600ms ease-out forwards;
+    }
+
+    @keyframes pfp-quick-saved {
+      from {
+        opacity: 0.6;
+      }
+      to {
+        opacity: 0;
+      }
+    }
+
+    .pfp-nav-item .pfp-nav-save.pfp-blocked {
+      color: var(--muted-text-color);
+    }
+
+    .pfp-nav-item .pfp-nav-button:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-nav-button .pfp-icon {
+      display: block;
+      width: 1.15em;
+      height: 1.15em;
+    }
+
+    /* Saved: a filled bookmark without the plus. */
+    .pfp-saved .pfp-bookmark-body {
+      fill: currentColor;
+    }
+
+    .pfp-saved .pfp-bookmark-plus {
+      display: none;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .pfp-toast,
+      .pfp-popover {
+        animation: pfp-toast-in 160ms ease-out;
+      }
+
+      .pfp-popover.pfp-drawer {
+        animation: pfp-drawer-in 200ms ease-out;
+      }
+
+      /* After a swipe: sliding out, or back into place. */
+      .pfp-popover.pfp-drawer.pfp-drawer-settling {
+        transition: transform 200ms ease-out;
+      }
+
+      @keyframes pfp-drawer-in {
+        from {
+          transform: translateX(100%);
+        }
+        to {
+          transform: none;
+        }
+      }
+
+      @keyframes pfp-toast-in {
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      /* Row moves: neighbours slide aside, the lifted row follows the
+         pointer without lag, then slides into its gap when released. */
+      .pfp-table-sorting .pfp-row {
+        transition: transform 150ms ease;
+      }
+
+      .pfp-table-sorting .pfp-row.pfp-row-dragging {
+        transition: none;
+      }
+
+      .pfp-table-sorting .pfp-row.pfp-row-settling {
+        transition: transform 150ms ease;
+      }
+    }
+
+    /* List page. It sits inside Danbooru's 404 page, so button, select,
+       input, a, h1 and table.striped keep Danbooru's look; these rules add
+       layout only. Rules are scoped under .pfp-page so Danbooru's form
+       rules cannot out-cascade them. */
+    .pfp-page h1 {
+      margin: 0 0 4px;
+    }
+
+    .pfp-page .pfp-page-owner {
+      margin: 0 0 1em;
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-page [hidden] {
+      display: none !important;
+    }
+
+    .pfp-page .pfp-page-message,
+    .pfp-list .pfp-page-message {
+      margin: var(--pfp-gap) 0;
+      color: var(--muted-text-color);
+    }
+
+    /* View settings in the manner of Danbooru's search forms (its
+       inline-form): bold labels right-aligned in a column, one control per
+       line; the sort and its direction share one. */
+    .pfp-view-controls {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 30em);
+      align-items: center;
+      gap: var(--pfp-gap) 1em;
+      margin: 0 0 1em;
+    }
+
+    .pfp-view-controls .pfp-control-label {
+      font-weight: bold;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .pfp-sort-row {
+      display: flex;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-page .pfp-sort,
+    .pfp-page .pfp-sort-dir,
+    .pfp-page .pfp-filter {
+      box-sizing: border-box;
+      margin: 0;
+    }
+
+    .pfp-page .pfp-filter {
+      width: 100%;
+    }
+
+    /* The count line: select-all box and count, or the selection and its
+       actions. Its fixed height keeps the table from jumping when the
+       buttons appear. */
+    .pfp-page .pfp-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pfp-gap);
+      min-height: 2em;
+      margin: 0 0 var(--pfp-gap);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    /* Indented like the row boxes below it (.pfp-col-select). */
+    .pfp-page .pfp-select-all-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5em;
+      padding-left: var(--pfp-gap);
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-bulk-actions {
+      display: inline-flex;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-page .pfp-bulk-actions button {
+      margin: 0;
+      padding: 0.125em 0.75em;
+      font: inherit;
+    }
+
+    .pfp-page .pfp-select,
+    .pfp-page .pfp-select-all {
+      margin: 0;
+      cursor: pointer;
+    }
+
+    /* "All 20 on this page are selected. Select all 37 matching items"
+       (Resolved 54), under the count line. */
+    .pfp-page .pfp-select-banner {
+      margin: 0 0 var(--pfp-gap);
+      padding: 4px var(--pfp-gap);
+      border-radius: var(--pfp-radius);
+      background: var(--table-row-hover-background);
+      font-size: 0.85em;
+    }
+
+    .pfp-page .pfp-link-button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-link-button:hover {
+      background: transparent;
+      color: var(--link-hover-color);
+    }
+
+    /* The phone list's round marks, "Select all" and "2 / 6" (Resolved
+       50); desktops keep the checkboxes and "2 items selected". */
+    .pfp-page .pfp-select-box {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .pfp-page .pfp-select-mark,
+    .pfp-page .pfp-select-all-text,
+    .pfp-page .pfp-count-narrow {
+      display: none;
+    }
+
+    /* The list's subnav "New": reads as one of Danbooru's subnav links;
+       the resets keep the global button look off it, and its py / px
+       utility classes give the padding. */
+    #subnav-menu .pfp-subnav-action {
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: inherit;
+      cursor: pointer;
+    }
+
+    #subnav-menu .pfp-subnav-action:hover,
+    #subnav-menu .pfp-subnav-action:active {
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-hover-color);
+    }
+
+    /* Danbooru's paginator classes do the rest; its arrows are 1em. */
+    .pfp-page .pfp-paginator .pfp-icon {
+      width: 1em;
+      height: 1em;
+    }
+
+    /* The ellipsis is a button that asks for a page, muted like Danbooru's
+       (its paginator_component.scss drops the border and background). */
+    .pfp-page .pfp-paginator .paginator-ellipsis {
+      padding: 0;
+      box-shadow: none;
+      color: var(--muted-text-color);
+    }
+
+    .pfp-page .pfp-paginator .paginator-ellipsis:hover {
+      background: none;
+      color: var(--link-hover-color);
+    }
+
+    .pfp-table {
+      width: 100%;
+    }
+
+    .pfp-table.striped th,
+    .pfp-table.striped td {
+      vertical-align: middle;
+    }
+
+    /* Column widths do not follow the text, so a long title or memo wraps
+       instead of reshaping the table: Memo gets a fixed share, Title the
+       rest, and the small columns fit content that barely varies. Type is
+       wide enough for its longest chip, post-search. */
+    .pfp-table .pfp-col-select,
+    .pfp-table .pfp-col-handle,
+    .pfp-table .pfp-col-added,
+    .pfp-table .pfp-col-actions {
+      width: 1%;
+      white-space: nowrap;
+    }
+
+    /* A little room before the row boxes, and the same before the
+       select-all box in the count line above, so they line up. The phone
+       mark sits inside a 44px tap box, which is room enough. */
+    .pfp-table .pfp-col-select {
+      padding-left: var(--pfp-gap);
+    }
+
+    /* A ticked row, marked like a hovered one. */
+    .pfp-table.striped .pfp-row.pfp-row-selected {
+      background: var(--table-row-hover-background);
+    }
+
+    .pfp-table .pfp-col-type {
+      width: 7.5em;
+      white-space: nowrap;
+    }
+
+    .pfp-table .pfp-col-pin {
+      width: 1%;
+      padding-left: 0;
+      padding-right: 0;
+    }
+
+    .pfp-table .pfp-col-memo {
+      width: 30%;
+    }
+
+    .pfp-table .pfp-col-title,
+    .pfp-table .pfp-col-memo {
+      overflow-wrap: anywhere;
+    }
+
+    /* However narrow the window, the title keeps a readable width; the
+       other columns give way first (see the 900px rules below). */
+    .pfp-table .pfp-col-title {
+      min-width: 12em;
+    }
+
+    /* Memo keeps its newlines and shows at most 3 lines. The clamp is on
+       the inner span: a table cell loses its table layout under
+       -webkit-box, and line-clamp is ignored on table cells. */
+    .pfp-table td.pfp-col-memo {
+      white-space: pre-wrap;
+    }
+
+    .pfp-table .pfp-memo-text {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+
+    /* Titles take up to 300 characters (Resolved 36); a long one shows 3
+       lines and the rest in its tooltip. */
+    .pfp-table .pfp-col-title > a {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      overflow: hidden;
+    }
+
+    .pfp-table .pfp-col-added {
+      color: var(--muted-text-color);
+    }
+
+    /* The internal link goes on its own line under the title. */
+    .pfp-table .pfp-row-url {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+      overflow-wrap: anywhere;
+    }
+
+    /* Icons are drawn with currentColor, here and in the entry points on
+       Danbooru's own pages; each place sets the size. */
+    .pfp-icon {
+      flex: none;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* Danbooru's global button style would otherwise leave these icons as
+       empty grey pills. */
+    .pfp-page .pfp-icon {
+      display: block;
+      width: 18px;
+      height: 18px;
+    }
+
+    .pfp-page .pfp-icon-more {
+      fill: currentColor;
+      stroke: none;
+    }
+
+    .pfp-page .pfp-handle,
+    .pfp-page .pfp-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: var(--pfp-radius);
+      background: transparent;
+      box-shadow: none;
+      font: inherit;
+      line-height: 1;
+      vertical-align: middle;
+    }
+
+    .pfp-page .pfp-handle:hover,
+    .pfp-page .pfp-handle:active,
+    .pfp-page .pfp-icon-button:hover,
+    .pfp-page .pfp-icon-button:active {
+      background: transparent;
+      box-shadow: none;
+    }
+
+    .pfp-page .pfp-handle {
+      min-width: 44px;
+      min-height: 44px;
+      color: var(--muted-text-color);
+      cursor: grab;
+      touch-action: none;
+    }
+
+    .pfp-table-draggable .pfp-row-dragging .pfp-handle {
+      cursor: grabbing;
+    }
+
+    .pfp-page .pfp-icon-button {
+      min-width: 32px;
+      min-height: 32px;
+      color: var(--link-color);
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-icon-button:hover {
+      color: var(--link-hover-color);
+    }
+
+    .pfp-page .pfp-icon-button.pfp-remove:hover {
+      color: var(--error-color);
+    }
+
+    /* The pin (Resolved 52): filled when pinned, a faint outline offering
+       it otherwise, outlined in colour while pointed at. */
+    .pfp-page .pfp-icon-button.pfp-pin {
+      color: var(--muted-text-color);
+      opacity: 0.5;
+    }
+
+    .pfp-page .pfp-icon-button.pfp-pin:hover,
+    .pfp-page .pfp-icon-button.pfp-pin:focus-visible,
+    .pfp-page .pfp-icon-button.pfp-pin[aria-pressed="true"] {
+      color: var(--warning-color);
+      opacity: 1;
+    }
+
+    .pfp-page .pfp-pin[aria-pressed="true"] .pfp-icon {
+      fill: currentColor;
+    }
+
+    /* Muted like Danbooru's own popup menu buttons; link coloured while
+       hovered or open. */
+    .pfp-page .pfp-icon-button.pfp-row-menu-button {
+      color: var(--muted-text-color);
+    }
+
+    .pfp-page .pfp-icon-button.pfp-row-menu-button:hover,
+    .pfp-page .pfp-icon-button.pfp-row-menu-button[aria-expanded="true"] {
+      color: var(--link-color);
+    }
+
+    /* A ⋯ with no moves to offer (another order, or a filter) is only for
+       the phone layout's Edit / Remove (Resolved 43). */
+    .pfp-page .pfp-icon-button.pfp-phone-only {
+      display: none;
+    }
+
+    /* The phone list's memo button; desktops show the memo column. */
+    .pfp-page .pfp-memo-toggle {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      margin: 0 0 0 6px;
+      padding: 0 0.5em;
+      border: 1px solid var(--default-border-color);
+      border-radius: 999px;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      font-size: 0.8em;
+      line-height: 1.6;
+      vertical-align: middle;
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-memo-toggle[aria-expanded="true"] {
+      background: var(--table-row-hover-background);
+    }
+
+    .pfp-page .pfp-memo-toggle .pfp-icon {
+      display: block;
+      width: 1.1em;
+      height: 1.1em;
+    }
+
+    .pfp-page .pfp-icon-button:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-table-sorting .pfp-row {
+      will-change: transform;
+    }
+
+    /* The lifted row. Beats Danbooru's row stripe and hover rules by
+       specificity. */
+    .pfp-table.striped .pfp-row.pfp-row-dragging {
+      position: relative;
+      z-index: 1;
+      background: var(--table-row-hover-background);
+      box-shadow: var(--shadow-lg);
+      user-select: none;
+    }
+
+    /* Row menu: the box of Danbooru's popup menus (their common-tooltip
+       theme). It lives on <body>, outside .pfp-page, below our overlays. */
+    .pfp-menu {
+      position: absolute;
+      z-index: calc(var(--pfp-z-overlay) - 1);
+      box-sizing: border-box;
+      min-width: 12em;
+      padding: 4px 0;
+      border: 1px solid var(--post-tooltip-border-color);
+      border-radius: var(--pfp-radius);
+      background: var(--post-tooltip-background-color);
+      background-clip: padding-box;
+      color: var(--text-color);
+      box-shadow: var(--shadow-lg);
+    }
+
+    /* Items read as links, like Danbooru's menu entries; the resets keep
+       Danbooru's global button style off them. */
+    .pfp-menu .pfp-menu-item {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      margin: 0;
+      padding: 4px 12px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      line-height: 1.5;
+      text-align: left;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .pfp-menu .pfp-menu-item:hover {
+      background: transparent;
+      color: var(--link-hover-color);
+    }
+
+    .pfp-menu .pfp-menu-item:disabled {
+      color: var(--muted-text-color);
+      cursor: default;
+    }
+
+    .pfp-menu .pfp-menu-item:focus-visible {
+      outline: 2px solid var(--focus-ring-color);
+      outline-offset: -2px;
+    }
+
+    .pfp-menu-separator {
+      height: 1px;
+      margin: 4px 0;
+      background: var(--default-border-color);
+    }
+
+    /* Narrow desktop windows and zoomed pages: drop the date and let Memo
+       size to its content, so Title is not squeezed to a few letters. */
+    @media (max-width: 900px) {
+      .pfp-table .pfp-col-added {
+        display: none;
+      }
+
+      .pfp-table .pfp-col-type,
+      .pfp-table .pfp-col-memo {
+        width: auto;
+      }
+
+      .pfp-table .pfp-col-memo {
+        max-width: 14em;
+      }
+    }
+
+    /* Danbooru's mobile breakpoint. */
+    @media (max-width: 660px) {
+      /* Dialogs use nearly the whole phone screen; the overlay follows
+         what is visible (keyboard, zoom), so 100% is what is left. */
+      .pfp-overlay {
+        padding: 8px;
+      }
+
+      .pfp-dialog {
+        max-height: 100%;
+        padding: 12px;
+      }
+
+      .pfp-popover {
+        max-height: 100%;
+      }
+
+      .pfp-dialog .pfp-dialog-buttons button {
+        flex: 1 1 auto;
+        box-sizing: border-box;
+        min-height: 44px;
+      }
+
+      .pfp-popover-keys {
+        display: none;
+      }
+
+      .pfp-popover .pfp-option {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 44px;
+      }
+
+      .pfp-popover .pfp-popover-manage {
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+      }
+
+      .pfp-popover .pfp-popover-sort,
+      .pfp-popover .pfp-popover-dir {
+        min-height: 44px;
+      }
+
+      .pfp-toast {
+        left: 16px;
+        right: 16px;
+        max-width: none;
+      }
+
+      .pfp-table .pfp-col-added {
+        display: none;
+      }
+
+      .pfp-view-controls {
+        grid-template-columns: max-content minmax(0, 1fr);
+      }
+
+      /* Each row becomes a card (Resolved 43): the title and its link,
+         under them the type chip with a Memo button, and the memo itself
+         only once that is pressed; ⋯ (with Edit / Remove) on the right.
+         Grid on the row keeps Danbooru's row border and stripes, which sit
+         on the <tr>. */
+      .pfp-table,
+      .pfp-table tbody {
+        display: block;
+      }
+
+      .pfp-table thead {
+        display: none;
+      }
+
+      /* Laid out like a phone app's reorder list (Resolved 50): the round
+         mark on the left, ⋯ and then the drag bars on the right. */
+      .pfp-table .pfp-row {
+        display: grid;
+        grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+        grid-template-areas:
+          "select title title actions handle"
+          "select pin type actions handle"
+          "select memo memo actions handle";
+        align-items: start;
+      }
+
+      /* The pin opens the line under the title, ahead of the type chip, so
+         the pins of the pinned rows stand in a column (Resolved 52). The
+         44px tap box overhangs the line rather than making it taller. */
+      .pfp-table .pfp-col-pin {
+        grid-area: pin;
+        align-self: center;
+        justify-self: start;
+        padding-top: 0;
+        padding-bottom: 0;
+      }
+
+      /* Pulled left so the pin sits under the title's first letter. */
+      .pfp-table .pfp-col-pin .pfp-pin {
+        margin: -10px 0 -10px -7px;
+      }
+
+      /* The box stays the tap target, invisible over the mark. */
+      .pfp-page .pfp-select-box {
+        position: relative;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        flex: none;
+      }
+
+      .pfp-page .pfp-select-box > input {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+      }
+
+      /* As big as the ⋯ and bar icons beside it; the tick or dash inside
+         is an icon centred in it (Resolved 50). */
+      .pfp-page .pfp-select-mark {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        width: 18px;
+        height: 18px;
+        border: 2px solid var(--muted-text-color);
+        border-radius: 50%;
+        color: var(--button-text-color);
+        pointer-events: none;
+      }
+
+      .pfp-page input:checked + .pfp-select-mark,
+      .pfp-page input:indeterminate + .pfp-select-mark {
+        border-color: var(--button-primary-background-color);
+        background: var(--button-primary-background-color);
+      }
+
+      .pfp-page .pfp-select-mark .pfp-icon {
+        display: none;
+        width: 12px;
+        height: 12px;
+        stroke-width: 3.5;
+      }
+
+      .pfp-page input:checked + .pfp-select-mark .pfp-icon-check,
+      .pfp-page input:indeterminate + .pfp-select-mark .pfp-icon-dash {
+        display: block;
+      }
+
+      .pfp-page input:focus-visible + .pfp-select-mark {
+        outline: 2px solid var(--focus-ring-color);
+        outline-offset: 2px;
+      }
+
+      .pfp-page input:disabled + .pfp-select-mark {
+        opacity: 0.5;
+      }
+
+      /* "○ Select all ............ 6 items" across the line. Once rows are
+         ticked, "○ 2 / 6 [Remove selected] [Clear]" on that same line, so
+         the list under it does not shift as the first row is ticked. */
+      .pfp-page .pfp-summary {
+        flex-wrap: nowrap;
+        font-size: 1em;
+      }
+
+      .pfp-page .pfp-select-all-label {
+        flex: 1 1 auto;
+        min-width: 0;
+        gap: 0.25em;
+        padding-left: 0;
+      }
+
+      .pfp-page .pfp-has-selection .pfp-select-all-text {
+        display: none;
+      }
+
+      .pfp-page .pfp-bulk-actions {
+        flex: none;
+      }
+
+      /* Small enough to share the line at 320px. */
+      .pfp-page .pfp-bulk-actions button {
+        font-size: 0.85em;
+      }
+
+      .pfp-page .pfp-select-all-text {
+        display: inline;
+        color: var(--text-color);
+      }
+
+      .pfp-page .pfp-summary-text {
+        margin-left: auto;
+        white-space: nowrap;
+      }
+
+      .pfp-page .pfp-count-wide {
+        display: none;
+      }
+
+      .pfp-page .pfp-count-narrow {
+        display: inline;
+      }
+
+      .pfp-page .pfp-memo-toggle {
+        display: inline-flex;
+      }
+
+      .pfp-table .pfp-row:not(.pfp-memo-open) .pfp-col-memo {
+        display: none;
+      }
+
+      /* Unfolded: the whole memo, newlines kept. */
+      .pfp-table .pfp-memo-open .pfp-memo-text {
+        display: block;
+        -webkit-line-clamp: none;
+        overflow: visible;
+      }
+
+      /* The desktop column sizes (1%, 30%, 12em) mean nothing in a card. */
+      .pfp-table .pfp-row > td {
+        width: auto;
+        min-width: 0;
+        max-width: none;
+      }
+
+      .pfp-table .pfp-col-select {
+        grid-area: select;
+        align-self: center;
+        padding-left: 0;
+      }
+
+      .pfp-table .pfp-col-handle {
+        grid-area: handle;
+        align-self: center;
+      }
+
+      .pfp-table .pfp-col-title {
+        grid-area: title;
+      }
+
+      .pfp-table .pfp-col-type {
+        grid-area: type;
+        padding-top: 0;
+      }
+
+      .pfp-table .pfp-col-memo {
+        grid-area: memo;
+        padding-top: 0;
+      }
+
+      .pfp-table .pfp-col-actions {
+        grid-area: actions;
+        align-self: center;
+      }
+
+      /* ✎ ✕ move into ⋯, which is always there. */
+      .pfp-page .pfp-icon-button.pfp-edit,
+      .pfp-page .pfp-icon-button.pfp-remove {
+        display: none;
+      }
+
+      .pfp-page .pfp-icon-button.pfp-phone-only {
+        display: inline-flex;
+      }
+
+      .pfp-page .pfp-handle {
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      .pfp-page .pfp-icon-button {
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      .pfp-menu .pfp-menu-item {
+        min-height: 44px;
+      }
+
+      .pfp-nav-item .pfp-nav-button {
+        min-width: 44px;
+        min-height: 44px;
+      }
+
+      /* Phone menu: [save] Favorite Pages ... [panel]. The row takes the
+         rest of its line and the panel button, which slides the drawer in
+         from that side, goes to the right end (Resolved 39). */
+      .pfp-nav-item {
+        flex: 1 1 auto;
+      }
+
+      .pfp-nav-item .pfp-nav-panel {
+        order: 1;
+        margin-left: auto;
+      }
+    }
+  `;
+
+  // ==========================================================================
+  // === Storage (IndexedDB, PLAN D1) =========================================
+  // ==========================================================================
+  // Every public function takes the account id explicitly and reads through
+  // a per-user index, so no code path can see another account's records
+  // (PLAN D2-3). Deletions are tombstones (deletedAt) so they can travel
+  // through Sync exports (PLAN D1-6, Resolved 9).
+
+  /** @type {?Promise<!IDBDatabase>} */
+  let dbPromise = null;
+
+  /**
+   * Opens the database once per page and reuses the connection.
+   * @return {!Promise<!IDBDatabase>}
+   */
+  function openDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(STORE_PAGES)) {
+          const pages = db.createObjectStore(STORE_PAGES, {keyPath: 'id'});
+          pages.createIndex('by_user', 'userId');
+          pages.createIndex('by_user_url', ['userId', 'url'], {unique: true});
+          pages.createIndex('by_user_created', ['userId', 'createdAt']);
+          pages.createIndex('by_user_order', ['userId', 'sortOrder']);
+        }
+        if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+          db.createObjectStore(STORE_SETTINGS, {keyPath: 'key'});
+        }
+      };
+      request.onsuccess = () => {
+        const db = request.result;
+        // A newer version of the script is upgrading the schema in another
+        // tab: let go so that tab is not blocked.
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = null;
+        };
+        db.onclose = () => {
+          dbPromise = null;
+        };
+        resolve(db);
+      };
+      request.onerror = () => {
+        dbPromise = null;
+        reject(request.error);
+      };
+      request.onblocked = () => {
+        console.warn(LOG_PREFIX, 'database upgrade blocked by another tab');
+      };
+    });
+    return dbPromise;
+  }
+
+  /**
+   * @param {!IDBRequest} request
+   * @return {!Promise<*>} Settles with the request's result or error.
+   */
+  function requestToPromise(request) {
+    return new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  /**
+   * Runs `work` in a single transaction and resolves with its return value
+   * once the transaction has committed. If `work` throws, the transaction is
+   * aborted so partial writes roll back. `work` may await IndexedDB requests
+   * but nothing else, or the transaction auto-commits early.
+   * @param {string} storeName
+   * @param {string} mode 'readonly' or 'readwrite'.
+   * @param {function(!IDBObjectStore): *} work
+   * @return {!Promise<*>}
+   */
+  async function withStore(storeName, mode, work) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, mode);
+      let result;
+      let failed = false;
+      tx.oncomplete = () => {
+        if (!failed) resolve(result);
+      };
+      tx.onabort = () => {
+        if (!failed) reject(tx.error || new Error('transaction aborted'));
+      };
+      Promise.resolve()
+          .then(() => work(tx.objectStore(storeName)))
+          .then((value) => {
+            result = value;
+          }, (err) => {
+            failed = true;
+            try {
+              tx.abort();
+            } catch (abortErr) {
+              // Already finished; nothing left to roll back.
+            }
+            reject(err);
+          });
+    });
+  }
+
+  /** @return {string} A random record id, stable across devices. */
+  function newId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return Date.now().toString(36) + Math.random().toString(36).slice(2);
+  }
+
+  /**
+   * @param {!Object} record
+   * @return {boolean} Whether the record is not a tombstone.
+   */
+  function isActive(record) {
+    return record.deletedAt === null;
+  }
+
+  /**
+   * @param {!IDBObjectStore} store
+   * @param {number} userId
+   * @return {!Promise<!Array<!Object>>} All records of the account.
+   */
+  function getAllForUser(store, userId) {
+    return requestToPromise(
+        store.index('by_user').getAll(IDBKeyRange.only(userId)));
+  }
+
+  /**
+   * @param {!IDBObjectStore} store
+   * @param {number} userId
+   * @param {string} url
+   * @return {!Promise<?Object>} The record saved under `url`, tombstone or not.
+   */
+  async function getRecordByUrl(store, userId, url) {
+    const record = await requestToPromise(
+        store.index('by_user_url').get([userId, url]));
+    return record || null;
+  }
+
+  /**
+   * The sortOrder that puts an entry above everything else (PLAN D8: new
+   * entries go to the top, Resolved 7).
+   * @param {!IDBObjectStore} store
+   * @param {number} userId
+   * @return {!Promise<number>}
+   */
+  async function topSortOrder(store, userId) {
+    const range = IDBKeyRange.bound([userId, -Infinity], [userId, Infinity]);
+    const cursor = await requestToPromise(
+        store.index('by_user_order').openCursor(range));
+    return cursor ? cursor.value.sortOrder - SORT_STEP : 0;
+  }
+
+  /**
+   * Validates a URL through the single save gate (PLAN D13).
+   * @param {string} url
+   * @return {string} The sanitized URL.
+   */
+  function requireSavableUrl(url) {
+    const checked = sanitizeUrl(url);
+    if (!checked.ok) throw new Error(`url rejected: ${checked.reason}`);
+    return checked.url;
+  }
+
+  /**
+   * @param {number} userId
+   * @return {!Promise<!Array<!Object>>} Active pages, in no particular order.
+   */
+  function listPages(userId) {
+    return withStore(STORE_PAGES, 'readonly', async (store) =>
+      (await getAllForUser(store, userId)).filter(isActive));
+  }
+
+  /**
+   * Every record including tombstones, for Sync export and import (D10).
+   * @param {number} userId
+   * @return {!Promise<!Array<!Object>>}
+   */
+  function listAllRecords(userId) {
+    return withStore(
+        STORE_PAGES, 'readonly', (store) => getAllForUser(store, userId));
+  }
+
+  /**
+   * @param {number} userId
+   * @param {string} url A sanitized URL.
+   * @return {!Promise<?Object>} The active page saved under `url`, or null.
+   */
+  function getPageByUrl(userId, url) {
+    return withStore(STORE_PAGES, 'readonly', async (store) => {
+      const record = await getRecordByUrl(store, userId, url);
+      return record && isActive(record) ? record : null;
+    });
+  }
+
+  /**
+   * The account's saved entry for `url`. On a forum topic page this falls
+   * back to the topic's latest-page entry, so the topic counts as saved on
+   * whichever page it is open (Resolved 34); a report likewise falls back
+   * to its latest-date entry, whatever end date it shows (Resolved 48).
+   * @param {number} userId
+   * @param {string} url A sanitized URL.
+   * @return {!Promise<?Object>}
+   */
+  async function findSavedPage(userId, url) {
+    const exact = await getPageByUrl(userId, url);
+    if (exact || !latestKind(url)) return exact;
+    const latest = withLatest(url, true);
+    return latest === url ? null : getPageByUrl(userId, latest);
+  }
+
+  /**
+   * What saving the page being viewed stores by default: following its
+   * newest state where it can (latestByDefault), as the dialog's box
+   * starts out.
+   * @param {string} url A sanitized URL.
+   * @return {string}
+   */
+  function defaultSaveUrl(url) {
+    return latestByDefault(url) ? withLatest(url, true) : url;
+  }
+
+  /**
+   * @param {number} userId
+   * @return {!Promise<number>} Number of active pages.
+   */
+  async function countPages(userId) {
+    return (await listPages(userId)).length;
+  }
+
+  /**
+   * Saves `url` for the account. Creates a record, revives the URL's
+   * tombstone (keeping its id so other devices merge it), or, when another
+   * tab saved the same URL first, updates that record instead of failing on
+   * the unique index. New and revived entries go to the top (Resolved 7).
+   * @param {number} userId
+   * @param {{url: string, title: string, memo: (string|undefined)}} fields
+   * @return {!Promise<!Object>} The stored record.
+   */
+  async function savePage(userId, {url, title, memo = ''}) {
+    const cleanUrl = requireSavableUrl(url);
+    const now = Date.now();
+    const values = {
+      url: cleanUrl,
+      title: clampText(title, TITLE_MAX) || fallbackTitle(cleanUrl),
+      memo: clampText(memo, MEMO_MAX),
+      type: classify(cleanUrl),
+    };
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const existing = await getRecordByUrl(store, userId, cleanUrl);
+      let record;
+      if (existing && isActive(existing)) {
+        record = {...existing, ...values, updatedAt: now};
+      } else {
+        // A new page (or one back from removal) needs room (Resolved 53);
+        // editing a saved one does not.
+        const all = await getAllForUser(store, userId);
+        if (all.filter(isActive).length >= ENTRY_LIMIT) {
+          throw new Error(FULL_ERROR);
+        }
+        // Unpinned, so it lands just under the pinned pages, which are
+        // shown first whatever their sortOrder (Resolved 52).
+        const placement = {
+          sortOrder: await topSortOrder(store, userId),
+          pinned: false,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        };
+        record = existing ?
+            {...existing, ...values, ...placement} :
+            {id: newId(), userId, ...values, ...placement};
+      }
+      await requestToPromise(store.put(record));
+      return record;
+    });
+  }
+
+  /**
+   * Edits an active page. A new URL goes through the save gate; if another
+   * active page already uses it the edit is refused, and if a tombstone holds
+   * it the tombstone is dropped so the unique index stays satisfied.
+   * @param {number} userId
+   * @param {string} id
+   * @param {{url: (string|undefined), title: (string|undefined),
+   *     memo: (string|undefined)}} changes
+   * @return {!Promise<!Object>} The stored record.
+   */
+  async function updatePage(userId, id, changes) {
+    const newUrl =
+        changes.url === undefined ? null : requireSavableUrl(changes.url);
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const record = await requestToPromise(store.get(id));
+      if (!record || record.userId !== userId || !isActive(record)) {
+        throw new Error('page not found');
+      }
+      const next = {...record, updatedAt: Date.now()};
+      if (newUrl !== null && newUrl !== record.url) {
+        const holder = await getRecordByUrl(store, userId, newUrl);
+        if (holder && isActive(holder)) throw new Error('url already saved');
+        if (holder) await requestToPromise(store.delete(holder.id));
+        next.url = newUrl;
+        next.type = classify(newUrl);
+      }
+      if (changes.title !== undefined) {
+        next.title = clampText(changes.title, TITLE_MAX) ||
+            fallbackTitle(next.url);
+      }
+      if (changes.memo !== undefined) {
+        next.memo = clampText(changes.memo, MEMO_MAX);
+      }
+      await requestToPromise(store.put(next));
+      return next;
+    });
+  }
+
+  /**
+   * Deletes a page by turning it into a tombstone (PLAN D1-6).
+   * @param {number} userId
+   * @param {string} id
+   * @return {!Promise<void>}
+   */
+  async function deletePage(userId, id) {
+    await deletePages(userId, [id]);
+  }
+
+  /**
+   * Deletes several pages in one transaction, all or none (Resolved 32).
+   * Ids of other accounts or of pages already deleted are skipped.
+   * @param {number} userId
+   * @param {!Array<string>} ids
+   * @return {!Promise<number>} How many pages were deleted.
+   */
+  function deletePages(userId, ids) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const now = Date.now();
+      let count = 0;
+      for (const id of new Set(ids)) {
+        const record = await requestToPromise(store.get(id));
+        if (!record || record.userId !== userId || !isActive(record)) continue;
+        await requestToPromise(
+            store.put({...record, deletedAt: now, updatedAt: now}));
+        count++;
+      }
+      return count;
+    });
+  }
+
+  /**
+   * Hard-deletes tombstones older than `olderThanMs`.
+   * @param {number} userId
+   * @param {number=} olderThanMs
+   * @return {!Promise<number>} How many tombstones were removed.
+   */
+  function purgeTombstones(userId, olderThanMs = TOMBSTONE_TTL_MS) {
+    const cutoff = Date.now() - olderThanMs;
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const expired = (await getAllForUser(store, userId)).filter(
+          (record) => !isActive(record) && record.deletedAt <= cutoff);
+      await Promise.all(
+          expired.map((record) => requestToPromise(store.delete(record.id))));
+      return expired.length;
+    });
+  }
+
+  /**
+   * Moves one page in the custom order (PLAN D8-4).
+   * @param {number} userId
+   * @param {string} id
+   * @param {number} sortOrder
+   * @return {!Promise<!Object>} The stored record.
+   */
+  function reorderPage(userId, id, sortOrder) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const record = await requestToPromise(store.get(id));
+      if (!record || record.userId !== userId || !isActive(record)) {
+        throw new Error('page not found');
+      }
+      const next = {...record, sortOrder, updatedAt: Date.now()};
+      await requestToPromise(store.put(next));
+      return next;
+    });
+  }
+
+  /**
+   * Pins a page to the top of the list or unpins it (Resolved 52). It goes
+   * next to where the two parts meet: a newly pinned page to the end of
+   * the pinned ones, an unpinned one to the start of the rest.
+   * @param {number} userId
+   * @param {string} id
+   * @param {boolean} pinned
+   * @return {!Promise<!Object>} The stored record.
+   */
+  function setPagePinned(userId, id, pinned) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const all = await getAllForUser(store, userId);
+      const record = all.find((candidate) => candidate.id === id);
+      if (!record || !isActive(record)) throw new Error('page not found');
+      if (isPinned(record) === pinned) return record;
+      const orders = all
+          .filter((page) => isActive(page) && page.id !== id &&
+              isPinned(page) === pinned)
+          .map((page) => page.sortOrder);
+      let sortOrder = record.sortOrder;
+      if (orders.length) {
+        sortOrder = pinned ? Math.max(...orders) + SORT_STEP :
+            Math.min(...orders) - SORT_STEP;
+      }
+      const next = {...record, pinned, sortOrder, updatedAt: Date.now()};
+      await requestToPromise(store.put(next));
+      return next;
+    });
+  }
+
+  /**
+   * Re-spaces the custom order SORT_STEP apart once midpoint inserts run out
+   * of room (PLAN D8-4). Every moved record gets a new updatedAt so the order
+   * wins in a later Sync merge.
+   * @param {number} userId
+   * @return {!Promise<!Array<!Object>>} Active pages in their new order.
+   */
+  function renumberAll(userId) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const now = Date.now();
+      // Pinned pages first, as they are shown (Resolved 52).
+      const ordered = (await getAllForUser(store, userId))
+          .filter(isActive)
+          .sort((a, b) => Number(isPinned(b)) - Number(isPinned(a)) ||
+              a.sortOrder - b.sortOrder)
+          .map((record, i) => ({
+            ...record,
+            sortOrder: i * SORT_STEP,
+            updatedAt: now,
+          }));
+      await Promise.all(
+          ordered.map((record) => requestToPromise(store.put(record))));
+      return ordered;
+    });
+  }
+
+  /**
+   * Settings are per browser, not per account (PLAN D1-3).
+   * @return {!Promise<!Object>} Stored settings over the defaults.
+   */
+  async function getSettings() {
+    const row = await withStore(STORE_SETTINGS, 'readonly', (store) =>
+      requestToPromise(store.get(SETTINGS_KEY)));
+    return readSettings(row ? row.value : null);
+  }
+
+  /**
+   * The settings a stored row gives. Only the order last picked is ever
+   * stored (Resolved 37); the hotkeys stay the defaults, as there is no
+   * Settings window to change them (Resolved 57). Anything unknown or
+   * damaged in the row falls back to its default, so it cannot break the
+   * list (Resolved 60).
+   * @param {*} stored
+   * @return {!Object}
+   */
+  function readSettings(stored) {
+    const row = isPlainObject(stored) ? stored : {};
+    const knownSort = SORT_MODES.some(({value}) => value === row.defaultSort);
+    const knownDir = ['asc', 'desc'].includes(row.defaultSortDir);
+    return {
+      ...DEFAULT_SETTINGS,
+      defaultSort: knownSort ? row.defaultSort : DEFAULT_SETTINGS.defaultSort,
+      defaultSortDir: knownDir ?
+          row.defaultSortDir : DEFAULT_SETTINGS.defaultSortDir,
+    };
+  }
+
+  /**
+   * Stores the order last picked, the only setting kept (Resolved 37).
+   * @param {{defaultSort: (string|undefined),
+   *     defaultSortDir: (string|undefined)}} partial
+   * @return {!Promise<!Object>} The full settings now in effect.
+   */
+  function saveSettings(partial) {
+    return withStore(STORE_SETTINGS, 'readwrite', async (store) => {
+      const row = await requestToPromise(store.get(SETTINGS_KEY));
+      const stored = row && isPlainObject(row.value) ? row.value : {};
+      const next = readSettings({...stored, ...partial});
+      await requestToPromise(store.put({key: SETTINGS_KEY, value: {
+        defaultSort: next.defaultSort,
+        defaultSortDir: next.defaultSortDir,
+      }}));
+      return next;
+    });
+  }
+
+  /**
+   * Claims this browser's daily check of the account's saved wiki pages
+   * for aliased tags (Resolved 51): when the last one is a day old, `now`
+   * is recorded as its time, in one transaction, so of two tabs opening
+   * the list together only one checks (Resolved 60). The time is a row of
+   * its own in the settings store, so it never mixes with the settings or
+   * travels in an export.
+   * @param {number} userId
+   * @param {number} now
+   * @return {!Promise<?number>} The last check's time (0 if never) once
+   *     claimed; null when the next check is not due yet.
+   */
+  function claimAliasCheck(userId, now) {
+    const key = `${ALIAS_CHECK_KEY}:${userId}`;
+    return withStore(STORE_SETTINGS, 'readwrite', async (store) => {
+      const row = await requestToPromise(store.get(key));
+      const last = row && Number.isFinite(row.value) ? row.value : 0;
+      // A time ahead of now (a clock set back since) holds nothing up.
+      if (last <= now && now - last < ALIAS_CHECK_INTERVAL_MS) return null;
+      await requestToPromise(store.put({key, value: now}));
+      return last;
+    });
+  }
+
+  /**
+   * Puts back the time claimAliasCheck replaced, after a failed check, so
+   * the next list page tries again.
+   * @param {number} userId
+   * @param {number} time
+   * @return {!Promise<void>}
+   */
+  async function restoreAliasCheckTime(userId, time) {
+    await withStore(STORE_SETTINGS, 'readwrite', (store) => requestToPromise(
+        store.put({key: `${ALIAS_CHECK_KEY}:${userId}`, value: time})));
+  }
+
+  // ==========================================================================
+  // === Model (PLAN D2, D3, D13) =============================================
+  // ==========================================================================
+
+  /**
+   * Result of the save gate: `url` is set when ok, otherwise `reason` holds a
+   * REJECT_MESSAGES key.
+   * @typedef {{
+   *   ok: boolean,
+   *   url: (string|undefined),
+   *   reason: (string|undefined),
+   * }} UrlCheck
+   */
+
+  /**
+   * Reads the logged-in account from Danbooru's body attributes. Logged-out
+   * pages carry the string "null" (Resolved 1, 15).
+   * @return {?{id: number, name: string}}
+   */
+  function getCurrentUser() {
+    const data = document.body ? document.body.dataset : null;
+    const id = Number(data && data.currentUserId);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    return {id, name: data.currentUserName || ''};
+  }
+
+  /**
+   * The single gate every saved URL passes through (PLAN D13): same-site
+   * check, deny rules, and clean-up into one canonical form. Query strings
+   * are always re-serialized so equal searches compare equal.
+   * @param {*} input An absolute URL or a site-relative path.
+   * @return {!UrlCheck}
+   */
+  function sanitizeUrl(input) {
+    const text = String(input == null ? '' : input).trim();
+    if (!text) return {ok: false, reason: 'invalid'};
+    let url;
+    try {
+      url = new URL(text, SITE_ORIGIN);
+    } catch (err) {
+      return {ok: false, reason: 'invalid'};
+    }
+    if (url.protocol === 'http:' && url.host === SITE_HOST) {
+      url.protocol = 'https:';
+    }
+    // The scheme as well: a blob: URL made on the site has the site's
+    // origin, yet is no Danbooru page (Resolved 60).
+    if (url.protocol !== 'https:' || url.origin !== SITE_ORIGIN) {
+      return {ok: false, reason: 'external'};
+    }
+    if (TOKEN_PARAMS.some((name) => url.searchParams.has(name))) {
+      return {ok: false, reason: 'token'};
+    }
+    // One canonical path for '/wiki_pages/help:home' and
+    // '/wiki_pages/help%3Ahome' (the setter re-encodes what it must).
+    url.pathname = decodeReadable(url.pathname, PATH_KEEP_ENCODED);
+    const path = url.pathname.replace(DATA_EXTENSION_PATTERN, '');
+    const rule = DENY_RULES.find(({pattern, except}) =>
+      pattern.test(path) && !(except && except.test(path)));
+    if (rule) return {ok: false, reason: rule.reason};
+
+    const isPostDetail = POST_DETAIL_PATTERN.test(url.pathname);
+    const kept = [...url.searchParams].filter(([name, value]) =>
+      !STRIPPED_PARAMS.has(name) &&
+      !(isPostDetail && name === 'q') &&
+      !(name.startsWith('search[') && value.trim() === ''));
+    url.search = new URLSearchParams(kept).toString();
+    url.hash = '';
+    url.username = '';
+    url.password = '';
+    return {ok: true, url: url.href};
+  }
+
+  /**
+   * Decodes percent-escapes so a URL part reads naturally, except the
+   * characters in `keepEncoded`.
+   * @param {string} text
+   * @param {!RegExp} keepEncoded A global character-class pattern.
+   * @return {string}
+   */
+  function decodeReadable(text, keepEncoded) {
+    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try {
+        return decodeURIComponent(run)
+            .replace(keepEncoded, (char) => encodeURIComponent(char));
+      } catch (err) {
+        return run;  // Not valid UTF-8: leave it as it was.
+      }
+    });
+  }
+
+  /**
+   * The site-relative "internal link" form of a saved URL, as shown in the
+   * UI (e.g. /posts?tags=user:AkaringoP). Feeding it back to sanitizeUrl
+   * gives the same saved URL.
+   * @param {string} url An absolute same-site URL.
+   * @return {string}
+   */
+  function toSitePath(url) {
+    const {pathname, search} = new URL(url, SITE_ORIGIN);
+    return decodeReadable(pathname, PATH_KEEP_ENCODED) +
+        decodeReadable(search, QUERY_KEEP_ENCODED);
+  }
+
+  /**
+   * Whether the page being viewed can be saved, and its URL if so. Adds the
+   * checks that only make sense for an open page (PLAN D13-5).
+   * @return {!UrlCheck}
+   */
+  function checkCurrentPage() {
+    // JSON / XML documents have no Danbooru body attributes, so the account
+    // cannot be confirmed there (PLAN D13). Tampermonkey on Whale does run
+    // on them (measured), so this reason does reach the user.
+    if (!isHtmlDocument()) {
+      return {ok: false, reason: 'notHtml'};
+    }
+    if (!getCurrentUser()) return {ok: false, reason: 'loggedOut'};
+    const checked = sanitizeUrl(location.href);
+    if (!checked.ok) return checked;
+    const {controller, action} = document.body.dataset;
+    if (controller === 'static' && ERROR_ACTIONS.has(action)) {
+      return {ok: false, reason: 'errorPage'};
+    }
+    if (FORM_ACTIONS.has(action) &&
+        !SAVABLE_FORM_PATTERN.test(new URL(checked.url).pathname)) {
+      return {ok: false, reason: 'form'};
+    }
+    return checked;
+  }
+
+  /**
+   * Type of a saved URL: 'api', a single-record type (ITEM_TYPES),
+   * 'post-search', 'list' (search results and other index pages) or
+   * 'other' (PLAN D3, Resolved 24).
+   * @param {string} url An absolute or site-relative URL.
+   * @return {string}
+   */
+  function classify(url) {
+    const {pathname, searchParams} = new URL(url, SITE_ORIGIN);
+    if (DATA_EXTENSION_PATTERN.test(pathname)) return 'api';
+    const path = pathname.replace(/\/+$/, '') || '/';
+    const item = ITEM_TYPES.find(([, pattern]) => pattern.test(path));
+    if (item) return item[0];
+    if (POST_SEARCH_PATTERN.test(path)) return 'post-search';
+    const hasSearch =
+        [...searchParams.keys()].some((name) => name.startsWith('search['));
+    const isIndex = SINGULAR_LIST_PATHS.has(path) ||
+        (PLURAL_PATH_PATTERN.test(path) && !NOT_LIST_PATTERN.test(path));
+    return hasSearch || isIndex ? 'list' : 'other';
+  }
+
+  /**
+   * Trims and cuts text to `max` characters without splitting surrogate
+   * pairs.
+   * @param {*} value
+   * @param {number} max
+   * @return {string}
+   */
+  function clampText(value, max) {
+    const chars = Array.from(String(value == null ? '' : value).trim());
+    return chars.slice(0, max).join('');
+  }
+
+  /**
+   * Readable title built from the URL itself, for pages without a usable
+   * document title (Add URL, API addresses).
+   * @param {string} url
+   * @return {string}
+   */
+  function fallbackTitle(url) {
+    const {pathname, search} = new URL(url, SITE_ORIGIN);
+    const decode = (text) => {
+      try {
+        return decodeURIComponent(text);
+      } catch (err) {
+        return text;
+      }
+    };
+    return clampText(
+        decode(pathname) + decode(search.replace(/\+/g, ' ')), TITLE_MAX);
+  }
+
+  /**
+   * Title of the open page without Danbooru's " | Danbooru" suffix
+   * (Resolved 15).
+   * @param {string} url The page's sanitized URL, used as the fallback.
+   * @return {string}
+   */
+  function extractTitle(url) {
+    const title = clampText(
+        document.title.replace(TITLE_SUFFIX_PATTERN, ''), TITLE_MAX);
+    return title && !/^https?:\/\//.test(title) ? title : fallbackTitle(url);
+  }
+
+  /**
+   * The page's own search form: a GET form from Danbooru's search_form_for
+   * with a submit button, whose action is this page. That skips the subnav
+   * quick search, which has no submit button (Resolved 15, 16). Read from
+   * the attributes: a field named "method" or "action" inside a form takes
+   * over form.method and form.action (Resolved 60).
+   * @return {?HTMLFormElement}
+   */
+  function findSearchForm() {
+    const actionPath = (form) => {
+      try {
+        return new URL(form.getAttribute('action') || '', location.href)
+            .pathname;
+      } catch (err) {
+        return '';
+      }
+    };
+    return [...document.querySelectorAll('form.search-form')].find(
+        (form) =>
+          (form.getAttribute('method') || 'get').toLowerCase() === 'get' &&
+          form.querySelector('[type="submit"]') !== null &&
+          actionPath(form) === location.pathname) ||
+        null;
+  }
+
+  /**
+   * The main condition of a search page: the first text field of its search
+   * form (Name, Tag, Tags, ...) that has a value. Read from the saved URL,
+   * not the field, so an edited but unsubmitted field cannot leak in.
+   * @param {string} url The page's sanitized URL.
+   * @return {string} Empty when there is no such form or value.
+   */
+  function searchSummary(url) {
+    const form = findSearchForm();
+    if (!form) return '';
+    const params = new URL(url).searchParams;
+    const fields = form.querySelectorAll(
+        'input[type="text"][name], input[type="search"][name]');
+    for (const field of fields) {
+      const value = (params.get(field.name) || '').trim();
+      if (value) return value;
+    }
+    return '';
+  }
+
+  /**
+   * Suggested title for the open page: its document title, plus the main
+   * search condition on search pages, so the same page saved with other
+   * conditions stays distinguishable, e.g. "Related tags | user:AkaringoP"
+   * (Resolved 23).
+   * @param {string} url The page's sanitized URL.
+   * @return {string}
+   */
+  function suggestTitle(url) {
+    const base = extractTitle(url);
+    const summary = searchSummary(url);
+    if (!summary || base.toLowerCase().includes(summary.toLowerCase())) {
+      return base;
+    }
+    return clampText(`${base} | ${summary}`, TITLE_MAX);
+  }
+
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it is a forum topic's page.
+   */
+  function isForumTopicUrl(url) {
+    return FORUM_TOPIC_PATTERN.test(new URL(url, SITE_ORIGIN).pathname);
+  }
+
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it is one of Danbooru's reports.
+   */
+  function isReportUrl(url) {
+    return REPORT_PATTERN.test(new URL(url, SITE_ORIGIN).pathname);
+  }
+
+  /**
+   * Pages that can be saved to follow their newest state: a forum topic
+   * opens at its last page (Resolved 34), a report ends on the latest date
+   * (Resolved 48).
+   * @param {string} url An absolute or site-relative URL.
+   * @return {?string} 'page', 'date', or null for any other page.
+   */
+  function latestKind(url) {
+    if (isForumTopicUrl(url)) return 'page';
+    if (isReportUrl(url)) return 'date';
+    return null;
+  }
+
+  /** The save dialog's checkbox for each latestKind. */
+  const LATEST_LABELS = Object.freeze({
+    page: 'Open the latest page',
+    date: 'End on the latest date',
+  });
+
+  /**
+   * @param {string} url An absolute or site-relative URL.
+   * @return {boolean} Whether it asks for the newest page (?page=last) or,
+   *     on a report, the latest end date.
+   */
+  function isLatest(url) {
+    const params = new URL(url, SITE_ORIGIN).searchParams;
+    return latestKind(url) === 'date' ?
+        params.get(REPORT_END_PARAM) === LATEST_DATE :
+        params.get('page') === LATEST_PAGE;
+  }
+
+  /**
+   * @param {number} days From today: 0 today, 1 tomorrow.
+   * @return {string} That local date as YYYY-MM-DD, the form of Danbooru's
+   *     date fields.
+   */
+  function localDate(days) {
+    const date = new Date();
+    date.setDate(date.getDate() + days);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-` +
+        pad(date.getDate());
+  }
+
+  /**
+   * Whether a page saved from here follows its newest state unless the
+   * dialog's box is unticked: always for a forum topic; for a report only
+   * when it already ends today or later (or has no end date), so a range
+   * in the past stays as it was.
+   * @param {string} url A sanitized URL.
+   * @return {boolean}
+   */
+  function latestByDefault(url) {
+    const kind = latestKind(url);
+    if (kind !== 'date') return kind === 'page';
+    const end = new URL(url).searchParams.get(REPORT_END_PARAM);
+    if (!end || end === LATEST_DATE) return true;
+    // ISO dates compare as text.
+    return /^\d{4}-\d{2}-\d{2}$/.test(end) && end >= localDate(0);
+  }
+
+  /**
+   * The address to open a saved page at: a report's latest end becomes
+   * tomorrow's date, so Danbooru never sees the word (Resolved 48). A
+   * topic's ?page=last needs the post count, which the topic page fetches
+   * on arrival (openLatestForumPage), so it is left for that.
+   * @param {string} url A saved URL.
+   * @return {string}
+   */
+  function openableUrl(url) {
+    if (latestKind(url) !== 'date' || !isLatest(url)) return url;
+    const next = new URL(url, SITE_ORIGIN);
+    next.searchParams.set(REPORT_END_PARAM, localDate(1));
+    return next.href;
+  }
+
+  /**
+   * A URL set to follow its newest state, or taken off it (Resolved 34,
+   * 48). Off drops ?page=last (page 1) on a topic, and fixes a report's end
+   * on the date it would open with now. Other URLs pass through.
+   * @param {string} url A sanitized URL.
+   * @param {boolean} on
+   * @return {string} Still in sanitizeUrl's canonical form.
+   */
+  function withLatest(url, on) {
+    const kind = latestKind(url);
+    if (!kind || (!on && !isLatest(url))) return url;
+    const next = new URL(url);
+    if (kind === 'date') {
+      next.searchParams.set(REPORT_END_PARAM, on ? LATEST_DATE : localDate(1));
+    } else if (on) {
+      next.searchParams.set('page', LATEST_PAGE);
+    } else {
+      next.searchParams.delete('page');
+    }
+    return next.href;
+  }
+
+  // ==========================================================================
+  // === UI primitives ========================================================
+  // ==========================================================================
+
+  /** @return {boolean} False on JSON / XML responses (PLAN D13). */
+  function isHtmlDocument() {
+    return document.contentType.includes('html');
+  }
+
+  /**
+   * @param {string} id
+   * @param {string} css
+   */
+  function injectStyles(id, css) {
+    if (document.getElementById(id)) return;
+    const parent = document.head || document.documentElement;
+    if (!parent) {
+      // At document-start even <html> may not exist yet in some managers.
+      // Waiting for DOMContentLoaded would be after the first paint, so the
+      // style goes in the moment <html> does (Resolved 25).
+      const observer = new MutationObserver(() => {
+        if (!document.documentElement) return;
+        observer.disconnect();
+        injectStyles(id, css);
+      });
+      observer.observe(document, {childList: true});
+      return;
+    }
+    const style = document.createElement('style');
+    style.id = id;
+    style.textContent = css;
+    parent.appendChild(style);
+  }
+
+  function ensureStyles() {
+    injectStyles(STYLE_ID, GLOBAL_CSS);
+  }
+
+  /**
+   * Builds an element without innerHTML, so saved titles and memos (which
+   * may come from another user's file, PLAN D10) always render as text.
+   * @param {string} tag
+   * @param {!Object=} props `className`, `text`, `on<event>` listeners, or
+   *     attributes (true sets an empty attribute; false and null are skipped).
+   * @param {!Array<?(!Node|string)>=} children Null entries are skipped.
+   * @return {!HTMLElement}
+   */
+  function makeElement(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (value === false || value == null) continue;
+      if (key === 'className') {
+        node.className = value;
+      } else if (key === 'text') {
+        node.textContent = value;
+      } else if (key.startsWith('on')) {
+        node.addEventListener(key.slice(2), value);
+      } else {
+        node.setAttribute(key, value === true ? '' : String(value));
+      }
+    }
+    node.append(...children.filter((child) => child != null));
+    return node;
+  }
+
+  /** @return {boolean} Whether Danbooru shows its phone layout (menu). */
+  function isMobileLayout() {
+    return Boolean(window.matchMedia) &&
+        window.matchMedia(MOBILE_QUERY).matches;
+  }
+
+  /**
+   * Keeps a fixed overlay over the part of the page actually on screen. On
+   * phones the on-screen keyboard and pinch zoom shrink and shift the
+   * visual viewport while position: fixed follows the layout viewport, so
+   * a dialog could sit half under the keyboard or off the side
+   * (Resolved 45).
+   * @param {!HTMLElement} overlay
+   * @return {function()} Stops following.
+   */
+  function fitToVisualViewport(overlay) {
+    const viewport = window.visualViewport;
+    if (!viewport) return () => {};
+    const fit = () => {
+      Object.assign(overlay.style, {
+        inset: 'auto',
+        left: `${viewport.offsetLeft}px`,
+        top: `${viewport.offsetTop}px`,
+        width: `${viewport.width}px`,
+        height: `${viewport.height}px`,
+      });
+    };
+    fit();
+    viewport.addEventListener('resize', fit);
+    viewport.addEventListener('scroll', fit);
+    return () => {
+      viewport.removeEventListener('resize', fit);
+      viewport.removeEventListener('scroll', fit);
+    };
+  }
+
+  /** @return {boolean} Whether the viewer asked the OS for less motion. */
+  function prefersReducedMotion() {
+    return Boolean(window.matchMedia) &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /** @return {boolean} Whether a dialog or popover of ours is open. */
+  function isOverlayOpen() {
+    return document.querySelector('.pfp-overlay') !== null;
+  }
+
+  /**
+   * Keeps Tab inside `container` while a modal is open.
+   * @param {!KeyboardEvent} event
+   * @param {!Element} container
+   */
+  function trapFocus(event, container) {
+    const focusable = [...container.querySelectorAll(
+        'input, textarea, select, button, a[href]:not([tabindex="-1"])')]
+        .filter((node) => !node.disabled);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  let toastTimer = 0;
+
+  /**
+   * Shows a short message at the top right; a new one replaces the last.
+   * Works on JSON documents too, where Danbooru's styles are absent.
+   * @param {string} message
+   * @param {{error: (boolean|undefined), long: (boolean|undefined)}=} options
+   *     `long` keeps a notice up as long as an error, to be read in full.
+   */
+  function showToast(message, {error = false, long = false} = {}) {
+    ensureStyles();
+    let toast = document.getElementById(TOAST_ID);
+    if (!toast) {
+      toast = makeElement('div', {
+        'id': TOAST_ID,
+        'className': 'pfp-toast',
+        'role': 'status',
+        'aria-live': 'polite',
+        'onclick': hideToast,
+      });
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.classList.toggle('pfp-toast-error', error);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(
+        hideToast, error || long ? TOAST_ERROR_MS : TOAST_MS);
+  }
+
+  function hideToast() {
+    clearTimeout(toastTimer);
+    const toast = document.getElementById(TOAST_ID);
+    if (toast) toast.remove();
+  }
+
+  /**
+   * @param {*} err A storage error.
+   * @return {string} What to tell the user about it.
+   */
+  function describeError(err) {
+    const message = String((err && err.message) || '');
+    const rejected = /^url rejected: (\w+)$/.exec(message);
+    if (rejected) return REJECT_MESSAGES[rejected[1]] || message;
+    if (message === 'url already saved') {
+      return 'Another saved page already uses this URL.';
+    }
+    if (message === 'page not found') return 'This page was already removed.';
+    if (message === FULL_ERROR) {
+      return `Favorite Pages is full (${ENTRY_LIMIT.toLocaleString('en')} ` +
+          'pages). Remove some to save more.';
+    }
+    if (err && err.name === 'QuotaExceededError') {
+      return 'Browser storage is full.';
+    }
+    return 'Could not access browser storage.';
+  }
+
+  // ==========================================================================
+  // === Save dialog (PLAN D4) ================================================
+  // ==========================================================================
+
+  /** Set while a dialog is being prepared, so a double press opens one. */
+  let saveDialogPending = false;
+  /** @type {?function()} Tears down the open save dialog. */
+  let activeDialogClose = null;
+
+  function closeSaveDialog() {
+    if (activeDialogClose) activeDialogClose();
+  }
+
+  /**
+   * A modal in the save dialog's frame, for the list page's Export, Import
+   * and Help (D10): the same backdrop rule, Esc, Tab kept inside, fit
+   * to the part of the screen that shows, focus handed back on close. It
+   * takes the save dialog's slot, so pagehide closes it as well.
+   * @param {{heading: string, body: !Array<?Node>, buttons: !Array<?Node>,
+   *     onClose: (function()|undefined),
+   *     closeText: (string|undefined)}} spec Buttons in Danbooru's order
+   *     (primary first); Cancel (or `closeText`) is added at the end.
+   *     `onClose` runs however the modal closes.
+   * @return {?function()} Closes the modal; null when another overlay is
+   *     open already.
+   */
+  function openModal({heading, body, buttons, onClose, closeText = 'Cancel'}) {
+    if (isOverlayOpen()) return null;
+    ensureStyles();
+    const returnFocus = document.activeElement;
+    const form = makeElement('form', {
+      'className': 'pfp-dialog',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'pfp-dialog-heading',
+      'novalidate': true,
+      'onsubmit': (event) => event.preventDefault(),
+      'onkeydown': (event) => {
+        // Keep Danbooru's shortcuts and ours out of the modal.
+        event.stopPropagation();
+        if (event.isComposing) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          close();
+        } else if (event.key === 'Tab') {
+          trapFocus(event, form);
+        }
+      },
+    }, [
+      makeElement('h2', {
+        id: 'pfp-dialog-heading', className: 'pfp-dialog-heading',
+        text: heading,
+      }),
+      ...body,
+      makeElement('div', {className: 'pfp-dialog-buttons'}, [
+        ...buttons,
+        makeElement('button', {type: 'button', text: closeText,
+          onclick: () => close()}),
+      ]),
+    ]);
+    // Same backdrop rule as the save dialog: press and release on it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: DIALOG_ID,
+      className: 'pfp-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [form]);
+    let stopFitting = () => {};
+
+    function close() {
+      if (!overlay.isConnected) return;
+      stopFitting();
+      overlay.remove();
+      activeDialogClose = null;
+      if (onClose) onClose();
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    activeDialogClose = close;
+    document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
+    // The first control that shows (a hidden file input cannot take it).
+    const first = [...form.querySelectorAll('input, select, textarea, button')]
+        .find((node) => !node.hidden && !node.disabled);
+    if (first) first.focus();
+    return close;
+  }
+
+  /**
+   * Opens the save dialog for `url`: edit mode when the account already has
+   * it, otherwise a new entry. The URL is fixed by default, because every
+   * entry point (hotkey, buttons, menus) is about one specific page; only the
+   * list page's Add URL and edit actions pass `editable` (Resolved 20). An
+   * empty `url` with `editable` gives the Add URL form (D5).
+   * @param {{url: (string|undefined), title: (string|undefined),
+   *     memo: (string|undefined), editable: (boolean|undefined)}=} options
+   *     `url` must already be sanitized; `title` and `memo` are suggestions
+   *     for a new entry.
+   * @return {!Promise<void>}
+   */
+  async function openSaveDialog(
+      {url = '', title = '', memo = '', editable = false} = {}) {
+    const user = getCurrentUser();
+    if (!user || saveDialogPending || isOverlayOpen()) return;
+    if (!url && !editable) return;
+    saveDialogPending = true;
+    try {
+      const existing = url ? await findSavedPage(user.id, url) : null;
+      if (!isOverlayOpen()) {
+        renderSaveDialog(user, {url, title, memo, existing, editable});
+      }
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+    } finally {
+      saveDialogPending = false;
+    }
+  }
+
+  /**
+   * @param {string} tag 'label' around a form control, 'div' around text.
+   * @param {string} label
+   * @param {...?Node} controls
+   * @return {!HTMLElement}
+   */
+  function makeField(tag, label, ...controls) {
+    return makeElement(tag, {className: 'pfp-field'}, [
+      makeElement('span', {className: 'pfp-field-label', text: label}),
+      ...controls,
+    ]);
+  }
+
+  /**
+   * A live "12 / 100" under a text field. Kept out of the field's label
+   * text for screen readers; red past the limit, which only an entry saved
+   * before the limits were lowered can be.
+   * @param {!HTMLInputElement|!HTMLTextAreaElement} field
+   * @param {number} max The field's maxlength.
+   * @return {!HTMLElement}
+   */
+  function makeCounter(field, max) {
+    const counter = makeElement('span', {
+      'className': 'pfp-count', 'aria-hidden': 'true',
+    });
+    const update = () => {
+      counter.textContent = `${field.value.length} / ${max}`;
+      counter.classList.toggle('pfp-count-over', field.value.length > max);
+    };
+    field.addEventListener('input', update);
+    update();
+    return counter;
+  }
+
+  /**
+   * Builds and shows the dialog. Buttons follow Danbooru's order: primary,
+   * then Remove, then Cancel.
+   * @param {{id: number}} user
+   * @param {{url: string, title: string, memo: string, existing: ?Object,
+   *     editable: boolean}} options
+   */
+  function renderSaveDialog(user, {url, title, memo, existing, editable}) {
+    ensureStyles();
+    const isEdit = existing !== null;
+    const returnFocus = document.activeElement;
+
+    const titleInput = makeElement('input', {
+      type: 'text', name: 'title', maxlength: TITLE_MAX, autocomplete: 'off',
+    });
+    titleInput.value = isEdit ? existing.title : title;
+    const memoInput = makeElement('textarea', {
+      name: 'memo', rows: 3, maxlength: MEMO_MAX,
+    });
+    memoInput.value = isEdit ? existing.memo : memo;
+    // A forum topic is saved to open at its newest page, and a report
+    // running up to today to end on the latest date, unless the box below
+    // is unticked (Resolved 34, 48).
+    let fixedUrl = isEdit ? existing.url :
+        url && !editable ? defaultSaveUrl(url) : url;
+    const shownPath = fixedUrl ? toSitePath(fixedUrl) : '';
+    // A fixed URL is plain wrapped text rather than a disabled input, so a
+    // long link stays fully visible and can still be selected and copied.
+    const urlInput = editable ?
+        makeElement('input', {
+          type: 'text', name: 'url', autocomplete: 'off', spellcheck: 'false',
+          inputmode: 'url', placeholder: '/posts?tags=...',
+          oninput: () => scheduleUrlCheck(),
+        }) :
+        null;
+    if (urlInput) urlInput.value = shownPath;
+    const urlView = urlInput ||
+        makeElement('span', {className: 'pfp-url-text', text: shownPath});
+    const typeChip = makeElement('span', {className: 'pfp-chip'});
+    const urlError = makeElement('p', {className: 'pfp-field-error'});
+    // Shown for forum topics and reports only (latestKind); ticked when the
+    // URL asks for the newest page or the latest end date.
+    const latestBox = makeElement('input', {
+      type: 'checkbox', name: 'latest', onchange: onLatestToggle,
+    });
+    const latestText = makeElement('span');
+    const latestField = makeElement('label', {className: 'pfp-check'},
+        [latestBox, latestText]);
+    const formError = makeElement('p', {
+      className: 'pfp-form-error', role: 'alert',
+    });
+    const primary = makeElement('button', {
+      type: 'submit',
+      className: 'button-primary',
+      text: isEdit ? 'Update' : 'Save',
+    });
+    const removeButton = isEdit ?
+        makeElement('button', {
+          type: 'button',
+          className: 'button-outline-danger',
+          text: 'Remove',
+          onclick: onRemove,
+        }) :
+        null;
+
+    const form = makeElement('form', {
+      'className': 'pfp-dialog',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-labelledby': 'pfp-dialog-heading',
+      'novalidate': true,
+      'onsubmit': onSubmit,
+      'onkeydown': onKeydown,
+    }, [
+      makeElement('h2', {
+        id: 'pfp-dialog-heading',
+        className: 'pfp-dialog-heading',
+        text: isEdit ? 'Edit favorite page' : 'Save to Favorite Pages',
+      }),
+      makeField(
+          'label', 'Title', titleInput, makeCounter(titleInput, TITLE_MAX)),
+      makeField(
+          'label', 'Memo', memoInput, makeCounter(memoInput, MEMO_MAX)),
+      makeField(
+          urlInput ? 'label' : 'div',
+          'URL',
+          makeElement('span', {className: 'pfp-url-row'}, [urlView, typeChip]),
+          urlError),
+      // Outside the URL field: an editable one is itself a <label>.
+      latestField,
+      formError,
+      makeElement('div', {className: 'pfp-dialog-buttons'}, [
+        primary,
+        removeButton,
+        makeElement('button', {type: 'button', text: 'Cancel', onclick: close}),
+      ]),
+    ]);
+    // Close only when a press both starts and ends on the backdrop, so a drag
+    // that leaves the form, or a touch scroll, does not dismiss it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: DIALOG_ID,
+      className: 'pfp-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [form]);
+
+    // The URL is only savable once it passed the gate and no other saved
+    // page holds it. The opening URL is known to qualify (it is the edited
+    // page's own URL, or openSaveDialog found nothing saved under it).
+    let checkedUrl = null;
+    let checkSeq = 0;
+    let checkTimer = 0;
+    let busy = false;
+
+    function setMessage(node, message) {
+      node.textContent = message;
+      node.hidden = !message;
+    }
+
+    function updateButtons() {
+      primary.disabled = busy || checkedUrl === null;
+      if (removeButton) removeButton.disabled = busy;
+    }
+
+    /** @return {?string} The sanitized URL, or null with the reason shown. */
+    function applyGate() {
+      const raw = urlInput ? urlInput.value : fixedUrl;
+      const checked = sanitizeUrl(raw);
+      const kind = checked.ok ? latestKind(checked.url) : null;
+      latestField.hidden = !kind;
+      latestText.textContent = kind ? LATEST_LABELS[kind] : '';
+      latestBox.checked = Boolean(kind) && isLatest(checked.url);
+      if (!checked.ok) {
+        typeChip.textContent = '?';
+        // An empty Add URL form waits for input before complaining.
+        setMessage(
+            urlError, raw.trim() ? REJECT_MESSAGES[checked.reason] : '');
+        if (urlInput) urlInput.setAttribute('aria-invalid', 'true');
+        return null;
+      }
+      typeChip.textContent = classify(checked.url);
+      setMessage(urlError, '');
+      if (urlInput) urlInput.removeAttribute('aria-invalid');
+      return checked.url;
+    }
+
+    /**
+     * Writes the latest-page or latest-date choice into the URL. Unticking
+     * a fixed URL goes back to the page the dialog was opened on.
+     */
+    function onLatestToggle() {
+      if (urlInput) {
+        const checked = sanitizeUrl(urlInput.value);
+        if (!checked.ok) return;
+        urlInput.value =
+            toSitePath(withLatest(checked.url, latestBox.checked));
+      } else {
+        fixedUrl = withLatest(url, latestBox.checked);
+        urlView.textContent = toSitePath(fixedUrl);
+      }
+      scheduleUrlCheck();
+    }
+
+    function scheduleUrlCheck() {
+      clearTimeout(checkTimer);
+      const seq = ++checkSeq;
+      checkedUrl = null;
+      const candidate = applyGate();
+      updateButtons();
+      if (candidate === null) return;
+      checkTimer = setTimeout(async () => {
+        let message = '';
+        try {
+          const holder = await getPageByUrl(user.id, candidate);
+          if (holder && (!isEdit || holder.id !== existing.id)) {
+            message = `Already saved as "${holder.title}".`;
+          }
+        } catch (err) {
+          message = describeError(err);
+        }
+        if (seq !== checkSeq) return;
+        setMessage(urlError, message);
+        if (!message) checkedUrl = candidate;
+        updateButtons();
+      }, URL_CHECK_DELAY_MS);
+    }
+
+    function setBusy(value) {
+      busy = value;
+      updateButtons();
+    }
+
+    async function onSubmit(event) {
+      event.preventDefault();
+      if (busy || checkedUrl === null) return;
+      setBusy(true);
+      const fields = {
+        url: checkedUrl,
+        title: titleInput.value,
+        memo: memoInput.value,
+      };
+      try {
+        if (isEdit) {
+          await updatePage(user.id, existing.id, fields);
+        } else {
+          await savePage(user.id, fields);
+        }
+        close();
+        showToast(isEdit ? 'Updated.' : 'Saved to Favorite Pages.');
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(formError, describeError(err));
+        setBusy(false);
+      }
+    }
+
+    async function onRemove() {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await deletePage(user.id, existing.id);
+        close();
+        showToast('Removed from Favorite Pages.');
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(formError, describeError(err));
+        setBusy(false);
+      }
+    }
+
+    function onKeydown(event) {
+      // Keep Danbooru's shortcuts (and other scripts) out of the dialog.
+      // This also stops Danbooru's own Ctrl+Enter handler from submitting a
+      // second time.
+      event.stopPropagation();
+      if (event.isComposing) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        form.requestSubmit();
+      } else if (event.key === 'Tab') {
+        trapFocus(event, form);
+      }
+    }
+
+    let stopFitting = () => {};
+
+    function close() {
+      clearTimeout(checkTimer);
+      checkSeq++;
+      stopFitting();
+      overlay.remove();
+      activeDialogClose = null;
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    checkedUrl = applyGate();
+    setMessage(urlError, urlError.textContent);
+    setMessage(formError, '');
+    updateButtons();
+    activeDialogClose = close;
+    document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
+    titleInput.focus();
+    titleInput.select();
+  }
+
+  // ==========================================================================
+  // === Quick-jump popover (PLAN D7) =========================================
+  // ==========================================================================
+
+  /** @type {?function()} Tears down the open popover. */
+  let activePopoverClose = null;
+
+  /** For pagehide and bfcache restores: never touches the history. */
+  function closePopover() {
+    if (activePopoverClose) activePopoverClose({leaveHistory: true});
+  }
+
+  /**
+   * The list hotkey: a command-palette list of the account's pages. Typing
+   * filters it, the arrow keys pick one, Enter goes there and Shift+Enter
+   * opens it in a new tab. The popover opens before the pages are read, so
+   * nothing typed in the meantime reaches the page underneath.
+   * @param {{drawer: (boolean|undefined),
+   *     focusFilter: (boolean|undefined)}=} options `drawer` slides the
+   *     same list in from the right (the phone menu, Resolved 39);
+   *     `focusFilter` false keeps a tap from raising the on-screen keyboard.
+   * @return {boolean} Whether it opened.
+   */
+  function openPopover({drawer = false, focusFilter = true} = {}) {
+    const user = getCurrentUser();
+    if (!user || isOverlayOpen()) return false;
+    renderPopover(user, {drawer, focusFilter});
+    return true;
+  }
+
+  /**
+   * @param {{id: number}} user
+   * @param {{drawer: boolean, focusFilter: boolean}} options
+   */
+  function renderPopover(user, {drawer, focusFilter}) {
+    ensureStyles();
+    const returnFocus = document.activeElement;
+    /** @type {?Array<!Object>} In the default order; null until loaded. */
+    let pages = null;
+    /** @type {!Array<!Object>} The pages listed, in option order. */
+    let shown = [];
+    let selected = -1;
+    // Hover selects only when the pointer really moves, so an option that
+    // keyboard scrolling slides under a resting pointer is not picked.
+    let lastPointer = null;
+
+    const filterInput = makeElement('input', {
+      'type': 'search',
+      'className': 'pfp-popover-filter',
+      'placeholder': 'Filter by title, memo or URL',
+      'autocomplete': 'off',
+      'spellcheck': 'false',
+      'role': 'combobox',
+      'aria-label': 'Filter favorite pages',
+      'aria-autocomplete': 'list',
+      'aria-expanded': 'true',
+      'aria-controls': POPOVER_LIST_ID,
+      'oninput': () => render(),
+    });
+    // The order the list is in; starts as the remembered one and follows
+    // what is picked here or on the list page (Resolved 37).
+    let {mode, dir} = defaultOrder();
+    const sortSelect = makeElement('select', {
+      'className': 'pfp-popover-sort',
+      'aria-label': 'Sort by',
+      'onchange': () => {
+        mode = sortSelect.value;
+        dir = SORT_MODES.find(({value}) => value === mode).dir;
+        applyOrder();
+      },
+    }, SORT_MODES.map(({value, label}) =>
+      makeElement('option', {value, text: label})));
+    const dirButton = makeElement('button', {
+      type: 'button',
+      className: 'pfp-popover-dir',
+      onclick: () => {
+        dir = dir === 'asc' ? 'desc' : 'asc';
+        applyOrder();
+      },
+    });
+    const list = makeElement('div', {
+      'id': POPOVER_LIST_ID,
+      'className': 'pfp-popover-list',
+      'role': 'listbox',
+      'aria-label': 'Favorite pages',
+      'onpointermove': onPointerMove,
+      // Options never hold the focus (the keys work from the filter); a
+      // browser that focuses one anyway, e.g. for a context menu, gives it
+      // straight back.
+      'onfocusin': () => filterInput.focus(),
+    });
+    const message = makeElement('p', {className: 'pfp-popover-message'});
+    const manage = makeElement('a', {
+      className: 'pfp-popover-manage', href: LIST_PATH, text: 'Manage →',
+    });
+    const keyHint = (keys, label) => makeElement('span', {}, [
+      ...keys.map((key) => makeElement('kbd', {text: key})),
+      ` ${label}`,
+    ]);
+    const panel = makeElement('div', {
+      'className': drawer ? 'pfp-popover pfp-drawer' : 'pfp-popover',
+      'role': 'dialog',
+      'aria-modal': 'true',
+      'aria-label': 'Favorite Pages',
+      // Holds the focus when the filter is left alone (opened by a tap).
+      'tabindex': -1,
+      'onkeydown': onKeydown,
+      // Keeps the focus in the filter when an option or the panel itself is
+      // pressed; a click on an option still follows its link.
+      // (A select must get its press, or it would never open.)
+      'onmousedown': (event) => {
+        if (event.target !== filterInput && event.target !== sortSelect) {
+          event.preventDefault();
+        }
+      },
+    }, [
+      makeElement('div', {className: 'pfp-popover-bar'},
+          [filterInput, sortSelect, dirButton]),
+      list,
+      message,
+      makeElement('div', {className: 'pfp-popover-footer'}, [
+        makeElement('span', {className: 'pfp-popover-keys'}, [
+          keyHint(['↑', '↓'], 'select'),
+          keyHint(['Enter'], 'open'),
+          keyHint(['Shift', 'Enter'], 'new tab'),
+          keyHint(['Esc'], 'close'),
+        ]),
+        manage,
+      ]),
+    ]);
+    // Same backdrop rule as the save dialog: press and release on it.
+    let pressedBackdrop = false;
+    const overlay = makeElement('div', {
+      id: POPOVER_ID,
+      className: drawer ? 'pfp-overlay pfp-popover-overlay pfp-drawer-overlay' :
+          'pfp-overlay pfp-popover-overlay',
+      onpointerdown: (event) => {
+        pressedBackdrop = event.target === overlay;
+      },
+      onclick: (event) => {
+        if (pressedBackdrop && event.target === overlay) close();
+      },
+    }, [panel]);
+
+    function setMessage(text) {
+      message.textContent = text;
+      message.hidden = !text;
+    }
+
+    async function load() {
+      try {
+        await settingsReady;
+        ({mode, dir} = defaultOrder());
+        showOrder();
+        pages = sortPages(await listPages(user.id), mode, dir);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setMessage(describeError(err));
+        return;
+      }
+      render();
+    }
+
+    function showOrder() {
+      sortSelect.value = mode;
+      dirButton.disabled = mode === 'custom';
+      dirButton.textContent = dir === 'asc' ? '↑' : '↓';
+      dirButton.setAttribute('aria-label',
+          dir === 'asc' ? 'Ascending order' : 'Descending order');
+    }
+
+    /** The order was changed here: re-sort, remember it, keep typing. */
+    function applyOrder() {
+      showOrder();
+      rememberOrder(mode, dir);
+      (focusFilter ? filterInput : panel).focus({preventScroll: true});
+      if (pages === null) return;
+      pages = sortPages(pages, mode, dir);
+      render();
+    }
+
+    function render() {
+      if (pages === null) return;
+      const matches = filterPages(pages, filterInput.value);
+      shown = matches.slice(0, POPOVER_LIMIT);
+      list.replaceChildren(...shown.map(makeOption));
+      // The pin column takes room only while something is pinned.
+      list.classList.toggle('pfp-has-pinned', shown.some(isPinned));
+      manage.textContent = `Manage (${pages.length}) →`;
+      const hidden = matches.length - shown.length;
+      if (!pages.length) {
+        setMessage(emptyListMessage());
+      } else if (!matches.length) {
+        setMessage('No pages match the filter.');
+      } else {
+        setMessage(hidden ? `…and ${hidden} more (refine the filter)` : '');
+      }
+      select(shown.length ? 0 : -1);
+    }
+
+    /**
+     * Options are links, so the browser's own middle-click, Ctrl+click and
+     * link preview work on them; the focus stays in the filter.
+     * @param {!Object} page
+     * @param {number} index
+     * @return {!HTMLElement}
+     */
+    function makeOption(page, index) {
+      return makeElement('a', {
+        'id': `${POPOVER_LIST_ID}-${index}`,
+        'className': 'pfp-option',
+        'role': 'option',
+        'href': openableUrl(page.url),
+        'tabindex': -1,
+        'aria-selected': 'false',
+      }, [
+        makeElement('span', {className: 'pfp-option-head'}, [
+          makeElement('span', {
+            className: 'pfp-option-title', text: page.title,
+          }),
+          makeElement('span', {
+            className: 'pfp-chip', text: classify(page.url),
+          }),
+          // A pin for a pinned page, a blank of the same width otherwise,
+          // so the chips stay in a column (Resolved 52). Last in the line,
+          // so the pins line up whatever the chip's length. Pinning itself
+          // is on the list page.
+          isPinned(page) ?
+              makeElement('span', {
+                'className': 'pfp-option-pin',
+                'role': 'img',
+                'aria-label': 'Pinned',
+                'title': 'Pinned',
+              }, [makeIcon('pin')]) :
+              makeElement('span', {
+                className: 'pfp-option-pin pfp-option-pin-off',
+              }),
+        ]),
+        makeElement('span', {
+          className: 'pfp-option-url', text: toSitePath(page.url),
+        }),
+        page.memo ?
+            makeElement('span', {
+              className: 'pfp-option-memo', text: page.memo,
+            }) :
+            null,
+      ]);
+    }
+
+    /**
+     * @param {number} index -1 for none.
+     * @param {boolean=} scroll Whether to bring the option into view.
+     */
+    function select(index, scroll = true) {
+      const options = list.children;
+      if (options[selected]) {
+        options[selected].setAttribute('aria-selected', 'false');
+      }
+      selected = index;
+      const option = options[index];
+      if (!option) {
+        filterInput.removeAttribute('aria-activedescendant');
+        return;
+      }
+      option.setAttribute('aria-selected', 'true');
+      filterInput.setAttribute('aria-activedescendant', option.id);
+      if (scroll) revealOption(option);
+    }
+
+    /**
+     * Brings an option into view by scrolling the list alone. Not
+     * scrollIntoView: that also scrolls every ancestor, and while the
+     * phone drawer slides in it scrolled the overlay sideways, which made
+     * the panel jump into place and then drift (Resolved 44).
+     * @param {!HTMLElement} option
+     */
+    function revealOption(option) {
+      const box = list.getBoundingClientRect();
+      const rect = option.getBoundingClientRect();
+      if (rect.top < box.top) {
+        list.scrollTop -= box.top - rect.top;
+      } else if (rect.bottom > box.bottom) {
+        list.scrollTop += rect.bottom - box.bottom;
+      }
+    }
+
+    /** @param {number} step 1 or -1; wraps around at either end. */
+    function moveSelection(step) {
+      if (!shown.length) return;
+      select((selected + step + shown.length) % shown.length);
+    }
+
+    /**
+     * @param {number} index
+     * @param {boolean} newTab
+     */
+    function go(index, newTab) {
+      const page = shown[index];
+      if (!page) return;
+      const url = openableUrl(page.url);
+      if (newTab) {
+        close();
+        // Opened from a later task: Chromium reads the modifier keys of the
+        // event being handled, and a held Shift would turn the tab into a
+        // new window, as Shift+click does. The key press still counts as
+        // user activation then, so the popup blocker lets it through.
+        setTimeout(() => window.open(url, '_blank', 'noopener'));
+      } else {
+        // Stays open until the page unloads; pagehide closes it before the
+        // page can enter the bfcache.
+        navigate(url);
+      }
+    }
+
+    // --- Phone drawer and the back button (Resolved 46) ---
+    // Opening the drawer adds a history entry for the same address, so
+    // Android's Back closes the drawer instead of leaving the page. Closing
+    // it any other way takes that entry away again, and a link followed from
+    // the drawer takes its place, so Back never has a dead press.
+
+    /** Whether the drawer's history entry is the current one. */
+    let historyEntry = false;
+
+    function onPopState() {
+      if (!historyEntry) return;
+      historyEntry = false;
+      close();
+    }
+
+    /** @param {string} url */
+    function navigate(url) {
+      if (historyEntry) {
+        historyEntry = false;
+        location.replace(url);
+      } else {
+        location.assign(url);
+      }
+    }
+
+    /**
+     * A plain tap on a link in the drawer (an option, Manage) navigates
+     * like Enter does; new-tab clicks keep the browser's own handling.
+     * @param {!MouseEvent} event
+     */
+    function onDrawerLinkClick(event) {
+      const link = event.target instanceof Element ?
+          event.target.closest('a[href]') : null;
+      if (!link || !historyEntry || event.defaultPrevented ||
+          event.button !== 0 || event.ctrlKey || event.metaKey ||
+          event.shiftKey || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      navigate(link.href);
+    }
+
+    function onPointerMove(event) {
+      const {clientX: x, clientY: y} = event;
+      if (lastPointer && lastPointer.x === x && lastPointer.y === y) return;
+      lastPointer = {x, y};
+      const option = event.target instanceof Element ?
+          event.target.closest('.pfp-option') : null;
+      if (option) select([...list.children].indexOf(option), false);
+    }
+
+    function onKeydown(event) {
+      // Keep Danbooru's shortcuts and our own hotkeys out of the popover.
+      event.stopPropagation();
+      // Enter also confirms an IME composition; that one is not ours.
+      if (event.isComposing) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      } else if (event.key === 'Tab') {
+        trapFocus(event, panel);
+      } else if (event.target !== filterInput) {
+        return;
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        go(selected, event.shiftKey);
+      }
+    }
+
+    let stopFitting = () => {};
+
+    /**
+     * @param {{leaveHistory: (boolean|undefined)}=} options True when the
+     *     page is being left: the drawer's history entry stays as it is.
+     */
+    function close({leaveHistory = false} = {}) {
+      // A swipe closes once its slide ends; Back may have closed it first.
+      if (!overlay.isConnected) return;
+      stopFitting();
+      window.removeEventListener('popstate', onPopState);
+      overlay.remove();
+      activePopoverClose = null;
+      if (historyEntry && !leaveHistory) {
+        historyEntry = false;
+        history.back();
+      }
+      if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+        returnFocus.focus({preventScroll: true});
+      }
+    }
+
+    setMessage('');
+    showOrder();
+    activePopoverClose = close;
+    document.body.appendChild(overlay);
+    stopFitting = fitToVisualViewport(overlay);
+    if (drawer) {
+      // Still inside the tap that opened it: a history entry added without
+      // a user gesture may be skipped by Back.
+      history.pushState(history.state, '');
+      historyEntry = true;
+      window.addEventListener('popstate', onPopState);
+      panel.addEventListener('click', onDrawerLinkClick);
+      addSwipeToClose(panel, () => close());
+    }
+    (focusFilter ? filterInput : panel).focus({preventScroll: true});
+    load();
+  }
+
+  /**
+   * Swiping the phone drawer back to the right closes it (Resolved 46).
+   * The drawer follows the finger; let go past a third of its width, or
+   * with a flick, and it slides out, otherwise it slides back. Up and down
+   * stay the list's scroll (touch-action: pan-y), and a swipe starting in
+   * the filter or the order picker is left to them.
+   * @param {!HTMLElement} panel
+   * @param {function()} onClose
+   */
+  function addSwipeToClose(panel, onClose) {
+    /** @type {?{id: number, x: number, y: number, t: number, dx: number,
+     *     active: boolean}} */
+    let swipe = null;
+    let leaving = false;
+    let swallowClick = false;
+    const settle = (transform, then) => {
+      panel.classList.add('pfp-drawer-settling');
+      panel.style.transform = transform;
+      setTimeout(() => {
+        panel.classList.remove('pfp-drawer-settling');
+        if (then) then();
+      }, prefersReducedMotion() ? 0 : DRAWER_SLIDE_MS);
+    };
+    panel.addEventListener('pointerdown', (event) => {
+      swallowClick = false;
+      if (leaving || event.pointerType === 'mouse' || !event.isPrimary ||
+          !(event.target instanceof Element) ||
+          event.target.closest('input, select, textarea')) {
+        return;
+      }
+      swipe = {id: event.pointerId, x: event.clientX, y: event.clientY,
+        t: event.timeStamp, dx: 0, active: false};
+    });
+    panel.addEventListener('pointermove', (event) => {
+      if (!swipe || event.pointerId !== swipe.id) return;
+      const dx = event.clientX - swipe.x;
+      const dy = event.clientY - swipe.y;
+      if (!swipe.active) {
+        if (Math.abs(dx) < SWIPE_START_PX && Math.abs(dy) < SWIPE_START_PX) {
+          return;
+        }
+        // Up, down or to the left: not a close.
+        if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) {
+          swipe = null;
+          return;
+        }
+        swipe.active = true;
+        try {
+          panel.setPointerCapture(event.pointerId);
+        } catch (err) {
+          // The pointer is already gone; the moves still arrive here.
+        }
+        // The opening slide must not fight the finger.
+        panel.style.animation = 'none';
+      }
+      swipe.dx = Math.max(0, dx);
+      panel.style.transform = `translateX(${swipe.dx}px)`;
+    });
+    const end = (event) => {
+      if (!swipe || event.pointerId !== swipe.id) return;
+      const {active, dx, t} = swipe;
+      swipe = null;
+      if (!active) return;
+      swallowClick = true;
+      const flick = dx / Math.max(1, event.timeStamp - t) >= SWIPE_FLICK_SPEED;
+      if (event.type === 'pointerup' &&
+          (dx >= panel.offsetWidth * SWIPE_CLOSE_SHARE || flick)) {
+        leaving = true;
+        settle('translateX(100%)', onClose);
+      } else {
+        settle('');
+      }
+    };
+    panel.addEventListener('pointerup', end);
+    panel.addEventListener('pointercancel', end);
+    // A swipe that ends over a link is not a tap on it.
+    panel.addEventListener('click', (event) => {
+      if (!swallowClick) return;
+      swallowClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }, true);
+  }
+
+  // ==========================================================================
+  // === Hotkeys (PLAN D7) ====================================================
+  // ==========================================================================
+
+  /** Settings in effect; replaced once the stored ones have loaded. */
+  let settings = DEFAULT_SETTINGS;
+  /** Settles once `settings` holds the stored values (or the defaults). */
+  let settingsReady = Promise.resolve();
+
+  /**
+   * Which setting holds each hotkey, and what it does. `run` returns whether
+   * it reacted; a key that did nothing (e.g. logged out) is left alone.
+   */
+  const HOTKEY_ACTIONS = Object.freeze([
+    {settingKey: 'hotkeySave', run: saveCurrentPage},
+    {settingKey: 'hotkeyList', run: openPopover},
+  ]);
+
+  /**
+   * Matches by physical key (`code`) so the Korean IME, which reports ㅠ for
+   * Shift+B, still triggers it (Resolved 16).
+   * @param {!KeyboardEvent} event
+   * @param {?{code: string, shiftKey: boolean}} hotkey
+   * @return {boolean}
+   */
+  function matchesHotkey(event, hotkey) {
+    return Boolean(hotkey) && event.code === hotkey.code &&
+        event.shiftKey === hotkey.shiftKey && !event.ctrlKey &&
+        !event.altKey && !event.metaKey;
+  }
+
+  /**
+   * @param {?EventTarget} target
+   * @return {boolean} Whether keys typed there are text input.
+   */
+  function isTypingTarget(target) {
+    return target instanceof Element &&
+        (target.isContentEditable ||
+         target.closest('input, textarea, select') !== null);
+  }
+
+  /**
+   * @param {!KeyboardEvent} event
+   * @return {boolean} Whether a hotkey may act on this key press: not while
+   *     typing, composing, repeating or with one of our overlays open.
+   */
+  function isHotkeyEvent(event) {
+    return !event.repeat && !event.isComposing && !event.defaultPrevented &&
+        !isTypingTarget(event.target) && !isOverlayOpen();
+  }
+
+  /** @param {!KeyboardEvent} event */
+  function onGlobalKeydown(event) {
+    if (!isHotkeyEvent(event)) return;
+    const action = HOTKEY_ACTIONS.find(
+        ({settingKey}) => matchesHotkey(event, settings[settingKey]));
+    if (action && action.run()) event.preventDefault();
+  }
+
+  /**
+   * The save hotkey: opens the dialog for the page being viewed.
+   * @return {boolean} False for logged-out visitors, who get no reaction at
+   *     all (PLAN D2-2).
+   */
+  function saveCurrentPage() {
+    const checked = checkCurrentPage();
+    if (checked.ok) {
+      openSaveDialog({url: checked.url, title: suggestTitle(checked.url)});
+    } else if (checked.reason === 'loggedOut') {
+      return false;
+    } else {
+      showToast(REJECT_MESSAGES[checked.reason], {error: true});
+    }
+    return true;
+  }
+
+  /**
+   * Saves the page being viewed without the dialog: title suggested, no
+   * memo, a forum topic or report following its latest state like the
+   * dialog's default. A page that is already saved opens the dialog
+   * instead, so a slip never removes or overwrites anything (Resolved 47).
+   * @return {!Promise<boolean>} Whether it saved.
+   */
+  async function quickSaveCurrentPage() {
+    const checked = checkCurrentPage();
+    if (!checked.ok) {
+      saveCurrentPage();
+      return false;
+    }
+    const user = getCurrentUser();
+    if (!user || isOverlayOpen()) return false;
+    try {
+      if (await findSavedPage(user.id, checked.url)) {
+        saveCurrentPage();
+        return false;
+      }
+      await savePage(user.id, {
+        url: defaultSaveUrl(checked.url), title: suggestTitle(checked.url),
+      });
+      showToast('Saved to Favorite Pages.');
+      notifyPagesChanged();
+      return true;
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+      return false;
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      settings = await getSettings();
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'settings unavailable, using defaults', err);
+    }
+  }
+
+  /**
+   * @param {{code: string, shiftKey: boolean}} hotkey
+   * @return {string} E.g. "Shift+B".
+   */
+  function formatHotkey(hotkey) {
+    const key = hotkey.code.replace(/^(?:Key|Digit)/, '');
+    return hotkey.shiftKey ? `Shift+${key}` : key;
+  }
+
+  // ==========================================================================
+  // === Icons ================================================================
+  // ==========================================================================
+  // Inline SVG so no glyph depends on the viewer's fonts; strokes and fills
+  // use currentColor to follow the theme.
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const ICON_SHAPES = Object.freeze({
+    // Three bars: the list's drag handle, at the row's right end.
+    lines: [['path', {d: 'M5 8h14M5 12h14M5 16h14'}]],
+    // The phone list's round select mark, ticked or partly ticked: drawn
+    // with their ink centred on 12,12 so they sit in the middle of the
+    // circle (Resolved 50).
+    check: [['path', {d: 'M6 12.5l4 4 8-9'}]],
+    dash: [['path', {d: 'M7 12h10'}]],
+    // A pushpin: pinned to the top (Resolved 52). CSS fills its head when
+    // pinned; the needle is a line either way.
+    pin: [
+      ['path', {d: 'M8.5 3h7l-1 2.5V10l3 3v2h-11v-2l3-3V5.5z'}],
+      ['path', {d: 'M12 15v6'}],
+    ],
+    edit: [['path', {d: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4'}]],
+    remove: [['path', {d: 'M6 6l12 12M18 6L6 18'}]],
+    prev: [['path', {d: 'M15 5l-7 7 7 7'}]],
+    // A note: the phone list's memo button.
+    memo: [['path', {d: 'M5 4h14v16H5z M8.5 9h7M8.5 13h7M8.5 17h4'}]],
+    // Bulleted lines: the navbar's panel button.
+    list: [
+      ['path', {d: 'M9 6h11M9 12h11M9 18h11'}],
+      ['circle', {cx: 4.5, cy: 6, r: 1.3}],
+      ['circle', {cx: 4.5, cy: 12, r: 1.3}],
+      ['circle', {cx: 4.5, cy: 18, r: 1.3}],
+    ],
+    next: [['path', {d: 'M9 5l7 7-7 7'}]],
+    more: [
+      ['circle', {cx: 5, cy: 12, r: 1.8}], ['circle', {cx: 12, cy: 12, r: 1.8}],
+      ['circle', {cx: 19, cy: 12, r: 1.8}],
+    ],
+    // A bookmark with a plus; once saved, CSS fills it and hides the plus.
+    bookmark: [
+      ['path', {'d': 'M6 3.5h12V21l-6-4-6 4z', 'class': 'pfp-bookmark-body'}],
+      ['path', {'d': 'M12 7v6M9 10h6', 'class': 'pfp-bookmark-plus'}],
+    ],
+  });
+
+  /**
+   * @param {string} name A key of ICON_SHAPES.
+   * @return {!SVGElement}
+   */
+  function makeIcon(name) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', `pfp-icon pfp-icon-${name}`);
+    svg.setAttribute('aria-hidden', 'true');
+    for (const [tag, attrs] of ICON_SHAPES[name]) {
+      const shape = document.createElementNS(SVG_NS, tag);
+      for (const [key, value] of Object.entries(attrs)) {
+        shape.setAttribute(key, String(value));
+      }
+      svg.appendChild(shape);
+    }
+    return svg;
+  }
+
+  /**
+   * A select checkbox with the round mark the phone list draws in its place
+   * (Resolved 50); desktops show the checkbox itself.
+   * @param {!HTMLInputElement} input
+   * @return {!HTMLElement}
+   */
+  function makeSelectBox(input) {
+    return makeElement('span', {className: 'pfp-select-box'}, [
+      input,
+      makeElement('span', {'className': 'pfp-select-mark',
+        'aria-hidden': 'true'}, [makeIcon('check'), makeIcon('dash')]),
+    ]);
+  }
+
+  // ==========================================================================
+  // === List page (PLAN D5, D8) ==============================================
+  // ==========================================================================
+
+  /** Sort modes; `dir` is the natural direction a mode starts in. */
+  const SORT_MODES = Object.freeze([
+    {value: 'custom', label: 'Custom order', dir: 'asc'},
+    {value: 'created', label: 'Date added', dir: 'desc'},
+    {value: 'title', label: 'Title', dir: 'asc'},
+    {value: 'type', label: 'Type', dir: 'asc'},
+  ]);
+  /** Rows per list page (Resolved 30). */
+  const PAGE_SIZE = 20;
+  /** Page numbers shown either side of the current one, as on Danbooru. */
+  const PAGER_WINDOW = 4;
+  /** Focuses the list filter, like Danbooru's own search box key. */
+  const FILTER_HOTKEY = Object.freeze({code: 'KeyQ', shiftKey: false});
+  // Export and Import's keys, after their first letters (Resolved 56). New
+  // has none: n is Danbooru's "g then n" (Notes, shortcuts.js).
+  const EXPORT_HOTKEY = Object.freeze({code: 'KeyE', shiftKey: false});
+  const IMPORT_HOTKEY = Object.freeze({code: 'KeyI', shiftKey: false});
+  /** Danbooru's keyboard shortcuts page, and our box on it (or its copy). */
+  const SHORTCUTS_PATH = '/static/keyboard_shortcuts';
+  const SHORTCUTS_SECTION_CLASS = 'pfp-shortcuts';
+  /** Distance from the viewport edge that scrolls the page while dragging. */
+  const DRAG_EDGE_PX = 48;
+  const DRAG_SCROLL_PX = 12;
+  /** A little longer than the 150ms slide transition in GLOBAL_CSS. */
+  const SETTLE_MS = 170;
+  /** Space between a row's ⋯ button and its menu. */
+  const MENU_GAP_PX = 4;
+  const collator =
+      new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+
+  /**
+   * @param {!Object} page
+   * @return {boolean} Whether it is pinned to the top (Resolved 52).
+   */
+  function isPinned(page) {
+    return page.pinned === true;
+  }
+
+  /**
+   * Orders pages for display: pinned pages first in every order, then the
+   * rest, each part sorted on its own (Resolved 52). The custom order has a
+   * single direction: a reversed view of an order you arrange by hand only
+   * confuses (PLAN D8).
+   * @param {!Array<!Object>} pages
+   * @param {string} mode A SORT_MODES value.
+   * @param {string} dir 'asc' or 'desc'.
+   * @return {!Array<!Object>} A new array.
+   */
+  function sortPages(pages, mode, dir) {
+    const sign = dir === 'desc' ? -1 : 1;
+    const comparators = {
+      custom: (a, b) => a.sortOrder - b.sortOrder || b.createdAt - a.createdAt,
+      created: (a, b) => sign * (a.createdAt - b.createdAt),
+      title: (a, b) => sign * collator.compare(a.title, b.title),
+      type: (a, b) =>
+        sign * collator.compare(classify(a.url), classify(b.url)) ||
+          collator.compare(a.title, b.title),
+    };
+    const compare = comparators[mode] || comparators.custom;
+    return [...pages].sort((a, b) =>
+      Number(isPinned(b)) - Number(isPinned(a)) || compare(a, b));
+  }
+
+  /**
+   * The order the list page and the popover start in (PLAN D8).
+   * @return {{mode: string, dir: string}}
+   */
+  function defaultOrder() {
+    const known = SORT_MODES.some(({value}) => value === settings.defaultSort);
+    const mode = known ? settings.defaultSort : SORT_MODES[0].value;
+    return {mode, dir: mode === 'custom' ? 'asc' : settings.defaultSortDir};
+  }
+
+  /**
+   * Remembers the order last picked, on the list page or in the popover, as
+   * the one both start in next time (Resolved 37). A failed write only means
+   * the choice lasts until the page is left.
+   * @param {string} mode A SORT_MODES value.
+   * @param {string} dir 'asc' or 'desc'.
+   */
+  function rememberOrder(mode, dir) {
+    settings = {...settings, defaultSort: mode, defaultSortDir: dir};
+    saveSettings({defaultSort: mode, defaultSortDir: dir}).catch(
+        (err) => console.warn(LOG_PREFIX, 'could not save the order', err));
+  }
+
+  /** @return {string} What an account with no saved pages is told. */
+  function emptyListMessage() {
+    return 'No favorite pages yet. Press ' +
+        `${formatHotkey(settings.hotkeySave)} on any page to save it.`;
+  }
+
+  /**
+   * @param {!Array<!Object>} pages
+   * @param {string} query Matched against title, memo and internal link.
+   * @return {!Array<!Object>}
+   */
+  function filterPages(pages, query) {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return pages;
+    return pages.filter((page) => [page.title, page.memo, toSitePath(page.url)]
+        .some((text) => text.toLowerCase().includes(needle)));
+  }
+
+  /**
+   * sortOrder for a page dropped between two neighbours (either may be null
+   * at an end), or null when the gap has run out and the list must be
+   * renumbered first (PLAN D8-4).
+   * @param {?Object} before
+   * @param {?Object} after
+   * @return {?number}
+   */
+  function sortOrderBetween(before, after) {
+    if (!before && !after) return 0;
+    if (!before) return after.sortOrder - SORT_STEP;
+    if (!after) return before.sortOrder + SORT_STEP;
+    const gap = after.sortOrder - before.sortOrder;
+    return gap >= 1 ? before.sortOrder + gap / 2 : null;
+  }
+
+  /**
+   * Moves the page at `from` to position `to` within its part of the
+   * custom order: the pinned pages, or the rest. Pages never cross from
+   * one part to the other by a move (Resolved 52).
+   * @param {number} userId
+   * @param {!Array<!Object>} group The moved page's part, in custom order.
+   * @param {number} from
+   * @param {number} to Index in the part after the move.
+   * @return {!Promise<void>}
+   */
+  async function movePage(userId, group, from, to) {
+    if (from === to) return;
+    const moved = group[from];
+    const neighbours = (list) => {
+      const rest = list.filter((page) => page.id !== moved.id &&
+          isPinned(page) === isPinned(moved));
+      return [rest[to - 1] || null, rest[to] || null];
+    };
+    let sortOrder = sortOrderBetween(...neighbours(group));
+    if (sortOrder === null) {
+      sortOrder = sortOrderBetween(...neighbours(await renumberAll(userId)));
+    }
+    await reorderPage(userId, moved.id, sortOrder);
+  }
+
+  /** @return {number} The list page number in the address (?page=), or 1. */
+  function pageNumberFromUrl() {
+    const value = Number(new URL(location.href).searchParams.get('page'));
+    return Number.isSafeInteger(value) && value > 0 ? value : 1;
+  }
+
+  /**
+   * @param {number} pageNumber
+   * @return {string} The list address for that page; page 1 has no param.
+   */
+  function listPageHref(pageNumber) {
+    const url = new URL(location.href);
+    if (pageNumber > 1) {
+      url.searchParams.set('page', String(pageNumber));
+    } else {
+      url.searchParams.delete('page');
+    }
+    return url.pathname + url.search;
+  }
+
+  /**
+   * @param {number} ms
+   * @return {!HTMLElement} A <time> showing the date, full time on hover.
+   */
+  function makeDate(ms) {
+    const date = new Date(ms);
+    return makeElement('time', {
+      datetime: date.toISOString(),
+      title: date.toLocaleString(),
+      text: date.toLocaleDateString(),
+    });
+  }
+
+  /**
+   * Takes over Danbooru's 404 page at LIST_PATH (PLAN D5). Steps aside if
+   * the page is no longer a 404, i.e. Danbooru now owns the route.
+   * @param {?{id: number, name: string}} user
+   * @return {!Promise<void>}
+   */
+  async function initListPage(user) {
+    const root = document.getElementById('a-not-found');
+    if (!root) {
+      console.warn(LOG_PREFIX, `${LIST_PATH} is not a 404 page any more;`,
+          'the list page is disabled');
+      return;
+    }
+    document.title = 'Favorite Pages | Danbooru';
+    try {
+      if (!user) {
+        root.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message', text: REJECT_MESSAGES.loggedOut,
+        }));
+        return;
+      }
+      // Before the wait, so the header does not shift once the list shows.
+      initListSubnav(user);
+      initImportDrop(user);
+      await settingsReady;
+      const view = createListView(user);
+      root.replaceChildren(view.element);
+      stateRefreshers.add(view.reload);
+      overlayClosers.add(() => view.closeMenu());
+      // q, and the subnav's e and i (Resolved 56).
+      const listKeys = [
+        [FILTER_HOTKEY, () => view.focusFilter()],
+        [EXPORT_HOTKEY, () => openExportDialog(user)],
+        [IMPORT_HOTKEY, () => openImportDialog(user)],
+      ];
+      document.addEventListener('keydown', (event) => {
+        if (!isHotkeyEvent(event)) return;
+        const entry = listKeys.find(([hotkey]) => matchesHotkey(event, hotkey));
+        if (!entry) return;
+        // Also keeps the key from being typed into what opens.
+        event.preventDefault();
+        entry[1]();
+      });
+      // Back / Forward between list pages (see goToPage).
+      window.addEventListener('popstate', view.showPageFromUrl);
+      purgeTombstones(user.id).catch(
+          (err) => console.warn(LOG_PREFIX, 'tombstone purge failed', err));
+      checkWikiAliases(user);
+      await view.reload();
+    } catch (err) {
+      // A list that could not be drawn says so, instead of a blank page
+      // or a half-drawn one that reads as empty (Resolved 60).
+      console.error(LOG_PREFIX, err);
+      root.replaceChildren(makeElement('p', {
+        className: 'pfp-page-message',
+        text: 'Favorite Pages could not be shown. The browser console ' +
+            'has the details.',
+      }));
+    } finally {
+      // Lifts LIST_CLOAK_CSS once the list (or a message) is in place.
+      root.classList.add('pfp-ready');
+    }
+  }
+
+  /**
+   * Page actions for the list page, in a subnav like the ones on Danbooru's
+   * index pages ("New", "Help", ...), apart from the view settings in the
+   * page (Resolved 32). Danbooru's 404 page has no subnav, so one is made
+   * with Danbooru's id and classes under the main menu. On phones it sits
+   * in the menu, as on every Danbooru page.
+   * @param {{id: number, name: string}} user
+   */
+  function initListSubnav(user) {
+    if (document.getElementById(SUBNAV_NEW_ID)) return;
+    const nav = document.getElementById('nav');
+    if (!nav) {
+      console.warn(LOG_PREFIX, 'navbar #nav not found; no list page actions');
+      return;
+    }
+    let subnav = document.getElementById('subnav-menu');
+    if (!subnav) {
+      subnav = makeElement('div', {
+        id: 'subnav-menu', className: 'flex flex-wrap items-center px-5 sm:p-2',
+      });
+      nav.appendChild(subnav);
+    }
+    subnav.append(makeElement('button', {
+      type: 'button',
+      id: SUBNAV_NEW_ID,
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Add a page by its URL',
+      text: 'New',
+      onclick: () => openSaveDialog({editable: true}),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Save your list to a file or the clipboard. Shortcut is e',
+      text: 'Export',
+      onclick: () => openExportDialog(user),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Add or merge pages from an export (file or pasted text). ' +
+          'Shortcut is i',
+      text: 'Import',
+      onclick: () => openImportDialog(user),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'How Favorite Pages works',
+      text: 'Help',
+      onclick: () => openHelpDialog(),
+    }));
+  }
+
+  /**
+   * Builds the list page: view settings, selection bar, table, paginator
+   * and the drag-to-reorder logic.
+   * @param {{id: number, name: string}} user
+   * @return {{
+   *   element: !HTMLElement,
+   *   reload: function(): !Promise<void>,
+   *   focusFilter: function(),
+   *   showPageFromUrl: function(),
+   *   closeMenu: function(),
+   * }}
+   */
+  function createListView(user) {
+    let pages = [];
+    /** Whether `pages` holds the stored list yet. */
+    let loaded = false;
+    let {mode, dir} = defaultOrder();
+    let query = '';
+    /** The list page shown, 1-based; kept in the address as ?page=. */
+    let pageNumber = pageNumberFromUrl();
+    /** Row drag in progress; null when none. */
+    let move = null;
+    /** Set while a move is being written, so moves never overlap. */
+    let committing = false;
+    /**
+     * Ids of the rows ticked for removal: rows on view, or every match
+     * once "Select all N" is pressed, which the line above the table then
+     * says, so nothing unseen is removed unannounced (Resolved 32, 54).
+     * @type {!Set<string>}
+     */
+    const selected = new Set();
+    /** The count line's text while nothing is selected. */
+    let countText = '';
+    // Selecting across list pages, as Gmail does (Resolved 54): ticking
+    // the select-all box on one page of a longer list offers "Select all
+    // N" (`offerAll`); pressing it fills `selected` with every row the
+    // filter matches, on any page (`allMatching`). Unticking any row goes
+    // back to this page's ticks, so no selection is ever out of sight
+    // without the line above the table saying so.
+    let allMatching = false;
+    let offerAll = false;
+    /** @type {!Array<string>} Ids of every row the filter matches. */
+    let matchIds = [];
+
+    const sortSelect = makeElement('select', {
+      'id': 'pfp-sort',
+      'className': 'pfp-sort',
+      'onchange': () => {
+        mode = sortSelect.value;
+        dir = SORT_MODES.find(({value}) => value === mode).dir;
+        rememberOrder(mode, dir);
+        resetPage();
+      },
+    }, SORT_MODES.map(({value, label}) =>
+      makeElement('option', {value, text: label})));
+    sortSelect.value = mode;
+    const dirButton = makeElement('button', {
+      type: 'button',
+      className: 'pfp-sort-dir',
+      onclick: () => {
+        dir = dir === 'asc' ? 'desc' : 'asc';
+        rememberOrder(mode, dir);
+        resetPage();
+      },
+    });
+    const filterInput = makeElement('input', {
+      'type': 'search',
+      'id': 'pfp-filter',
+      'className': 'pfp-filter',
+      'placeholder': 'Title, memo or URL',
+      // Danbooru's wording for its own shortcut tooltips.
+      'title': 'Shortcut is q',
+      'oninput': () => {
+        query = filterInput.value;
+        resetPage();
+      },
+    });
+    const selectAll = makeElement('input', {
+      type: 'checkbox',
+      className: 'pfp-select-all',
+      onchange: () => {
+        allMatching = false;
+        if (selectAll.checked) {
+          for (const row of tableRows()) selected.add(row.dataset.id);
+          offerAll = matchIds.length > tableRows().length;
+        } else {
+          selected.clear();
+          offerAll = false;
+        }
+        updateSelection();
+      },
+    });
+    // Desktop: "6 items", then "2 items selected". Phone (Resolved 50):
+    // "Select all" by the box and the count at the line's end, "2 / 6"
+    // while rows are ticked.
+    const countWide = makeElement('span', {className: 'pfp-count-wide'});
+    const countNarrow = makeElement('span', {className: 'pfp-count-narrow'});
+    const countLabel = makeElement('span', {className: 'pfp-summary-text'},
+        [countWide, countNarrow]);
+    const bulkActions = makeElement('span', {className: 'pfp-bulk-actions'}, [
+      makeElement('button', {
+        type: 'button',
+        className: 'pfp-remove-selected button-outline-danger',
+        text: 'Remove selected',
+        onclick: removeSelected,
+      }),
+      makeElement('button', {
+        type: 'button',
+        className: 'pfp-clear-selection',
+        text: 'Clear',
+        onclick: () => {
+          selected.clear();
+          allMatching = false;
+          offerAll = false;
+          updateSelection();
+        },
+      }),
+    ]);
+    // Under the count line: "All 20 on this page are selected. Select all
+    // 37 matching items", then "All 37 matching items are selected."
+    const selectEveryMatch = makeElement('button', {
+      type: 'button',
+      className: 'pfp-link-button',
+      onclick: () => {
+        selected.clear();
+        for (const id of matchIds) selected.add(id);
+        allMatching = true;
+        offerAll = false;
+        updateSelection();
+      },
+    });
+    const bannerText = makeElement('span');
+    const selectBanner = makeElement('p', {
+      className: 'pfp-select-banner', hidden: true,
+    }, [bannerText, ' ', selectEveryMatch]);
+    // The count doubles as the select-all label; with rows ticked it turns
+    // into "N items selected" and the bulk actions show.
+    const summary = makeElement('div', {className: 'pfp-summary'}, [
+      makeElement('label', {className: 'pfp-select-all-label'}, [
+        makeSelectBox(selectAll),
+        makeElement('span', {
+          className: 'pfp-select-all-text', text: 'Select all',
+        }),
+        countLabel,
+      ]),
+      bulkActions,
+    ]);
+    const content = makeElement('div', {className: 'pfp-list'});
+    const controlLabel = (control, text) => makeElement('label', {
+      className: 'pfp-control-label', for: control.id, text,
+    });
+
+    const element = makeElement('div', {className: 'pfp-page'}, [
+      makeElement('h1', {text: 'Favorite Pages'}),
+      makeElement('p', {
+        className: 'pfp-page-owner', text: `Saved by ${user.name}`,
+      }),
+      // View settings, laid out like Danbooru's search forms: bold labels
+      // in a column, one control per line. Page actions ("New") are in
+      // the subnav instead (Resolved 32).
+      makeElement('div', {className: 'pfp-view-controls'}, [
+        controlLabel(filterInput, 'Filter'),
+        filterInput,
+        controlLabel(sortSelect, 'Order'),
+        makeElement('div', {className: 'pfp-sort-row'}, [
+          sortSelect,
+          dirButton,
+        ]),
+      ]),
+      summary,
+      selectBanner,
+      content,
+    ]);
+
+    /** Back to the first page after the sort or filter changed. */
+    function resetPage() {
+      pageNumber = 1;
+      history.replaceState(history.state, '', listPageHref(1));
+      render();
+    }
+
+    /**
+     * A paginator click: one history step per page, like Danbooru's own
+     * page links, and back to the top as a page load would be.
+     * @param {number} n
+     */
+    function goToPage(n) {
+      pageNumber = n;
+      history.pushState(null, '', listPageHref(n));
+      render();
+      window.scrollTo(0, 0);
+    }
+
+    /**
+     * The paginator's ellipsis: asks for a page number, as Danbooru does,
+     * and turns to it; a number past either end goes to that end, and
+     * anything that is not a number does nothing.
+     * @param {number} last
+     */
+    function jumpToPage(last) {
+      const answer = window.prompt(`Jump to page (1–${last}):`);
+      if (answer === null) return;
+      const n = Number.parseInt(answer.trim(), 10);
+      if (!Number.isFinite(n)) return;
+      const target = Math.min(Math.max(n, 1), last);
+      if (target !== pageNumber) goToPage(target);
+    }
+
+    function showPageFromUrl() {
+      const next = pageNumberFromUrl();
+      // Back from the phone drawer's own history entry (Resolved 46) keeps
+      // the address, and the list as it is.
+      if (next === pageNumber) return;
+      pageNumber = next;
+      if (!move) render();
+    }
+
+    /** The q key: straight to typing a filter, caret at the end. */
+    function focusFilter() {
+      filterInput.focus();
+      const end = filterInput.value.length;
+      filterInput.setSelectionRange(end, end);
+    }
+
+    async function reload() {
+      try {
+        pages = await listPages(user.id);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        content.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message', text: describeError(err),
+        }));
+        return;
+      }
+      loaded = true;
+      if (!move) render();
+    }
+
+    function render() {
+      // The rows it belongs to are about to be replaced.
+      closeRowMenu();
+      const draggable = canMoveRows();
+      const matches = filterPages(sortPages(pages, mode, dir), query);
+      const lastPage = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
+      // Past the end (an old address, or rows removed meanwhile): show the
+      // last page. Only once loaded, or the empty first render would lose
+      // the page asked for.
+      if (loaded && pageNumber > lastPage) {
+        pageNumber = lastPage;
+        history.replaceState(history.state, '', listPageHref(pageNumber));
+      }
+      const offset = (pageNumber - 1) * PAGE_SIZE;
+      const shown = matches.slice(offset, offset + PAGE_SIZE);
+      dirButton.disabled = mode === 'custom';
+      dirButton.textContent = dir === 'asc' ? '↑' : '↓';
+      dirButton.setAttribute('aria-label',
+          dir === 'asc' ? 'Ascending order' : 'Descending order');
+      // "items", not "pages": the paginator below has pages of its own.
+      const total = `${pages.length} ${pages.length === 1 ? 'item' : 'items'}`;
+      countText = matches.length === pages.length ?
+          total : `${matches.length} of ${total}`;
+      // Every match stays selected across turned pages and orders, until
+      // the matches themselves change (a filter, a removal). Otherwise a
+      // turned page, new filter or removal takes rows out of view, and
+      // their ticks go with them.
+      matchIds = matches.map((page) => page.id);
+      if (allMatching && (selected.size !== matchIds.length ||
+          !matchIds.every((id) => selected.has(id)))) {
+        allMatching = false;
+      }
+      if (!allMatching) {
+        offerAll = false;
+        const shownIds = new Set(shown.map((page) => page.id));
+        for (const id of selected) {
+          if (!shownIds.has(id)) selected.delete(id);
+        }
+      }
+
+      if (!shown.length) {
+        content.replaceChildren(makeElement('p', {
+          className: 'pfp-page-message',
+          text: pages.length ? 'No pages match the filter.' :
+              emptyListMessage(),
+        }));
+        updateSelection();
+        return;
+      }
+      const tbody = makeElement('tbody', {},
+          shown.map((page) => makeRow(page, draggable)));
+      const tableClass = draggable ? 'pfp-table pfp-table-draggable' :
+          'pfp-table';
+      content.replaceChildren(makeElement('table', {
+        className: `striped ${tableClass}`,
+      }, [
+        makeElement('thead', {}, [makeElement('tr', {}, [
+          makeElement('th', {'className': 'pfp-col-select',
+            'aria-label': 'Select'}),
+          makeElement('th', {className: 'pfp-col-title', text: 'Title'}),
+          makeElement('th', {'className': 'pfp-col-pin',
+            'aria-label': 'Pinned'}),
+          makeElement('th', {className: 'pfp-col-type', text: 'Type'}),
+          makeElement('th', {className: 'pfp-col-memo', text: 'Memo'}),
+          makeElement('th', {className: 'pfp-col-added', text: 'Added'}),
+          makeElement('th', {'className': 'pfp-col-actions',
+            'aria-label': 'Actions'}),
+          // The handle ends the row, as on the phone (Resolved 50).
+          draggable ?
+              makeElement('th', {'className': 'pfp-col-handle',
+                'aria-label': 'Reorder'}) :
+              null,
+        ])]),
+        tbody,
+      ]), makePager(pageNumber, lastPage));
+      updateSelection();
+    }
+
+    /**
+     * Syncs the ticks, the select-all box and the count line with
+     * `selected`.
+     */
+    function updateSelection() {
+      const rows = tableRows();
+      let onPage = 0;
+      for (const row of rows) {
+        const ticked = selected.has(row.dataset.id);
+        if (ticked) onPage++;
+        row.classList.toggle('pfp-row-selected', ticked);
+        row.querySelector('.pfp-select').checked = ticked;
+      }
+      const count = selected.size;
+      selectAll.disabled = rows.length === 0;
+      selectAll.checked = onPage > 0 && onPage === rows.length;
+      selectAll.indeterminate = onPage > 0 && onPage < rows.length;
+      countWide.textContent = !count ? countText :
+          `${allMatching ? 'All ' : ''}${countOf(count, 'item')} selected`;
+      countNarrow.textContent = !count ? countText :
+          `${count} / ${allMatching ? matchIds.length : rows.length}`;
+      bulkActions.hidden = count === 0;
+      summary.classList.toggle('pfp-has-selection', count > 0);
+      // The line that offers, then confirms, every match (Resolved 54).
+      const what = query.trim() ? 'matching item' : 'item';
+      const offering = !allMatching && offerAll && rows.length > 0 &&
+          onPage === rows.length && matchIds.length > rows.length;
+      selectBanner.hidden = !allMatching && !offering;
+      selectEveryMatch.hidden = !offering;
+      if (allMatching) {
+        bannerText.textContent =
+            `All ${countOf(count, what)} are selected, on every page.`;
+      } else if (offering) {
+        bannerText.textContent = `All ${rows.length} on this page are ` +
+            'selected.';
+        selectEveryMatch.textContent =
+            `Select all ${countOf(matchIds.length, what)}`;
+      }
+    }
+
+    async function removeSelected() {
+      const ids = [...selected];
+      if (!ids.length) return;
+      // Say how many are out of sight (Resolved 54).
+      const visible = new Set(tableRows().map((row) => row.dataset.id));
+      const elsewhere = ids.filter((id) => !visible.has(id)).length;
+      const more = !elsewhere ? '' :
+          ` ${elsewhere} of them ${elsewhere === 1 ? 'is' : 'are'} on ` +
+              'other list pages.';
+      if (!window.confirm(`Remove ${countOf(ids.length, 'item')} from ` +
+          `Favorite Pages?${more}`)) {
+        return;
+      }
+      try {
+        const count = await deletePages(user.id, ids);
+        showToast(`Removed ${countOf(count, 'item')}.`);
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      selected.clear();
+      allMatching = false;
+      offerAll = false;
+      notifyPagesChanged();
+    }
+
+    /**
+     * Danbooru's numbered paginator with its own classes, so it looks the
+     * same in every theme: arrows, the first and last page, PAGER_WINDOW
+     * pages either side of the current one and an ellipsis for each gap.
+     * Phones show only the first, current and last page (desktop-only /
+     * mobile-only), as on Danbooru. An ellipsis asks for a page to jump to,
+     * as Danbooru's does (paginator_component.js), but turns the page in
+     * place instead of loading it again.
+     * @param {number} current
+     * @param {number} last
+     * @return {!HTMLElement}
+     */
+    function makePager(current, last) {
+      const left = Math.max(2, current - PAGER_WINDOW);
+      const right = Math.min(last - 1, current + PAGER_WINDOW);
+      const gap = (mobileOnly) => makeElement('button', {
+        'type': 'button',
+        'className': mobileOnly ?
+            'paginator-ellipsis mobile-only' : 'paginator-ellipsis',
+        'aria-label': 'Jump to page',
+        'title': 'Jump to page',
+        'onclick': (event) => {
+          // Danbooru's own handler sits on the document for the same class
+          // and would load the page again: this one answers instead.
+          event.preventDefault();
+          event.stopPropagation();
+          jumpToPage(last);
+        },
+      }, [makeIcon('more')]);
+      const number = (n) => {
+        if (n === current) {
+          return makeElement('span', {
+            'className': 'paginator-current font-bold',
+            'aria-current': 'page',
+            'text': String(n),
+          });
+        }
+        const edge = n === 1 || n === last;
+        return makePageLink(n,
+            edge ? 'paginator-page' : 'paginator-page desktop-only',
+            String(n));
+      };
+      const arrow = (n, name, label) => (n >= 1 && n <= last ?
+          makePageLink(n, `paginator-${name}`, makeIcon(name), label) :
+          makeElement('span', {className: `paginator-${name}`},
+              [makeIcon(name)]));
+
+      const items = [arrow(current - 1, 'prev', 'Previous page'), number(1)];
+      if (left === 2 && current > 2) items.push(gap(true));
+      if (left > 2) items.push(gap(false));
+      for (let n = left; n <= right; n++) items.push(number(n));
+      if (right < last - 1) items.push(gap(false));
+      if (right === last - 1 && current < last - 1) items.push(gap(true));
+      if (last > 1) items.push(number(last));
+      items.push(arrow(current + 1, 'next', 'Next page'));
+      return makeElement('div', {
+        'className': 'paginator numbered-paginator mt-8 mb-4 space-x-2 ' +
+            'flex justify-center items-center pfp-paginator',
+        'role': 'navigation',
+        'aria-label': 'Pages',
+      }, items);
+    }
+
+    /**
+     * A real link, so middle-click and Ctrl+click open that page in a new
+     * tab; a plain click turns the page in place.
+     * @param {number} n
+     * @param {string} className
+     * @param {string|!Node} content
+     * @param {string=} label
+     * @return {!HTMLElement}
+     */
+    function makePageLink(n, className, content, label) {
+      return makeElement('a', {
+        'className': className,
+        'href': listPageHref(n),
+        'aria-label': label,
+        'onclick': (event) => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey ||
+              event.shiftKey || event.altKey) {
+            return;
+          }
+          event.preventDefault();
+          goToPage(n);
+        },
+      }, [content]);
+    }
+
+    /**
+     * @param {!Object} page
+     * @param {boolean} draggable
+     * @return {!HTMLElement}
+     */
+    function makeRow(page, draggable) {
+      const row = makeElement('tr', {
+        'className': isPinned(page) ? 'pfp-row pfp-row-pinned' : 'pfp-row',
+        'data-id': page.id,
+        // Firefox on Android hands a tap on empty space to a button a few
+        // millimetres away, which opened ⋯ from a tap beside it. With a
+        // click listener of its own the row counts as tappable, so a tap
+        // on its empty part stays there and does nothing.
+        'onclick': () => {},
+      });
+      // Bars at the row's right end, next to ⋯ (Resolved 50), for dragging
+      // only: out of the Tab order, as no key works on it (Resolved 59).
+      const handle = draggable ?
+          makeElement('button', {
+            'type': 'button',
+            'className': 'pfp-handle',
+            'tabindex': -1,
+            'title': 'Drag to move',
+            'aria-label': `Drag to move "${page.title}"`,
+            'onpointerdown': (event) => startDrag(event, row),
+          }, [makeIcon('lines')]) :
+          null;
+      const tick = makeElement('input', {
+        'type': 'checkbox',
+        'className': 'pfp-select',
+        'aria-label': `Select "${page.title}"`,
+        'onchange': () => {
+          if (allMatching) {
+            // Out of "every match": back to the ticks on this page, so
+            // nothing out of sight stays selected (Resolved 54).
+            allMatching = false;
+            const visible = new Set(tableRows().map((tr) => tr.dataset.id));
+            for (const id of selected) {
+              if (!visible.has(id)) selected.delete(id);
+            }
+          }
+          offerAll = false;
+          if (tick.checked) {
+            selected.add(page.id);
+          } else {
+            selected.delete(page.id);
+          }
+          updateSelection();
+        },
+      });
+      row.append(
+          makeElement('td', {className: 'pfp-col-select'},
+              [makeSelectBox(tick)]),
+          makeElement('td', {className: 'pfp-col-title'}, [
+            makeElement('a', {
+              href: openableUrl(page.url), title: page.title, text: page.title,
+            }),
+            makeElement('span', {
+              className: 'pfp-row-url', text: toSitePath(page.url),
+            }),
+          ]),
+          // The pin, ahead of the type: filled when pinned, a faint
+          // outline offering it otherwise (Resolved 52).
+          makeElement('td', {className: 'pfp-col-pin'}, [
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-pin',
+              'title': isPinned(page) ? 'Unpin' : 'Pin to top',
+              'aria-label': isPinned(page) ?
+                  `Unpin "${page.title}"` : `Pin "${page.title}" to top`,
+              'aria-pressed': String(isPinned(page)),
+              'onclick': () => togglePin(page),
+            }, [makeIcon('pin')]),
+          ]),
+          makeElement('td', {className: 'pfp-col-type'}, [
+            // Computed, not stored: records saved under older type rules
+            // still show the current type (Resolved 24).
+            makeElement('span', {
+              className: 'pfp-chip', text: classify(page.url),
+            }),
+            // Phone only: the memo column gives way to this, which unfolds
+            // the whole memo under the title (Resolved 43). Tooltips do not
+            // reach a touch screen.
+            page.memo ?
+                makeElement('button', {
+                  'type': 'button',
+                  'className': 'pfp-memo-toggle',
+                  'aria-expanded': 'false',
+                  'onclick': (event) => {
+                    const open = row.classList.toggle('pfp-memo-open');
+                    event.currentTarget.setAttribute(
+                        'aria-expanded', String(open));
+                  },
+                }, [makeIcon('memo'), 'Memo']) :
+                null,
+          ]),
+          makeElement('td', {className: 'pfp-col-memo'}, [
+            // The line clamp has to sit on an inner element: table cells
+            // ignore it. The tooltip shows a clamped memo in full.
+            makeElement('span', {
+              className: 'pfp-memo-text', title: page.memo || null,
+              text: page.memo,
+            }),
+          ]),
+          makeElement('td', {className: 'pfp-col-added'},
+              [makeDate(page.createdAt)]),
+          makeElement('td', {className: 'pfp-col-actions'}, [
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-edit',
+              'title': 'Edit',
+              'aria-label': `Edit "${page.title}"`,
+              'onclick': () => openSaveDialog({url: page.url, editable: true}),
+            }, [makeIcon('edit')]),
+            makeElement('button', {
+              'type': 'button',
+              'className': 'pfp-icon-button pfp-remove',
+              'title': 'Remove',
+              'aria-label': `Remove "${page.title}"`,
+              'onclick': () => removePage(page),
+            }, [makeIcon('remove')]),
+            // Moves to other list pages, alongside the drag handle; on a
+            // phone also Edit and Remove, so it is always there, while ✎ ✕
+            // are hidden (Resolved 43).
+            makeElement('button', {
+              'type': 'button',
+              'className': draggable ?
+                  'pfp-icon-button pfp-row-menu-button' :
+                  'pfp-icon-button pfp-row-menu-button pfp-phone-only',
+              'title': 'More actions',
+              'aria-label': `More actions for "${page.title}"`,
+              'aria-haspopup': 'menu',
+              'aria-expanded': 'false',
+              'onclick': (event) =>
+                toggleRowMenu(event.currentTarget, page.id),
+            }, [makeIcon('more')]),
+          ]),
+          // Last on desktops too (Resolved 50); the phone grid places it
+          // by name.
+          draggable ?
+              makeElement('td', {className: 'pfp-col-handle'}, [handle]) :
+              '');
+      return row;
+    }
+
+    /**
+     * The pin button: pins or unpins, then the list re-reads, so the row
+     * moves to where the pinned pages and the rest meet (Resolved 52).
+     * @param {!Object} page
+     * @return {!Promise<void>}
+     */
+    async function togglePin(page) {
+      if (move || committing) return;
+      const pinned = !isPinned(page);
+      try {
+        await setPagePinned(user.id, page.id, pinned);
+        showToast(pinned ? 'Pinned to the top.' : 'Unpinned.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      // Nothing else on the page shows the pin, so only the list re-reads.
+      await reload();
+      // The row was redrawn: keep the keyboard on its pin.
+      const row = tableRows().find((candidate) =>
+        candidate.dataset.id === page.id);
+      const pinButton = row && row.querySelector('.pfp-pin');
+      if (pinButton && document.activeElement === document.body) {
+        pinButton.focus({preventScroll: true});
+      }
+    }
+
+    async function removePage(page) {
+      if (!window.confirm(`Remove "${page.title}" from Favorite Pages?`)) {
+        return;
+      }
+      try {
+        await deletePage(user.id, page.id);
+        showToast('Removed from Favorite Pages.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      notifyPagesChanged();
+    }
+
+    /**
+     * Saves a new position, then re-reads the list (also on failure, which
+     * puts the rows back where the stored order has them). Positions count
+     * across all list pages. A row stays within its part, pinned or not
+     * (Resolved 52): `to` past the part's end stops at it.
+     * @param {number} from Position in the whole custom order.
+     * @param {number} to
+     * @return {!Promise<boolean>} Whether the move was saved.
+     */
+    async function commitMove(from, to) {
+      committing = true;
+      let saved = true;
+      try {
+        const ordered = sortPages(pages, 'custom', 'asc');
+        const {start, end} = partBounds(ordered, from);
+        const group = ordered.slice(start, end + 1);
+        await movePage(user.id, group, from - start,
+            Math.min(Math.max(to, start), end) - start);
+      } catch (err) {
+        saved = false;
+        console.error(LOG_PREFIX, err);
+        showToast(describeError(err), {error: true});
+      }
+      try {
+        await reload();
+      } finally {
+        committing = false;
+      }
+      return saved;
+    }
+
+    /**
+     * Rows move (drag, ⋯ moves) only in the custom order with no
+     * filter: in a filtered part of the list, where a row lands among the
+     * hidden ones is undefined (PLAN D8).
+     * @return {boolean}
+     */
+    function canMoveRows() {
+      return mode === 'custom' && !query.trim();
+    }
+
+    /**
+     * Where the part a position belongs to (the pinned pages, or the rest)
+     * starts and ends in the custom order (Resolved 52).
+     * @param {!Array<!Object>} ordered Pages in custom order.
+     * @param {number} index
+     * @return {{start: number, end: number}} Inclusive positions.
+     */
+    function partBounds(ordered, index) {
+      const pinnedCount = ordered.filter(isPinned).length;
+      return isPinned(ordered[index]) ?
+          {start: 0, end: pinnedCount - 1} :
+          {start: pinnedCount, end: ordered.length - 1};
+    }
+
+    /** @return {number} Position of the first row shown in the order. */
+    function pageOffset() {
+      return (pageNumber - 1) * PAGE_SIZE;
+    }
+
+    // --- Row menu: moves to other list pages (Resolved 31), and on a phone
+    // Edit / Remove as well (Resolved 43) ---
+    // The ⋯ button opens a small menu in Danbooru's popup-menu style. It
+    // sits on <body>, placed under the button, so the table cannot clip it.
+    // Danbooru's own menu script only binds the buttons present at load,
+    // so this one is ours.
+
+    /** @type {?{button: !HTMLElement, menu: !HTMLElement}} */
+    let rowMenu = null;
+
+    /**
+     * @param {{restoreFocus: (boolean|undefined)}=} options Focus goes back
+     *     to the ⋯ button, for Esc and Tab.
+     */
+    function closeRowMenu({restoreFocus = false} = {}) {
+      if (!rowMenu) return;
+      const {button, menu} = rowMenu;
+      rowMenu = null;
+      menu.remove();
+      button.setAttribute('aria-expanded', 'false');
+      document.removeEventListener('pointerdown', onOutsidePointer, true);
+      window.removeEventListener('resize', onMenuResize);
+      if (restoreFocus && button.isConnected) button.focus();
+    }
+
+    /**
+     * @param {!HTMLElement} button
+     * @param {string} id The row's page id.
+     */
+    function toggleRowMenu(button, id) {
+      const wasOpen = rowMenu !== null && rowMenu.button === button;
+      closeRowMenu();
+      if (!wasOpen && !move && !committing) openRowMenu(button, id);
+    }
+
+    /**
+     * Previous / next page put the row on the last / first place of that
+     * page, pushing that page's row there into this one; top and bottom
+     * are the ends of the whole list. The view stays on this page. The
+     * phone layout hides the row's ✎ ✕, so Edit and Remove lead the menu
+     * there (Resolved 43).
+     * @param {!HTMLElement} button
+     * @param {string} id
+     */
+    function openRowMenu(button, id) {
+      const page = pages.find((candidate) => candidate.id === id);
+      if (!page) return;
+      // Closing first hands the focus back to ⋯, where the dialog (or the
+      // confirm) returns it.
+      const rowActions = isMobileLayout() ? [
+        {label: 'Edit', enabled: true, run: () => {
+          closeRowMenu({restoreFocus: true});
+          openSaveDialog({url: page.url, editable: true});
+        }},
+        {label: 'Remove', enabled: true, run: () => {
+          closeRowMenu({restoreFocus: true});
+          removePage(page);
+        }},
+      ] : [];
+      const moveActions = canMoveRows() ? rowMoveActions(id) : [];
+      const actions = rowActions.length && moveActions.length ?
+          [...rowActions, null, ...moveActions] :
+          [...rowActions, ...moveActions];
+      if (!actions.length) return;
+      const menu = makeElement('div', {
+        'className': 'pfp-menu',
+        'role': 'menu',
+        'aria-label': button.getAttribute('aria-label'),
+        'tabindex': -1,
+        'onkeydown': onMenuKeydown,
+      }, actions.map((action) => (action ?
+          makeElement('button', {
+            'type': 'button',
+            'className': 'pfp-menu-item',
+            'role': 'menuitem',
+            'disabled': !action.enabled,
+            'text': action.label,
+            'onclick': action.run,
+          }) :
+          makeElement('div', {
+            className: 'pfp-menu-separator', role: 'separator',
+          }))));
+      document.body.appendChild(menu);
+      placeRowMenu(menu, button);
+      rowMenu = {button, menu};
+      button.setAttribute('aria-expanded', 'true');
+      document.addEventListener('pointerdown', onOutsidePointer, true);
+      window.addEventListener('resize', onMenuResize);
+      (menuItems(menu)[0] || menu).focus();
+    }
+
+    /**
+     * The ⋯ menu's moves for a row, as in Resolved 31; null entries are
+     * separators.
+     * @param {string} id
+     * @return {!Array<?Object>}
+     */
+    function rowMoveActions(id) {
+      const ordered = sortPages(pages, 'custom', 'asc');
+      const from = ordered.findIndex((page) => page.id === id);
+      if (from < 0) return [];
+      // Moves stay within the row's part, pinned or not (Resolved 52).
+      const {start, end} = partBounds(ordered, from);
+      const offset = pageOffset();
+      const action = (label, enabled, to, done) =>
+        ({label, enabled, run: () => sendRow(from, to, done)});
+      // "of list": the whole list's ends, not this page's; under the
+      // pinned pages for the rest.
+      const part = isPinned(ordered[from]) ? 'pinned pages' : 'list';
+      return [
+        action('Move to previous page', offset - 1 >= start, offset - 1,
+            `Moved to page ${pageNumber - 1}.`),
+        action('Move to next page', offset + PAGE_SIZE <= end,
+            offset + PAGE_SIZE, `Moved to page ${pageNumber + 1}.`),
+        null,
+        action(`Move to top of ${part}`, from > start, start,
+            `Moved to the top of the ${part}.`),
+        action(`Move to bottom of ${part}`, from < end, end,
+            `Moved to the bottom of the ${part}.`),
+      ];
+    }
+
+    /**
+     * Under the button, right edges aligned (the button is the last thing
+     * in the row); above it when there is no room below.
+     * @param {!HTMLElement} menu
+     * @param {!HTMLElement} button
+     */
+    function placeRowMenu(menu, button) {
+      const anchor = button.getBoundingClientRect();
+      const size = menu.getBoundingClientRect();
+      const fitsBelow =
+          anchor.bottom + MENU_GAP_PX + size.height <= window.innerHeight;
+      const fitsAbove = anchor.top - MENU_GAP_PX - size.height >= 0;
+      const top = !fitsBelow && fitsAbove ?
+          anchor.top - MENU_GAP_PX - size.height :
+          anchor.bottom + MENU_GAP_PX;
+      const left = Math.max(MENU_GAP_PX, anchor.right - size.width);
+      menu.style.top = `${top + window.scrollY}px`;
+      menu.style.left = `${left + window.scrollX}px`;
+    }
+
+    /**
+     * @param {!Element} menu
+     * @return {!Array<!HTMLElement>} The menu's enabled items.
+     */
+    function menuItems(menu) {
+      return [...menu.querySelectorAll('.pfp-menu-item:not(:disabled)')];
+    }
+
+    function onMenuKeydown(event) {
+      // Keep Danbooru's shortcuts and ours (q, Shift+B, ...) out of it.
+      event.stopPropagation();
+      const items = menuItems(event.currentTarget);
+      const index = items.indexOf(document.activeElement);
+      const focusAt = (i) => {
+        if (items.length) items[(i + items.length) % items.length].focus();
+      };
+      if (event.key === 'Escape' || event.key === 'Tab') {
+        event.preventDefault();
+        closeRowMenu({restoreFocus: true});
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        focusAt(index + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusAt(index < 0 ? -1 : index - 1);
+      } else if (event.key === 'Home') {
+        event.preventDefault();
+        focusAt(0);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        focusAt(-1);
+      }
+    }
+
+    function onOutsidePointer(event) {
+      if (!rowMenu || rowMenu.menu.contains(event.target) ||
+          rowMenu.button.contains(event.target)) {
+        return;
+      }
+      closeRowMenu();
+    }
+
+    function onMenuResize() {
+      closeRowMenu();
+    }
+
+    /**
+     * Runs a menu move, then hands the keyboard to the row that took the
+     * moved row's place on this page.
+     * @param {number} from
+     * @param {number} to
+     * @param {string} done Toast text.
+     */
+    async function sendRow(from, to, done) {
+      const place = from - pageOffset();
+      closeRowMenu();
+      if (move || committing) return;
+      if (await commitMove(from, to)) showToast(done);
+      const rows = tableRows();
+      const row = rows[Math.min(place, rows.length - 1)];
+      const next = row && row.querySelector('.pfp-row-menu-button');
+      if (next) next.focus({preventScroll: true});
+    }
+
+    // --- Moving rows (PLAN D8-2, D8-3, Resolved 22) ---
+    // A move lifts the row and slides it with transforms only; the DOM
+    // order stays put until the row has settled into its gap, and then
+    // changes in the same frame the transforms are cleared, so nothing
+    // jumps. Row positions are taken once, in page coordinates, so they
+    // stay valid while the page auto-scrolls.
+
+    function tableRows() {
+      return [...content.querySelectorAll('tbody > tr.pfp-row')];
+    }
+
+    /**
+     * Lifts `row` and records where every row sits.
+     * @param {!HTMLElement} row
+     * @return {!Object} The move: row, slots, from, to.
+     */
+    function beginMove(row) {
+      const rows = tableRows();
+      const scrollTop = window.scrollY;
+      const slots = rows.map((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return {row: candidate, top: rect.top + scrollTop, height: rect.height};
+      });
+      const table = content.querySelector('table');
+      if (table) table.classList.add('pfp-table-sorting');
+      row.classList.add('pfp-row-dragging');
+      const from = rows.indexOf(row);
+      // The rows of its own part (pinned or not) it may move among.
+      const pinned = row.classList.contains('pfp-row-pinned');
+      const own = rows.map((candidate) =>
+        candidate.classList.contains('pfp-row-pinned') === pinned);
+      return {row, slots, from, to: from,
+        min: own.indexOf(true), max: own.lastIndexOf(true)};
+    }
+
+    /**
+     * Slides the neighbours to open a gap at `move.to`.
+     * @param {!Object} move
+     * @return {number} Offset that puts the moved row into the gap.
+     */
+    function layoutMove(move) {
+      const self = move.slots[move.from];
+      move.slots.forEach((slot, i) => {
+        let shift = 0;
+        if (move.from < i && i <= move.to) shift = -self.height;
+        if (move.to <= i && i < move.from) shift = self.height;
+        if (i !== move.from) {
+          slot.row.style.transform = shift ? `translateY(${shift}px)` : '';
+        }
+      });
+      const target = move.slots[move.to];
+      const top = move.to > move.from ?
+          target.top + target.height - self.height :
+          target.top;
+      return top - self.top;
+    }
+
+    /**
+     * Animates the moved row into its gap (or home, when `to` equals
+     * `from`), then commits the DOM order.
+     * @param {!Object} move
+     * @param {function()} onDone
+     */
+    function settleMove(move, onDone) {
+      const offset = layoutMove(move);
+      move.row.classList.add('pfp-row-settling');
+      move.row.style.transform = offset ? `translateY(${offset}px)` : '';
+      setTimeout(() => {
+        finishMove(move);
+        onDone();
+      }, prefersReducedMotion() ? 0 : SETTLE_MS);
+    }
+
+    function finishMove(move) {
+      // Dropping the transition class first means clearing the transforms
+      // below cannot animate.
+      const table = content.querySelector('table');
+      if (table) table.classList.remove('pfp-table-sorting');
+      for (const {row} of move.slots) row.style.transform = '';
+      move.row.classList.remove('pfp-row-dragging', 'pfp-row-settling');
+      if (move.to !== move.from && move.row.isConnected) {
+        const rows = move.slots.map(({row}) => row);
+        rows.splice(move.from, 1);
+        rows.splice(move.to, 0, move.row);
+        move.row.parentNode.append(...rows);
+      }
+    }
+
+    // Pointer Events cover mouse, touch and pen with one code path; the
+    // handle alone has touch-action: none, so the rest of a row still
+    // scrolls the page. The lifted row follows the pointer; the gap opens
+    // where its centre has passed a neighbour's midpoint. Dragging is the
+    // only way to move a row a place or two; the arrow keys on the handle
+    // were dropped as too many steps to reach (Resolved 59), and the ⋯
+    // menu takes rows to other list pages or to either end.
+
+    /**
+     * Drags stay within the list page shown.
+     * @param {!PointerEvent} event
+     * @param {!HTMLElement} row
+     */
+    function startDrag(event, row) {
+      if (move || committing || event.button !== 0) return;
+      event.preventDefault();
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch (err) {
+        // Not supported: the document listeners below still see the moves.
+      }
+      move = beginMove(row);
+      Object.assign(move, {
+        dragging: true,
+        pointerId: event.pointerId,
+        startY: event.clientY + window.scrollY,
+        y: event.clientY,
+        frame: 0,
+      });
+      document.addEventListener('pointermove', onDragMove);
+      document.addEventListener('pointerup', onDragEnd);
+      document.addEventListener('pointercancel', cancelDrag);
+      document.addEventListener('keydown', onDragKeydown, true);
+      move.frame = requestAnimationFrame(autoScroll);
+    }
+
+    function trackPointer() {
+      const self = move.slots[move.from];
+      const offset = move.y + window.scrollY - move.startY;
+      const centre = self.top + self.height / 2 + offset;
+      let to = move.from;
+      move.slots.forEach((slot, i) => {
+        const middle = slot.top + slot.height / 2;
+        if (i > move.from && middle < centre) to = Math.max(to, i);
+        if (i < move.from && middle > centre) to = Math.min(to, i);
+      });
+      move.to = Math.min(Math.max(to, move.min), move.max);
+      layoutMove(move);
+      move.row.style.transform = `translateY(${offset}px)`;
+    }
+
+    function isDragEvent(event) {
+      return move !== null && move.dragging &&
+          event.pointerId === move.pointerId;
+    }
+
+    function onDragMove(event) {
+      if (!isDragEvent(event)) return;
+      move.y = event.clientY;
+      trackPointer();
+    }
+
+    function autoScroll() {
+      if (!move || !move.dragging) return;
+      if (move.y < DRAG_EDGE_PX) {
+        window.scrollBy(0, -DRAG_SCROLL_PX);
+        trackPointer();
+      } else if (move.y > window.innerHeight - DRAG_EDGE_PX) {
+        window.scrollBy(0, DRAG_SCROLL_PX);
+        trackPointer();
+      }
+      move.frame = requestAnimationFrame(autoScroll);
+    }
+
+    function releasePointer() {
+      document.removeEventListener('pointermove', onDragMove);
+      document.removeEventListener('pointerup', onDragEnd);
+      document.removeEventListener('pointercancel', cancelDrag);
+      document.removeEventListener('keydown', onDragKeydown, true);
+      cancelAnimationFrame(move.frame);
+      move.dragging = false;
+    }
+
+    function onDragEnd(event) {
+      if (!isDragEvent(event)) return;
+      releasePointer();
+      const {from, to} = move;
+      const offset = pageOffset();
+      settleMove(move, () => {
+        move = null;
+        if (from !== to) commitMove(offset + from, offset + to);
+      });
+    }
+
+    /** Pointer cancelled or Esc: every row slides back home. */
+    function cancelDrag() {
+      if (!move || !move.dragging) return;
+      releasePointer();
+      move.to = move.from;
+      settleMove(move, () => {
+        move = null;
+      });
+    }
+
+    function onDragKeydown(event) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelDrag();
+    }
+
+    render();
+    return {
+      element, reload, focusFilter, showPageFromUrl, closeMenu: closeRowMenu,
+    };
+  }
+
+  // ==========================================================================
+  // === Export (PLAN D10) ====================================================
+  // ==========================================================================
+
+  /**
+   * The export file (D10). Sync / Backup takes every record, removals
+   * (tombstones) included, so another device can follow edits, moves and
+   * removals; Share takes the saved pages alone, memos only on request.
+   * Pins travel too (Resolved 52). `type` is informative: an import works
+   * it out again from the URL.
+   * @param {{id: number, name: string}} user
+   * @param {!Array<!Object>} records Every record of the account.
+   * @param {{kind: string, includeMemos: boolean}} options `kind` is
+   *     'sync' or 'share'; `includeMemos` matters for Share only.
+   * @return {!Object}
+   */
+  function exportData(user, records, {kind, includeMemos}) {
+    const sync = kind === 'sync';
+    // Saved pages in the list's order, then the removals.
+    const taken = [
+      ...sortPages(records.filter(isActive), 'custom', 'asc'),
+      ...(sync ? records.filter((record) => !isActive(record)) : []),
+    ];
+    return {
+      schema_version: EXPORT_SCHEMA_VERSION,
+      exported_at: new Date().toISOString(),
+      user_id: user.id,
+      user_name: user.name,
+      kind,
+      pages: taken.map((record) => ({
+        id: record.id,
+        url: record.url,
+        title: record.title,
+        memo: sync || includeMemos ? record.memo : '',
+        type: classify(record.url),
+        sortOrder: record.sortOrder,
+        pinned: isPinned(record),
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        deletedAt: record.deletedAt,
+      })),
+    };
+  }
+
+  /**
+   * @param {{name: string}} user
+   * @param {string} kind 'sync' or 'share'.
+   * @return {string} e.g. danbooru-favorite-pages-AkaringoP-20261101.json
+   */
+  function exportFileName(user, kind) {
+    const name = user.name.replace(/[^\w-]+/g, '_') || 'user';
+    const date = localDate(0).replace(/-/g, '');
+    const share = kind === 'share' ? '-share' : '';
+    return `${EXPORT_FILE_PREFIX}-${name}-${date}${share}.json`;
+  }
+
+  /**
+   * The list page's Export (D10): what to take, then how to hand it over —
+   * a file download, or the clipboard for pasting into Import on another
+   * device. The file is built inside the button press, which the clipboard
+   * needs to be allowed. (No system share sheet: user decision, 2026-11-01.)
+   * @param {{id: number, name: string}} user
+   * @return {!Promise<void>}
+   */
+  async function openExportDialog(user) {
+    if (isOverlayOpen()) return;
+    let records;
+    try {
+      records = await listAllRecords(user.id);
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+      return;
+    }
+    const active = records.filter(isActive);
+    const removed = records.length - active.length;
+    const option = (value, label, hint) => makeElement('label', {
+      className: 'pfp-check pfp-choice',
+    }, [
+      makeElement('input', {
+        type: 'radio', name: 'kind', value, checked: value === 'sync',
+        onchange: update,
+      }),
+      makeElement('span', {}, [
+        makeElement('strong', {text: label}),
+        makeElement('span', {className: 'pfp-choice-hint', text: hint}),
+      ]),
+    ]);
+    const syncOption = option('sync', 'Sync / Backup',
+        'Everything, with memos and removals: for your other devices, ' +
+        'or to keep a copy.');
+    const shareOption = option('share', 'Share',
+        'Your saved pages only: for another user.');
+    const memoBox = makeElement('input', {
+      type: 'checkbox', name: 'memos', onchange: update,
+    });
+    const memoField = makeElement('label', {
+      className: 'pfp-check pfp-choice-sub',
+    }, [memoBox, 'Include memos']);
+    const summary = makeElement('p', {className: 'pfp-export-summary'});
+    const kind = () =>
+      (shareOption.querySelector('input').checked ? 'share' : 'sync');
+
+    /** @return {{name: string, json: string}} Built now, for this press. */
+    function build() {
+      const data = exportData(user, records,
+          {kind: kind(), includeMemos: memoBox.checked});
+      return {name: exportFileName(user, kind()),
+        json: JSON.stringify(data, null, 1)};
+    }
+
+    function download() {
+      const {name, json} = build();
+      const href = URL.createObjectURL(
+          new Blob([json], {type: 'application/json'}));
+      const link = makeElement('a', {href, download: name, hidden: true});
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Some browsers start the download only after the click returns.
+      setTimeout(() => URL.revokeObjectURL(href), 10000);
+      done('Downloaded.');
+    }
+
+    async function copy() {
+      const {json} = build();
+      try {
+        await navigator.clipboard.writeText(json);
+        done('Copied. Paste it into Import on the other device.');
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        showToast(`Could not copy: ${err.message || err}`, {error: true});
+      }
+    }
+
+    function done(message) {
+      close();
+      showToast(message, {long: true});
+    }
+
+    // Browser storage protection (D10, in place of a Settings window: user
+    // decision, 2026-11-01). Low on disk space, Chromium and Firefox may
+    // clear a site's data, this list with it; persisted storage is spared.
+    // Asked for only on a press: Firefox shows a permission prompt, and
+    // Chromium decides by how much the site is used.
+    const storage = navigator.storage && navigator.storage.persisted ?
+        navigator.storage : null;
+    const storageText = makeElement('span');
+    const protectButton = makeElement('button', {
+      type: 'button', className: 'pfp-link-button', text: 'Protect',
+      hidden: true, onclick: protect,
+    });
+    const storageLine = makeElement('p', {
+      className: 'pfp-storage-line', hidden: true,
+    }, [storageText, ' ', protectButton]);
+
+    /**
+     * @param {boolean} persisted
+     * @param {boolean=} refused Whether a request was just turned down.
+     */
+    function showStorage(persisted, refused = false) {
+      storageLine.hidden = false;
+      protectButton.hidden = persisted;
+      storageText.textContent = persisted ?
+          'Browser storage: protected. The browser will not clear this ' +
+              'list to free up space.' :
+          refused ?
+          'Browser storage: not protected. The browser said no for now ' +
+              '(it may agree once the site is used more); an export keeps ' +
+              'a copy either way.' :
+          'Browser storage: not protected. Low on disk space, the browser ' +
+              'may clear this list.';
+    }
+
+    async function protect() {
+      protectButton.disabled = true;
+      try {
+        const granted = await storage.persist();
+        showStorage(granted, !granted);
+      } catch (err) {
+        console.warn(LOG_PREFIX, 'storage protection failed', err);
+        showStorage(false, true);
+      } finally {
+        protectButton.disabled = false;
+      }
+    }
+
+    const actions = [
+      makeElement('button', {
+        type: 'button', className: 'button-primary', text: 'Download',
+        onclick: download,
+      }),
+      makeElement('button', {type: 'button', text: 'Copy', onclick: copy}),
+    ];
+
+    function update() {
+      const sharing = kind() === 'share';
+      memoField.hidden = !sharing;
+      summary.textContent = sharing ?
+          `${countOf(active.length, 'page')}, ` +
+              (memoBox.checked ? 'with memos.' : 'without memos.') :
+          `${countOf(active.length, 'page')}` +
+              (removed ? ` and ${countOf(removed, 'removal')}.` : '.');
+      const empty = sharing ? !active.length : !records.length;
+      for (const button of actions) button.disabled = empty;
+    }
+
+    const close = openModal({
+      heading: 'Export Favorite Pages',
+      body: [
+        makeElement('div', {
+          'className': 'pfp-field', 'role': 'radiogroup',
+          'aria-label': 'What to export',
+        }, [syncOption, shareOption, memoField]),
+        summary,
+        storageLine,
+      ],
+      buttons: actions,
+    });
+    if (!close) return;
+    update();
+    if (storage) {
+      storage.persisted().then((persisted) => showStorage(persisted),
+          (err) => console.warn(LOG_PREFIX, 'storage state unknown', err));
+    }
+  }
+
+  // ==========================================================================
+  // === Help (Resolved 58) ===================================================
+  // ==========================================================================
+
+  /**
+   * The list page's Help: how the script is used, in short sections, with
+   * the keys drawn as Danbooru draws them, and the README for the rest.
+   * Built from text nodes like everything else (no HTML strings).
+   */
+  async function openHelpDialog() {
+    if (isOverlayOpen()) return;
+    await settingsReady;
+    const item = (...parts) => makeElement('li', {}, parts);
+    const section = (title, items) => makeElement('section', {
+      className: 'pfp-help-section',
+    }, [
+      makeElement('h3', {text: title}),
+      makeElement('ul', {}, items),
+    ]);
+    const limit = ENTRY_LIMIT.toLocaleString('en');
+    openModal({
+      heading: 'Favorite Pages help',
+      body: [makeElement('div', {className: 'pfp-help'}, [
+        section('Saving a page', [
+          item('The bookmark in the navbar (or ',
+              ...hotkeyKeys(settings.hotkeySave), ') saves the page you ' +
+              'are on, with a title and a memo; on a saved page it edits it.'),
+          item('Double-click it (or hold it on a phone) to save at once, ' +
+              'without the dialog.'),
+          item('A forum post\'s or comment\'s "…" menu has "Save to ' +
+              'Favorite Pages" too.'),
+          item('New, above, adds any Danbooru address by hand.'),
+          item('A forum topic can open at its latest page, and a report ' +
+              'can end on the latest date: tick the box when saving.'),
+        ]),
+        section('Finding a page', [
+          item('The list button in the navbar (or ',
+              ...hotkeyKeys(settings.hotkeyList), ') opens the quick ' +
+              'panel: type to filter, ↑ ↓ and Enter to open, Shift+Enter ' +
+              'for a new tab.'),
+          item('This page lists everything: filter it (',
+              ...hotkeyKeys(FILTER_HOTKEY), '), sort it, and turn its pages.'),
+        ]),
+        section('Arranging the list', [
+          item('The pin keeps a page at the top; new pages go right under ' +
+              'the pinned ones.'),
+          item('In Custom order, drag ≡ to move a page; ⋯ moves it to ' +
+              'another list page or to either end.'),
+          item('Tick pages to remove several at once. After ticking a ' +
+              'whole page, "Select all" takes every match, on every page.'),
+        ]),
+        section('Other devices and backups', [
+          item('Export (', ...hotkeyKeys(EXPORT_HOTKEY), '): Sync / Backup ' +
+              'takes everything, for your other devices or a backup; Share ' +
+              'takes the saved pages only, for another user.'),
+          item('Download the file, or Copy it and paste it into Import on ' +
+              'the other device.'),
+          item('Import (', ...hotkeyKeys(IMPORT_HOTKEY), '): choose the ' +
+              'file, drop it on this page, or paste the text. A preview ' +
+              'shows what would change before you Apply.'),
+          item('Your own Sync export merges (the newer change wins); any ' +
+              'other file only adds pages.'),
+        ]),
+        section('Where your list is kept', [
+          item('In this browser only, for each Danbooru account. Other ' +
+              'browsers and devices have lists of their own: use Export ' +
+              'and Import to carry it over.'),
+          item(`Up to ${limit} pages.`),
+          item('Export → Protect asks the browser not to clear the list ' +
+              'when disk space runs low. Export now and then to keep a ' +
+              'copy.'),
+        ]),
+        makeElement('p', {className: 'pfp-help-more'}, [
+          'More: ',
+          makeElement('a', {
+            href: README_URL, target: '_blank', rel: 'noopener noreferrer',
+            text: 'Favorite Pages on GitHub',
+          }),
+        ]),
+      ])],
+      buttons: [],
+      closeText: 'Close',
+    });
+  }
+
+  // ==========================================================================
+  // === Import: reading and merging (PLAN D10) ===============================
+  // ==========================================================================
+  // A file or pasted text may come from anyone, so it is read as data only:
+  // JSON.parse, nothing over the size and count limits, and every entry
+  // rebuilt from the fields it is allowed to have, each checked. URLs pass
+  // the same gate as everything saved (sanitizeUrl, D13). Only a Sync
+  // export of this very account merges into it; anything else can only add
+  // pages. Nothing is written until the preview's Apply, and then in one
+  // transaction.
+
+  /**
+   * @param {*} value
+   * @return {boolean} Whether it is a plain JSON object (not an array).
+   */
+  function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  /**
+   * Imported text, made safe to keep and show: no hidden or direction-
+   * changing characters, single-line where it must be, within its limit.
+   * @param {string} value
+   * @param {number} max
+   * @param {boolean} multiline Keeps newlines and tabs (memos).
+   * @return {string}
+   */
+  function cleanImportedText(value, max, multiline) {
+    // Only as much as could ever be kept is read (IMPORT_TEXT_FACTOR).
+    const text = value.slice(0, max * IMPORT_TEXT_FACTOR)
+        .replace(UNSAFE_TEXT, '');
+    return clampText(multiline ? text.replace(/\r\n?/g, '\n') :
+        text.replace(/\s+/g, ' '), max);
+  }
+
+  /**
+   * Counts the values in JSON text without parsing it: each value after
+   * the first in an array or object follows a comma, and each array or
+   * object opens with a bracket. Text inside strings is skipped, so
+   * DText's [[wiki]] and {{search}} in a memo count for nothing
+   * (Resolved 60).
+   * @param {string} text
+   * @param {number} max Counting stops past this.
+   * @return {number} Exact for valid JSON, up to `max` + 1.
+   */
+  function countJsonValues(text, max) {
+    let count = 0;
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (inString) {
+        if (code === 0x5C) {
+          i++;  // A backslash: the escaped character cannot end the string.
+        } else if (code === 0x22) {
+          inString = false;
+        }
+      } else if (code === 0x22) {
+        inString = true;
+      } else if (code === 0x2C || code === 0x5B || code === 0x7B) {
+        if (++count > max) return count;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * @param {*} value
+   * @param {number} now
+   * @return {?number} A usable timestamp (none later than now), or null.
+   */
+  function importedTime(value, now) {
+    return Number.isFinite(value) && value >= 0 ? Math.min(value, now) : null;
+  }
+
+  /**
+   * One entry of a file, rebuilt from its allowed fields. Add mode needs a
+   * page's URL, title and memo only; Sync also takes its id, place, pin
+   * and timestamps, all checked.
+   * @param {*} raw
+   * @param {string} mode 'sync' or 'add'.
+   * @param {number} now
+   * @return {{ok: boolean, page: (?Object|undefined),
+   *     reason: (string|undefined)}} `page` is null for a removal in Add
+   *     mode, which is skipped without counting as invalid.
+   */
+  function readImportedPage(raw, mode, now) {
+    if (!isPlainObject(raw) || typeof raw.url !== 'string' ||
+        raw.url.length > IMPORT_MAX_URL ||
+        !['string', 'undefined'].includes(typeof raw.title) ||
+        !['string', 'undefined'].includes(typeof raw.memo)) {
+      return {ok: false, reason: 'malformed'};
+    }
+    const checked = sanitizeUrl(raw.url);
+    if (!checked.ok) return {ok: false, reason: checked.reason};
+    const page = {
+      url: checked.url,
+      title: cleanImportedText(raw.title || '', TITLE_MAX, false) ||
+          fallbackTitle(checked.url),
+      memo: cleanImportedText(raw.memo || '', MEMO_MAX, true),
+    };
+    if (mode === 'add') {
+      // Removals in another account's file mean nothing here.
+      return {ok: true, page: raw.deletedAt == null ? page : null};
+    }
+    const createdAt = importedTime(raw.createdAt, now);
+    const updatedAt = importedTime(raw.updatedAt, now);
+    const deletedAt =
+        raw.deletedAt === null ? null : importedTime(raw.deletedAt, now);
+    if (typeof raw.id !== 'string' || !IMPORT_ID_PATTERN.test(raw.id) ||
+        !Number.isFinite(raw.sortOrder) || createdAt === null ||
+        updatedAt === null || (raw.deletedAt !== null && deletedAt === null) ||
+        !['boolean', 'undefined'].includes(typeof raw.pinned)) {
+      return {ok: false, reason: 'malformed'};
+    }
+    return {ok: true, page: {
+      ...page, id: raw.id, sortOrder: raw.sortOrder,
+      pinned: raw.pinned === true, createdAt, updatedAt, deletedAt,
+    }};
+  }
+
+  /**
+   * Reads an export (D10). Sync mode only for a Sync / Backup export of
+   * this very account; any other file (another account's, or a Share
+   * export) can only add pages, so it can never change or remove one.
+   * @param {string} text
+   * @param {{id: number, name: string}} user
+   * @return {{ok: boolean, error: (string|undefined), mode: (string|undefined),
+   *     userName: (string|undefined), pages: (!Array<!Object>|undefined),
+   *     invalid: (!Object<string, number>|undefined)}}
+   */
+  function parseImport(text, user) {
+    const fail = (error) => ({ok: false, error});
+    if (typeof text !== 'string' || !text.trim()) {
+      return fail('Nothing to import.');
+    }
+    if (text.length > IMPORT_MAX_CHARS) {
+      return fail('This is too large to import (over 20 MB).');
+    }
+    // Far more values than an export could hold is a flood of tiny ones
+    // (objects, arrays, strings), turned away before parsing would build
+    // them all.
+    if (countJsonValues(text, IMPORT_MAX_VALUES) > IMPORT_MAX_VALUES) {
+      return fail('This has too many entries.');
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      return fail('This is not a Favorite Pages export.');
+    }
+    if (!isPlainObject(data) || data.schema_version !== EXPORT_SCHEMA_VERSION ||
+        !Array.isArray(data.pages)) {
+      return fail('This is not a Favorite Pages export.');
+    }
+    if (data.pages.length > IMPORT_MAX_ENTRIES) {
+      return fail('This has too many entries.');
+    }
+    const saved = data.pages.filter((raw) =>
+      isPlainObject(raw) && raw.deletedAt == null).length;
+    if (saved > ENTRY_LIMIT) {
+      return fail(`This has more than ${ENTRY_LIMIT.toLocaleString('en')} ` +
+          'pages, the most Favorite Pages keeps.');
+    }
+    const mode = data.kind === 'sync' && data.user_id === user.id ?
+        'sync' : 'add';
+    const now = Date.now();
+    const pages = [];
+    const invalid = {};
+    const seen = new Set();
+    for (const raw of data.pages) {
+      const {ok, page, reason} = readImportedPage(raw, mode, now);
+      let why = ok ? null : reason;
+      if (page && (seen.has(page.url) || (page.id && seen.has(page.id)))) {
+        why = 'duplicate';
+      }
+      if (why) {
+        invalid[why] = (invalid[why] || 0) + 1;
+      } else if (page) {
+        seen.add(page.url);
+        if (page.id) seen.add(page.id);
+        pages.push(page);
+      }
+    }
+    const userName = typeof data.user_name === 'string' ?
+        cleanImportedText(data.user_name, IMPORT_NAME_MAX, false) : '';
+    return {ok: true, mode, userName, pages, invalid};
+  }
+
+  /**
+   * A record of this account built from a checked import entry (or from a
+   * local record), with only the fields records have.
+   * @param {number} userId
+   * @param {!Object} source
+   * @param {!Object=} overrides
+   * @return {!Object}
+   */
+  function importRecord(userId, source, overrides = {}) {
+    const record = {
+      id: source.id,
+      userId,
+      url: source.url,
+      title: source.title,
+      memo: source.memo,
+      sortOrder: source.sortOrder,
+      pinned: source.pinned === true,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+      deletedAt: source.deletedAt,
+      ...overrides,
+    };
+    record.type = classify(record.url);
+    return record;
+  }
+
+  /**
+   * @param {!Object} a
+   * @param {!Object} b
+   * @return {boolean} Whether the two hold the same content.
+   */
+  function sameContent(a, b) {
+    return a.url === b.url && a.title === b.title && a.memo === b.memo &&
+        a.sortOrder === b.sortOrder && isPinned(a) === isPinned(b) &&
+        a.deletedAt === b.deletedAt && a.createdAt === b.createdAt;
+  }
+
+  /**
+   * Sync mode (D10): record by record, the newer `updatedAt` wins, title,
+   * memo, place, pin and removal alike. A removal newer than the page
+   * removes it here; a page removed here later than the file's copy stays
+   * removed, so a round trip never brings it back. The same page saved
+   * separately on two devices becomes one record, under the id saved
+   * first. A URL change that would collide with another saved page is left
+   * out. Pure: works on copies.
+   * @param {number} userId
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Array<!Object>} incoming Checked Sync entries.
+   * @return {{puts: !Array<!Object>, deletes: !Array<string>,
+   *     counts: !Object<string, number>, removed: !Array<string>}}
+   *     `removed` holds the titles of the pages it would remove.
+   */
+  function planSync(userId, local, incoming) {
+    const byId = new Map(local.map((record) => [record.id, record]));
+    const byUrl = new Map(local.map((record) => [record.url, record]));
+    const puts = new Map();
+    const deletes = new Set();
+    const counts =
+        {added: 0, updated: 0, removed: 0, unchanged: 0, conflicts: 0};
+    const removed = [];
+    const put = (record, previous) => {
+      if (previous && byUrl.get(previous.url) === previous) {
+        byUrl.delete(previous.url);
+      }
+      byId.set(record.id, record);
+      byUrl.set(record.url, record);
+      deletes.delete(record.id);
+      puts.set(record.id, record);
+    };
+    const drop = (record) => {
+      byId.delete(record.id);
+      if (byUrl.get(record.url) === record) byUrl.delete(record.url);
+      puts.delete(record.id);
+      deletes.add(record.id);
+    };
+    const tally = (before, after) => {
+      if (!isActive(before) && isActive(after)) {
+        counts.added++;
+      } else if (isActive(before) && !isActive(after)) {
+        counts.removed++;
+        removed.push(before.title);
+      } else {
+        counts.updated++;
+      }
+    };
+    for (const entry of incoming) {
+      const own = byId.get(entry.id) || null;
+      const holder = byUrl.get(entry.url) || null;
+      if (!own && holder) {
+        // Saved on two devices before they met: one record, under the id
+        // saved first, with the newer content.
+        const newer = entry.updatedAt > holder.updatedAt ? entry : holder;
+        const firstId = entry.createdAt < holder.createdAt ?
+            entry.id : holder.id;
+        const next = importRecord(userId, newer, {
+          id: firstId,
+          createdAt: Math.min(entry.createdAt, holder.createdAt),
+          updatedAt: Math.max(entry.updatedAt, holder.updatedAt),
+        });
+        if (firstId === holder.id && sameContent(holder, next)) {
+          counts.unchanged++;
+          continue;
+        }
+        if (firstId !== holder.id) drop(holder);
+        put(next, firstId === holder.id ? holder : null);
+        tally(holder, next);
+        continue;
+      }
+      if (!own) {
+        // A removal of a page never saved here has nothing to remove.
+        if (!isActive(entry)) {
+          counts.unchanged++;
+          continue;
+        }
+        put(importRecord(userId, entry), null);
+        counts.added++;
+        continue;
+      }
+      if (entry.updatedAt <= own.updatedAt) {
+        counts.unchanged++;
+        continue;
+      }
+      if (holder && holder.id !== own.id) {
+        if (isActive(holder)) {
+          counts.conflicts++;
+          continue;
+        }
+        // Only an old removal holds that URL: it gives way.
+        drop(holder);
+      }
+      const next = importRecord(userId, entry,
+          {createdAt: Math.min(own.createdAt, entry.createdAt)});
+      if (sameContent(own, next)) {
+        counts.unchanged++;
+        continue;
+      }
+      put(next, own);
+      tally(own, next);
+    }
+    return {puts: [...puts.values()], deletes: [...deletes], counts, removed};
+  }
+
+  /**
+   * Add mode (D10): another account's pages, or a Share export, only ever
+   * add to this list. Pages saved here already are skipped and nothing
+   * here changes. New pages get new ids, are not pinned whatever the file
+   * says (Resolved 52), and go in as a block, in the file's order, right
+   * under the pinned pages. A page removed here earlier comes back under
+   * its old id.
+   * @param {number} userId
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Array<!Object>} incoming Checked Add entries.
+   * @param {{includeMemos: boolean, skip: !Set<string>, now: number}}
+   *     options `skip` holds the URLs left unticked in the preview.
+   * @return {{puts: !Array<!Object>, deletes: !Array<string>,
+   *     counts: !Object<string, number>}}
+   */
+  function planAdd(userId, local, incoming, {includeMemos, skip, now}) {
+    const byUrl = new Map(local.map((record) => [record.url, record]));
+    const saved = (entry) => {
+      const holder = byUrl.get(entry.url);
+      return Boolean(holder) && isActive(holder);
+    };
+    const chosen =
+        incoming.filter((entry) => !saved(entry) && !skip.has(entry.url));
+    const top = local.reduce((min, record) =>
+      Math.min(min, record.sortOrder), 0);
+    const puts = chosen.map((entry, i) => {
+      const old = byUrl.get(entry.url);
+      return importRecord(userId, {
+        id: old ? old.id : newId(),
+        url: entry.url,
+        title: entry.title,
+        memo: includeMemos ? entry.memo : '',
+        sortOrder: top - SORT_STEP * (chosen.length - i),
+        pinned: false,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+    });
+    return {puts, deletes: [], counts: {
+      added: puts.length,
+      already: incoming.filter(saved).length,
+    }};
+  }
+
+  /**
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Object} plan From planSync or planAdd.
+   * @return {number} How many pages would be saved after the plan, to keep
+   *     within ENTRY_LIMIT (Resolved 53).
+   */
+  function savedAfter(local, plan) {
+    const {added = 0, removed = 0} = plan.counts;
+    return local.filter(isActive).length + added - removed;
+  }
+
+  /**
+   * Applies an import in one transaction, planned again on what is stored
+   * at that moment (another tab may have changed it since the preview). A
+   * record id that belongs to another account on this browser is never
+   * written over: such a page gets a new id. Any failure leaves the list
+   * as it was.
+   * @param {{id: number}} user
+   * @param {!Object} parsed What parseImport returned.
+   * @param {{includeMemos: boolean, skip: !Set<string>}} options Add mode.
+   * @return {!Promise<!Object<string, number>>} The counts.
+   */
+  function applyImport(user, parsed, options) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const local = await getAllForUser(store, user.id);
+      const plan = parsed.mode === 'sync' ?
+          planSync(user.id, local, parsed.pages) :
+          planAdd(user.id, local, parsed.pages,
+              {...options, now: Date.now()});
+      if (savedAfter(local, plan) > ENTRY_LIMIT) throw new Error(FULL_ERROR);
+      const own = new Set(local.map((record) => record.id));
+      for (const id of plan.deletes) {
+        if (own.has(id)) await requestToPromise(store.delete(id));
+      }
+      for (const record of plan.puts) {
+        if (!own.has(record.id) &&
+            await requestToPromise(store.get(record.id))) {
+          record.id = newId();
+        }
+        await requestToPromise(store.put(record));
+      }
+      return plan.counts;
+    });
+  }
+
+  /**
+   * @param {!File} file
+   * @return {!Promise<string>} Its text, refused before reading when too
+   *     large.
+   */
+  function readImportFile(file) {
+    if (file.size > IMPORT_MAX_CHARS) {
+      return Promise.reject(new Error('This file is too large (over 20 MB).'));
+    }
+    if (file.text) return file.text();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  // ==========================================================================
+  // === Import: dialog and drop zone (PLAN D10) ==============================
+  // ==========================================================================
+
+  /** Hands a file dropped on the page to the open Import dialog. */
+  let importFileHandler = null;
+
+  /**
+   * @param {!Object<string, number>} invalid Count per reason.
+   * @return {string} e.g. " · 3 left out (other sites: 2, malformed: 1)".
+   */
+  function leftOutText(invalid) {
+    const parts = Object.entries(invalid)
+        .map(([reason, n]) => `${IMPORT_REASONS[reason] || reason}: ${n}`);
+    if (!parts.length) return '';
+    const total = Object.values(invalid).reduce((sum, n) => sum + n, 0);
+    return ` · ${total} left out (${parts.join(', ')})`;
+  }
+
+  /**
+   * The list page's Import (D10): an exported file (Choose file, or one
+   * dropped on the page) or the text Copy gave on another device, then a
+   * preview of what it would do, and nothing written before Apply.
+   * Everything the file says is shown as plain text.
+   * @param {{id: number, name: string}} user
+   * @param {?File=} file A file dropped on the page.
+   */
+  function openImportDialog(user, file = null) {
+    if (isOverlayOpen()) {
+      // A file dropped over another window is not lost without a word
+      // (Resolved 60).
+      if (file && importFileHandler) {
+        importFileHandler(file);
+      } else if (file) {
+        showToast('Close the open window first, then drop the file again.',
+            {error: true});
+      }
+      return;
+    }
+    let parsed = null;
+    let local = [];
+    let readSeq = 0;
+    let pasteTimer = 0;
+    let busy = false;
+    /** URLs unticked in an Add preview. */
+    const skip = new Set();
+
+    const fileInput = makeElement('input', {
+      type: 'file', accept: '.json,application/json', hidden: true,
+      onchange: () => {
+        const [chosen] = fileInput.files;
+        fileInput.value = '';
+        if (chosen) loadFile(chosen);
+      },
+    });
+    const fileName = makeElement('span', {className: 'pfp-import-file'});
+    const pasteBox = makeElement('textarea', {
+      'name': 'paste', 'rows': 3, 'spellcheck': 'false',
+      'autocomplete': 'off', 'aria-label': 'Exported text',
+      'placeholder': 'Or paste the text copied with Export',
+      'oninput': () => {
+        clearTimeout(pasteTimer);
+        pasteTimer = setTimeout(() => {
+          fileName.textContent = '';
+          read(pasteBox.value);
+        }, IMPORT_PASTE_DELAY_MS);
+      },
+    });
+    const errorLine = makeElement('p', {
+      className: 'pfp-form-error', role: 'alert', hidden: true,
+    });
+    const preview = makeElement('div', {className: 'pfp-import-preview'});
+    const countsLine = makeElement('p', {className: 'pfp-import-counts'});
+    // Shown when the result would pass ENTRY_LIMIT (Resolved 53).
+    const limitLine = makeElement('p', {
+      className: 'pfp-import-warning', hidden: true,
+    });
+    const memoBox = makeElement('input', {
+      type: 'checkbox', name: 'memos', checked: true, onchange: update,
+    });
+    const applyButton = makeElement('button', {
+      type: 'button', className: 'button-primary', text: 'Apply',
+      disabled: true, onclick: apply,
+    });
+
+    function setError(message) {
+      errorLine.textContent = message;
+      errorLine.hidden = !message;
+    }
+
+    /** @param {!File} chosen */
+    async function loadFile(chosen) {
+      clearTimeout(pasteTimer);
+      pasteBox.value = '';
+      fileName.textContent = chosen.name;
+      const seq = ++readSeq;
+      try {
+        const text = await readImportFile(chosen);
+        if (seq === readSeq) await read(text);
+      } catch (err) {
+        if (seq !== readSeq) return;
+        parsed = null;
+        setError(err.message || String(err));
+        show();
+      }
+    }
+
+    /** @param {string} text */
+    async function read(text) {
+      const seq = ++readSeq;
+      parsed = null;
+      skip.clear();
+      const result = text.trim() ? parseImport(text, user) : null;
+      if (result && result.ok) {
+        try {
+          local = await listAllRecords(user.id);
+        } catch (err) {
+          if (seq !== readSeq) return;
+          setError(describeError(err));
+          show();
+          return;
+        }
+      }
+      if (seq !== readSeq) return;
+      parsed = result && result.ok ? result : null;
+      setError(result && !result.ok ? result.error : '');
+      show();
+    }
+
+    /** @return {!Object} The plan for what is shown, on the snapshot. */
+    function plan() {
+      return parsed.mode === 'sync' ?
+          planSync(user.id, local, parsed.pages) :
+          planAdd(user.id, local, parsed.pages,
+              {includeMemos: memoBox.checked, skip, now: Date.now()});
+    }
+
+    /** Builds the preview for a newly read export. */
+    function show() {
+      if (!parsed) {
+        preview.replaceChildren();
+        update();
+        return;
+      }
+      const from = parsed.userName ? `@${parsed.userName}` : 'no name';
+      const line = (text, className = '') =>
+        makeElement('p', {className, text});
+      const nodes = [];
+      if (parsed.mode === 'sync') {
+        const {removed} = plan();
+        nodes.push(line(`From ${from}: a Sync / Backup export of this ` +
+            'account. It is merged into this list; the newer change wins.'));
+        // The account id in a file can be typed by anyone: a different
+        // name is worth a second look before anything is removed.
+        if (parsed.userName &&
+            parsed.userName.toLowerCase() !== user.name.toLowerCase()) {
+          nodes.push(line(`It names the account @${parsed.userName}, not ` +
+              `@${user.name}. Apply only if you made this export.`,
+          'pfp-import-warning'));
+        }
+        nodes.push(countsLine, limitLine);
+        if (removed.length) {
+          nodes.push(line(`It removes ${countOf(removed.length, 'page')}:`,
+              'pfp-import-warning'));
+          const shown = removed.slice(0, IMPORT_LIST_MAX);
+          const more = removed.length - shown.length;
+          nodes.push(makeElement('ul', {className: 'pfp-import-removed'}, [
+            ...shown.map((title) => makeElement('li', {text: title})),
+            more ? makeElement('li', {text: `…and ${more} more`}) : null,
+          ]));
+        }
+      } else {
+        nodes.push(line(`From ${from}: pages to add to your list. Nothing ` +
+            'saved here changes.'));
+        nodes.push(countsLine, limitLine);
+        const saved = new Set(local.filter(isActive)
+            .map((record) => record.url));
+        if (parsed.pages.some((page) => page.memo && !saved.has(page.url))) {
+          nodes.push(makeElement('label', {className: 'pfp-check'},
+              [memoBox, 'Include memos']));
+        }
+        nodes.push(makeElement('ul', {className: 'pfp-import-list'},
+            parsed.pages.map((page) => {
+              const already = saved.has(page.url);
+              const tick = makeElement('input', {
+                type: 'checkbox', checked: !already, disabled: already,
+                onchange: () => {
+                  if (tick.checked) {
+                    skip.delete(page.url);
+                  } else {
+                    skip.add(page.url);
+                  }
+                  update();
+                },
+              });
+              return makeElement('li', {}, [
+                makeElement('label', {className: 'pfp-check pfp-import-item'},
+                    [tick, makeElement('span', {}, [
+                      makeElement('span', {text: page.title}),
+                      makeElement('span', {
+                        className: 'pfp-import-item-url',
+                        text: already ? `${toSitePath(page.url)} · saved` :
+                            toSitePath(page.url),
+                      }),
+                    ])]),
+              ]);
+            })));
+      }
+      preview.replaceChildren(...nodes);
+      update();
+    }
+
+    /** Counts and Apply follow the ticks without rebuilding the list. */
+    function update() {
+      if (!parsed) {
+        applyButton.disabled = true;
+        return;
+      }
+      const planned = plan();
+      const {counts} = planned;
+      const parts = parsed.mode === 'sync' ?
+          [[counts.added, 'new'], [counts.updated, 'updated'],
+            [counts.removed, 'removed'], [counts.unchanged, 'unchanged'],
+            [counts.conflicts, 'left out: URL saved under another page']] :
+          [[counts.added, 'to add'], [counts.already, 'already saved']];
+      countsLine.textContent = parts.filter(([n], i) => n || i < 2)
+          .map(([n, label]) => `${n} ${label}`).join(' · ') +
+          leftOutText(parsed.invalid);
+      const changes = parsed.mode === 'sync' ?
+          counts.added + counts.updated + counts.removed : counts.added;
+      const total = savedAfter(local, planned);
+      const over = total > ENTRY_LIMIT;
+      const limit = ENTRY_LIMIT.toLocaleString('en');
+      const room = Math.max(0, ENTRY_LIMIT - local.filter(isActive).length);
+      limitLine.textContent = !over ? '' : parsed.mode === 'sync' ?
+          `This would make ${total.toLocaleString('en')} pages, over the ` +
+              `limit of ${limit}. Remove some pages first.` :
+          `Only ${countOf(room, 'more page')} fit (the limit is ${limit}). ` +
+              'Untick some to go on.';
+      limitLine.hidden = !over;
+      applyButton.disabled = busy || changes === 0 || over;
+    }
+
+    async function apply() {
+      if (!parsed || busy) return;
+      busy = true;
+      update();
+      try {
+        const counts = await applyImport(user, parsed,
+            {includeMemos: memoBox.checked, skip});
+        close();
+        showToast(parsed.mode === 'sync' ?
+            `Imported: ${counts.added} new, ${counts.updated} updated, ` +
+                `${counts.removed} removed.` :
+            `Added ${countOf(counts.added, 'page')}.`, {long: true});
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setError(describeError(err));
+        busy = false;
+        update();
+      }
+    }
+
+    const close = openModal({
+      heading: 'Import Favorite Pages',
+      body: [
+        makeElement('div', {className: 'pfp-import-source'}, [
+          makeElement('button', {
+            type: 'button', text: 'Choose file…',
+            onclick: () => fileInput.click(),
+          }),
+          fileName,
+          fileInput,
+        ]),
+        pasteBox,
+        errorLine,
+        preview,
+      ],
+      buttons: [applyButton],
+      onClose: () => {
+        clearTimeout(pasteTimer);
+        readSeq++;
+        importFileHandler = null;
+      },
+    });
+    if (!close) return;
+    importFileHandler = loadFile;
+    if (file) loadFile(file);
+  }
+
+  /**
+   * Dropping a file anywhere on the list page opens Import with it (D10).
+   * Only drags that carry files show the drop overlay; the file goes
+   * through the same checks as one chosen in the dialog.
+   * @param {{id: number, name: string}} user
+   */
+  function initImportDrop(user) {
+    const overlay = makeElement('div', {
+      'className': 'pfp-drop-overlay', 'hidden': true, 'aria-hidden': 'true',
+    }, [makeElement('p', {text: 'Drop the exported file to import it'})]);
+    document.body.appendChild(overlay);
+    let depth = 0;
+    const carriesFiles = (event) => Boolean(event.dataTransfer) &&
+        [...event.dataTransfer.types].includes('Files');
+    window.addEventListener('dragenter', (event) => {
+      if (!carriesFiles(event)) return;
+      depth++;
+      overlay.hidden = false;
+    });
+    window.addEventListener('dragleave', (event) => {
+      if (!carriesFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) overlay.hidden = true;
+    });
+    window.addEventListener('dragover', (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('drop', (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      overlay.hidden = true;
+      const [file] = event.dataTransfer.files;
+      if (file) openImportDialog(user, file);
+    });
+  }
+
+  // ==========================================================================
+  // === Profile row (PLAN D6) ================================================
+  // ==========================================================================
+
+  /**
+   * /profile renders the same page as /users/<own id> without redirecting
+   * (Resolved 8).
+   * @param {{id: number}} user
+   * @return {boolean}
+   */
+  function isOwnProfile(user) {
+    if (location.pathname === '/profile') return true;
+    const match = /^\/users\/(\d+)$/.exec(location.pathname);
+    return match !== null && Number(match[1]) === user.id;
+  }
+
+  /**
+   * Adds "Favorite Pages: N" under Favorite Groups in the statistics table.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
+   */
+  async function initProfileRow(user) {
+    if (!isOwnProfile(user)) return;
+    const table = document.querySelector('table.user-statistics');
+    if (!table) {
+      console.warn(LOG_PREFIX, 'profile statistics table not found');
+      return;
+    }
+    let row = table.querySelector('tr.pfp-profile-row');
+    if (!row) {
+      const labelled = (label) => [...table.querySelectorAll('tr')].find(
+          (tr) => tr.querySelector('th')?.textContent.trim() === label);
+      const anchor = labelled('Favorite Groups') || labelled('Favorites');
+      row = makeElement('tr', {className: 'pfp-profile-row'}, [
+        makeElement('th', {text: 'Favorite Pages'}),
+        makeElement('td', {}, [
+          makeElement('a', {href: LIST_PATH, text: '…'}),
+        ]),
+      ]);
+      if (anchor) {
+        anchor.after(row);
+      } else {
+        console.warn(LOG_PREFIX, 'Favorite Groups row not found');
+        (table.tBodies[0] || table).appendChild(row);
+      }
+    }
+    const link = row.querySelector('a');
+    const update = async () => {
+      try {
+        link.textContent = String(await countPages(user.id));
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+      }
+    };
+    stateRefreshers.add(update);
+    await update();
+  }
+
+  // ==========================================================================
+  // === Keyboard shortcuts page (Resolved 56) ================================
+  // ==========================================================================
+
+  /**
+   * @param {{code: string, shiftKey: boolean}} hotkey
+   * @return {!Array<!Node|string>} The keys in Danbooru's own markup:
+   *     <kbd class="key">shift</kbd>+<kbd class="key">b</kbd>.
+   */
+  function hotkeyKeys(hotkey) {
+    const kbd = (text) => makeElement('kbd', {className: 'key', text});
+    const key = kbd(hotkey.code.replace(/^(?:Key|Digit)/, '').toLowerCase());
+    return hotkey.shiftKey ? [kbd('shift'), '+', key] : [key];
+  }
+
+  /**
+   * Danbooru's keyboard shortcuts get a "Favorite Pages" box after
+   * "Favorite Groups", built like the boxes around it, with the keys as
+   * they are set now: on the page itself (/static/keyboard_shortcuts), and
+   * in the window the ? key opens over any page, which Danbooru fills
+   * from that page's HTML into a jQuery UI dialog appended to <body>
+   * (shortcuts.js, Shortcuts.keyboard_shortcuts). The list page's q is
+   * left out: it is Danbooru's own "Focus search box", which the list's
+   * filter answers.
+   */
+  function initShortcutsHelp() {
+    if (location.pathname === SHORTCUTS_PATH) addShortcutsBox(document);
+    new MutationObserver((records) => {
+      for (const {addedNodes} of records) {
+        for (const node of addedNodes) {
+          if (node instanceof Element && node.classList.contains('ui-dialog')) {
+            addShortcutsBox(node);
+          }
+        }
+      }
+    }).observe(document.body, {childList: true});
+  }
+
+  /**
+   * @param {!Document|!Element} root The shortcuts page, or the ? window.
+   * @return {!Promise<void>}
+   */
+  async function addShortcutsBox(root) {
+    const heading = [...root.querySelectorAll('h2')].find(
+        (node) => node.textContent.trim() === 'Favorite Groups');
+    // Any other dialog: not the shortcuts.
+    if (!heading || !heading.parentElement) return;
+    await settingsReady;
+    if (root.querySelector(`.${SHORTCUTS_SECTION_CLASS}`)) return;
+    const item = (hotkey, text) =>
+      makeElement('li', {}, [...hotkeyKeys(hotkey), ` ${text}`]);
+    heading.parentElement.after(makeElement('div', {
+      className: SHORTCUTS_SECTION_CLASS,
+    }, [
+      makeElement('h2', {text: 'Favorite Pages'}),
+      makeElement('ul', {className: 'space-y-2'}, [
+        item(settings.hotkeySave, 'Save this page (or edit it)'),
+        item(settings.hotkeyList, 'Open the Favorite Pages panel'),
+        item(EXPORT_HOTKEY, 'Export (list page)'),
+        item(IMPORT_HOTKEY, 'Import (list page)'),
+      ]),
+    ]));
+  }
+
+  // ==========================================================================
+  // === Site map link (PLAN D9-E) ============================================
+  // ==========================================================================
+
+  /**
+   * Lists the page in the site map's Profile section (/static/site_map, the
+   * navbar's "More »"), right under "Favorite groups" (Resolved 21).
+   */
+  function initSiteMapLink() {
+    if (location.pathname !== '/static/site_map') return;
+    if (document.querySelector('.pfp-sitemap-link')) return;
+    const heading = [...document.querySelectorAll('ul > li > h2')]
+        .find((h2) => h2.textContent.trim() === 'Profile');
+    const list = heading && heading.closest('ul');
+    if (!list) {
+      console.warn(LOG_PREFIX, 'site map Profile section not found');
+      return;
+    }
+    const item = makeElement('li', {className: 'pfp-sitemap-link'}, [
+      makeElement('a', {href: LIST_PATH, text: 'Favorite pages'}),
+    ]);
+    const groups = list.querySelector('a[href="/favorite_groups"]');
+    if (groups) {
+      groups.closest('li').after(item);
+    } else {
+      console.warn(LOG_PREFIX, 'site map "Favorite groups" link not found');
+      list.appendChild(item);
+    }
+  }
+
+  // ==========================================================================
+  // === Navbar item (PLAN D9-B) ==============================================
+  // ==========================================================================
+
+  /**
+   * Shows on the save button whether the page is saved: a filled bookmark
+   * and an edit label once it is, the reason when the page cannot be saved.
+   * The click still runs, so touch users see the reason too.
+   * @param {!HTMLElement} button
+   * @param {boolean} saved
+   * @param {?string} blockedReason A REJECT_MESSAGES key.
+   */
+  function showSavedState(button, saved, blockedReason) {
+    const label = blockedReason ? REJECT_MESSAGES[blockedReason] :
+        saved ? 'Edit this page in Favorite Pages' :
+        'Save this page to Favorite Pages';
+    button.classList.toggle('pfp-saved', saved);
+    button.classList.toggle('pfp-blocked', blockedReason !== null);
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  }
+
+  /**
+   * Keeps the save button in step with the list: now, and after every
+   * save, removal or bfcache restore.
+   * @param {{id: number}} user
+   * @param {!HTMLElement} button
+   */
+  function trackCurrentPage(user, button) {
+    const update = async () => {
+      const checked = checkCurrentPage();
+      let saved = false;
+      if (checked.ok) {
+        try {
+          saved = (await findSavedPage(user.id, checked.url)) !== null;
+        } catch (err) {
+          console.error(LOG_PREFIX, err);
+        }
+      }
+      showSavedState(button, saved, checked.ok ? null : checked.reason);
+    };
+    stateRefreshers.add(update);
+    update();
+  }
+
+  /**
+   * Wires the navbar save button: a click opens the dialog; a mouse
+   * double-click (the dialog waits DOUBLE_CLICK_MS to tell) or a touch held
+   * for LONG_PRESS_MS saves at once (Resolved 47). Taps, pens and the
+   * keyboard open the dialog immediately.
+   * @param {!HTMLElement} button
+   */
+  function addQuickSave(button) {
+    let clickTimer = 0;
+    let holdTimer = 0;
+    let pointerType = '';
+    let held = false;
+    let start = null;
+    let flashTimer = 0;
+    const stopHold = () => {
+      clearTimeout(holdTimer);
+      holdTimer = 0;
+      button.classList.remove('pfp-pressing');
+      start = null;
+    };
+    // Firefox on Android ignores navigator.vibrate (turned off there since
+    // 2020), so a flash on the button is what tells the finger it saved.
+    const quickSave = async () => {
+      if (!await quickSaveCurrentPage()) return;
+      clearTimeout(flashTimer);
+      button.classList.add('pfp-quick-saved');
+      flashTimer = setTimeout(
+          () => button.classList.remove('pfp-quick-saved'), QUICK_SAVED_MS);
+    };
+    button.style.setProperty('--pfp-hold-ms', `${LONG_PRESS_MS}ms`);
+    button.addEventListener('pointerdown', (event) => {
+      pointerType = event.pointerType;
+      held = false;
+      if (event.pointerType !== 'touch') return;
+      stopHold();
+      start = {x: event.clientX, y: event.clientY};
+      button.classList.add('pfp-pressing');
+      holdTimer = setTimeout(() => {
+        stopHold();
+        held = true;
+        if (navigator.vibrate) navigator.vibrate(30);
+        quickSave();
+      }, LONG_PRESS_MS);
+    });
+    button.addEventListener('pointermove', (event) => {
+      // A finger that wandered off is scrolling, not holding.
+      if (start && Math.hypot(
+          event.clientX - start.x, event.clientY - start.y) > SWIPE_START_PX) {
+        stopHold();
+      }
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+      button.addEventListener(type, stopHold);
+    }
+    // A long touch makes the browser offer its context menu.
+    button.addEventListener('contextmenu', (event) => {
+      if (pointerType === 'touch') event.preventDefault();
+    });
+    button.addEventListener('click', (event) => {
+      if (held) {
+        // The release after a quick save is not a tap.
+        held = false;
+        return;
+      }
+      // Keyboard clicks have detail 0 and no pointer type worth waiting on.
+      if (pointerType !== 'mouse' || event.detail === 0) {
+        saveCurrentPage();
+        return;
+      }
+      if (clickTimer) {
+        clearTimeout(clickTimer);
+        clickTimer = 0;
+        quickSave();
+        return;
+      }
+      clickTimer = setTimeout(() => {
+        clickTimer = 0;
+        saveCurrentPage();
+      }, DOUBLE_CLICK_MS);
+    });
+  }
+
+  /**
+   * The Favorite Pages items in Danbooru's main menu, right after "More »":
+   * a button that saves the page being viewed, a button that opens the
+   * quick list, and the link to the list page. On a desktop they sit in
+   * that order; the phone menu puts the panel button at the row's right end
+   * and slides the list in from the right (Resolved 38, 39). The phone menu
+   * shows the same #main-menu, so this one insertion covers both
+   * (Resolved 13).
+   * @param {{id: number}} user
+   */
+  function initNavItem(user) {
+    if (document.getElementById(NAV_LINK_ID)) return;
+    const menu = document.getElementById('main-menu');
+    if (!menu) {
+      console.warn(LOG_PREFIX, 'navbar #main-menu not found');
+      return;
+    }
+    const onList = location.pathname === LIST_PATH;
+    const link = makeElement('a', {
+      id: NAV_LINK_ID,
+      // Danbooru's nav_link_to classes; "current font-bold" marks the page
+      // being viewed.
+      className: onList ? 'py-1.5 px-3 current font-bold' : 'py-1.5 px-3',
+      href: LIST_PATH,
+      text: 'Favorite Pages',
+    });
+    // The list itself cannot be saved, so it gets no button.
+    const button = onList ? null : makeElement('button', {
+      type: 'button',
+      id: NAV_SAVE_ID,
+      className: 'pfp-nav-button pfp-nav-save',
+    }, [makeIcon('bookmark')]);
+    if (button) addQuickSave(button);
+    // How the panel button was pressed: a tap leaves the filter unfocused,
+    // so the on-screen keyboard does not cover half the panel.
+    let panelPointer = '';
+    const panelButton = makeElement('button', {
+      'type': 'button',
+      'id': NAV_PANEL_ID,
+      'className': 'pfp-nav-button pfp-nav-panel',
+      'title': 'Open the Favorite Pages panel',
+      'aria-label': 'Open the Favorite Pages panel',
+      'aria-haspopup': 'dialog',
+      'onpointerdown': (event) => {
+        panelPointer = event.pointerType;
+      },
+      'onclick': () => {
+        // In the phone menu it slides in from the right; on a desktop it is
+        // the same popover as the hotkey's.
+        openPopover({
+          drawer: isMobileLayout(),
+          focusFilter: panelPointer !== 'touch',
+        });
+        panelPointer = '';
+      },
+    }, [makeIcon('list')]);
+    settingsReady.then(() => {
+      panelButton.title = 'Open the Favorite Pages panel ' +
+          `(${formatHotkey(settings.hotkeyList)})`;
+    });
+    // Desktop: save, panel, link (Resolved 38, 39). The phone menu moves the
+    // panel button to the row's right end with CSS order.
+    const item = makeElement('span', {className: 'pfp-nav-item'},
+        [button, panelButton, link]);
+    const more = document.getElementById('nav-more');
+    if (more) {
+      more.after(item);
+      // Danbooru marks "More »" as current on every static page, and the
+      // list is drawn over its static 404 page.
+      if (onList) more.classList.remove('current', 'font-bold');
+    } else {
+      console.warn(LOG_PREFIX, 'navbar "More »" not found');
+      menu.appendChild(item);
+    }
+    if (button) trackCurrentPage(user, button);
+  }
+
+  // ==========================================================================
+  // === Message menu item (PLAN D9-C) ========================================
+  // ==========================================================================
+  // Forum posts and comments each have a "…" menu (Danbooru's
+  // PopupMenuComponent: div.popup-menu > a.popup-menu-button +
+  // ul.popup-menu-content). Its tippy, delegated from <body>, takes that very
+  // <ul> as its content when the menu first opens and keeps it from then on,
+  // so an item added to the <ul> before then is part of the menu. Adding it
+  // as the button is pressed also covers messages that arrive or get
+  // re-rendered later (Show more comments, votes, edits) without watching
+  // the DOM (Resolved 13).
+
+  /** The "…" button of a forum post's or a comment's menu. */
+  const MESSAGE_MENU_BUTTON = 'article.forum-post a.popup-menu-button, ' +
+      'article.comment a.popup-menu-button';
+  const MESSAGE_SAVE_LABEL = 'Save to Favorite Pages';
+  const MESSAGE_EDIT_LABEL = 'Edit in Favorite Pages';
+  /** Length of the message text put in a new entry's memo (Resolved 35). */
+  const EXCERPT_MAX = 100;
+  /** Block-level DText output, kept apart by a space in an excerpt. */
+  const EXCERPT_BLOCKS =
+      'p, div, li, tr, pre, h1, h2, h3, h4, h5, h6, details, summary';
+
+  /**
+   * Our item in each "…" menu that has one, by the menu (div.popup-menu).
+   * @type {!WeakMap<!Element, {link: !HTMLElement, url: string}>}
+   */
+  const messageMenuItems = new WeakMap();
+
+  /**
+   * What a "…" menu's message is saved as (PLAN D9-C-2, Resolved 35): the
+   * URL Danbooru's Copy Link gives, which leads to that one message, a
+   * title saying where it was written and by whom, and the start of its
+   * text as the memo.
+   * @param {!Element} article article.forum-post or article.comment.
+   * @return {?{path: string, title: string, memo: string, copyLink: string}}
+   */
+  function describeMessage(article) {
+    const pageTitle = document.title.replace(TITLE_SUFFIX_PATTERN, '').trim();
+    let match = /^forum_post_(\d+)$/.exec(article.id);
+    if (match && article.matches('.forum-post')) {
+      // Forum posts are only shown on their topic's page, titled after it.
+      const topic = FORUM_TOPIC_PATTERN.test(location.pathname) && pageTitle;
+      return {
+        path: `/forum_posts/${match[1]}`,
+        title: messageTitle(topic || `forum #${match[1]}`, article),
+        memo: messageExcerpt(article),
+        copyLink: 'a.forum-post-copy-link',
+      };
+    }
+    match = /^comment_(\d+)$/.exec(article.id);
+    if (match && article.matches('.comment')) {
+      const postId = article.dataset.postId;
+      // On the post's own page its title (tags and artist); elsewhere, as
+      // in /comments, its number.
+      const post = postId &&
+          (location.pathname === `/posts/${postId}` && pageTitle ||
+           `post #${postId}`);
+      return {
+        path: `/comments/${match[1]}`,
+        title: messageTitle(post || `comment #${match[1]}`, article),
+        memo: messageExcerpt(article),
+        copyLink: 'a.comment-copy-link',
+      };
+    }
+    return null;
+  }
+
+  /**
+   * "<where> — <author>'s comment". A long context gives way so the author
+   * always shows.
+   * @param {string} context The topic, post or message it belongs to.
+   * @param {!Element} article
+   * @return {string}
+   */
+  function messageTitle(context, article) {
+    const author = article.querySelector('.author-name a.user');
+    const name = author ? author.textContent.trim() : '';
+    if (!name) return clampText(context, TITLE_MAX);
+    const suffix = ` — ${name}'s comment`;
+    return clampText(context, TITLE_MAX - suffix.length) + suffix;
+  }
+
+  /**
+   * The start of a message's own words, on one line: quotes of earlier
+   * messages are left out and spoilers stay hidden (Resolved 35).
+   * @param {!Element} article
+   * @return {string}
+   */
+  function messageExcerpt(article) {
+    const body = article.querySelector(':scope > .content > .prose');
+    if (!body) return '';
+    // Copied into an inert document, where embedded images do not load.
+    const copy = document.implementation.createHTMLDocument('')
+        .importNode(body, true);
+    for (const quote of copy.querySelectorAll('blockquote')) quote.remove();
+    for (const spoiler of copy.querySelectorAll('.spoiler')) {
+      spoiler.replaceWith(' [spoiler] ');
+    }
+    for (const br of copy.querySelectorAll('br')) br.replaceWith(' ');
+    for (const block of copy.querySelectorAll(EXCERPT_BLOCKS)) {
+      block.append(' ');
+    }
+    const chars = Array.from(copy.textContent.replace(/\s+/g, ' ').trim());
+    if (chars.length <= EXCERPT_MAX) return chars.join('');
+    return `${chars.slice(0, EXCERPT_MAX).join('').trimEnd()}…`;
+  }
+
+  /**
+   * Adds "Save to Favorite Pages" under the menu's Copy Link.
+   * @param {!Element} menu div.popup-menu.
+   * @param {!HTMLElement} button Its "…" button.
+   * @return {?{link: !HTMLElement, url: string}}
+   */
+  function addMessageMenuItem(menu, button) {
+    // No list here means tippy already took it: the menu was opened before
+    // this script was ready.
+    const list = menu.querySelector('ul.popup-menu-content');
+    const message = describeMessage(
+        button.closest('article.forum-post, article.comment'));
+    const checked = message && sanitizeUrl(message.path);
+    if (!list || !checked || !checked.ok) return null;
+    const icon = makeIcon('bookmark');
+    // Danbooru's own menu icon classes size it like the icons around it.
+    icon.classList.add('icon', 'svg-icon');
+    const link = makeElement('a', {
+      href: '#',
+      role: 'button',
+      className: 'pfp-message-save',
+      onclick: (event) => {
+        event.preventDefault();
+        // The dialog hands focus back to what had it when it opened; the
+        // item itself leaves the page as Danbooru closes the menu.
+        button.focus({preventScroll: true});
+        openSaveDialog(
+            {url: checked.url, title: message.title, memo: message.memo});
+      },
+      onkeydown: (event) => {
+        if (event.key !== ' ') return;
+        event.preventDefault();
+        event.currentTarget.click();
+      },
+    }, [icon, ' ', makeElement('span', {text: MESSAGE_SAVE_LABEL})]);
+    const item =
+        makeElement('li', {className: 'pfp-message-menu-item'}, [link]);
+    const copyLink = list.querySelector(message.copyLink);
+    if (copyLink) {
+      copyLink.closest('li').after(item);
+    } else {
+      console.warn(LOG_PREFIX, 'menu "Copy Link" item not found');
+      list.appendChild(item);
+    }
+    return {link, url: checked.url};
+  }
+
+  /**
+   * Shows on the item whether its message is saved.
+   * @param {{id: number}} user
+   * @param {{link: !HTMLElement, url: string}} entry
+   * @return {!Promise<void>}
+   */
+  async function refreshMessageMenuItem(user, {link, url}) {
+    let saved = false;
+    try {
+      saved = (await getPageByUrl(user.id, url)) !== null;
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+    }
+    link.classList.toggle('pfp-saved', saved);
+    link.lastChild.textContent =
+        saved ? MESSAGE_EDIT_LABEL : MESSAGE_SAVE_LABEL;
+  }
+
+  /**
+   * Adds the item to a message's "…" menu as it is being opened, or brings
+   * the label of the one already there up to date.
+   * @param {{id: number}} user
+   * @param {!Event} event
+   */
+  function onMessageMenuPress(user, event) {
+    const button = event.target instanceof Element ?
+        event.target.closest(MESSAGE_MENU_BUTTON) : null;
+    const menu = button && button.closest('.popup-menu');
+    if (!menu) return;
+    let entry = messageMenuItems.get(menu);
+    if (!entry) {
+      entry = addMessageMenuItem(menu, button);
+      if (!entry) return;
+      messageMenuItems.set(menu, entry);
+    }
+    refreshMessageMenuItem(user, entry);
+  }
+
+  /** @param {{id: number}} user */
+  function initMessageMenus(user) {
+    const onPress = (event) => onMessageMenuPress(user, event);
+    // Capture phase on the document runs ahead of tippy's listeners on
+    // <body>: pointerdown for mouse and touch hold, click for Enter on a
+    // focused "…" button.
+    document.addEventListener('pointerdown', onPress, true);
+    document.addEventListener('click', onPress, true);
+  }
+
+  /**
+   * Sets the list page's tab title the moment the parser creates <title>,
+   * instead of at DOMContentLoaded, so "Page not found" never shows in the
+   * tab. Gives up once the document has loaded.
+   */
+  function retitleListPage() {
+    const title = 'Favorite Pages | Danbooru';
+    const apply = () => {
+      if (document.title === title) return document.readyState !== 'loading';
+      if (document.querySelector('title')) document.title = title;
+      return false;
+    };
+    if (apply()) return;
+    const observer = new MutationObserver(() => {
+      if (apply()) observer.disconnect();
+    });
+    observer.observe(document, {childList: true, subtree: true});
+    document.addEventListener('DOMContentLoaded', () => {
+      apply();
+      observer.disconnect();
+    }, {once: true});
+  }
+
+  // ==========================================================================
+  // === Aliased wiki pages (Resolved 49, 51) =================================
+  // ==========================================================================
+  // When a tag is aliased, Danbooru moves its wiki to the new tag but does
+  // not redirect the old address, which then reads "This wiki page does not
+  // exist." (wiki_pages/show, tag_relationships/_alias_and_implication_list).
+  // A saved entry for the old address moves on to the new tag's wiki: when
+  // the old page is opened, and in the list page's daily check.
+
+  /**
+   * @param {string} url A sanitized URL.
+   * @return {string} The tag a wiki page is about, as Danbooru writes tag
+   *     names (lower case, underscores); empty for other pages.
+   */
+  function wikiTagOf(url) {
+    const match = WIKI_PAGE_PATTERN.exec(new URL(url).pathname);
+    if (!match) return '';
+    try {
+      return decodeURIComponent(match[1]).trim().toLowerCase()
+          .replace(/\s+/g, '_');
+    } catch (err) {
+      return '';
+    }
+  }
+
+  /**
+   * A wiki page's suggested title, as Danbooru titles the page: the tag's
+   * words, capitalized, then "Wiki" (wiki_pages/show).
+   * @param {string} tag e.g. avoiding_eye_contact
+   * @return {string} e.g. Avoiding Eye Contact Wiki
+   */
+  function wikiTitleFor(tag) {
+    const words = tag.replace(/_/g, ' ').replace(/(^|\s)(\S)/g,
+        (_, space, first) => space + first.toUpperCase());
+    return clampText(`${words} Wiki`, TITLE_MAX);
+  }
+
+  /**
+   * Moves a saved wiki page on to the tag its tag was aliased to. A title
+   * that was the suggested one follows the new name; one the user wrote
+   * stays, as does the memo.
+   * @param {number} userId
+   * @param {!Object} saved The saved entry for the old tag's wiki.
+   * @param {string} oldTag
+   * @param {string} newTag
+   * @return {!Promise<boolean>} False when the new tag's wiki is saved
+   *     already: then both are left as they are.
+   */
+  async function moveAliasedWiki(userId, saved, oldTag, newTag) {
+    const target =
+        sanitizeUrl(`${WIKI_PAGE_PATH}${encodeURIComponent(newTag)}`);
+    if (!target.ok || await getPageByUrl(userId, target.url)) return false;
+    const changes = {url: target.url};
+    if (saved.title.toLowerCase() === wikiTitleFor(oldTag).toLowerCase()) {
+      changes.title = wikiTitleFor(newTag);
+    }
+    await updatePage(userId, saved.id, changes);
+    return true;
+  }
+
+  /**
+   * On an old tag's wiki page, the notice under "This wiki page does not
+   * exist." names the new tag: a saved entry for this page moves there.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
+   */
+  async function updateAliasedWiki(user) {
+    const {controller, action} = document.body.dataset;
+    if (controller !== 'wiki-pages' || action !== 'show') return;
+    const notice = [
+      ...document.querySelectorAll('#wiki-page-body > p.fineprint'),
+    ].find((p) => p.textContent.trim().startsWith(ALIAS_NOTICE));
+    const link = notice && notice.querySelector('a.wiki-link');
+    const newTag = link ? link.textContent.trim() : '';
+    const here = sanitizeUrl(location.href);
+    const oldTag = here.ok ? wikiTagOf(here.url) : '';
+    if (!newTag || !oldTag || newTag === oldTag) return;
+    try {
+      const saved = await getPageByUrl(user.id, here.url);
+      if (!saved) return;
+      if (await moveAliasedWiki(user.id, saved, oldTag, newTag)) {
+        showToast(`Favorite Pages: moved to ${newTag}, the tag this one ` +
+            'was aliased to.', {long: true});
+        notifyPagesChanged();
+      } else {
+        showToast(`This tag was aliased to ${newTag}, which is already ` +
+            'in Favorite Pages.', {long: true});
+      }
+    } catch (err) {
+      console.error(LOG_PREFIX, err);
+      showToast(describeError(err), {error: true});
+    }
+  }
+
+  /**
+   * Once a day the list page asks Danbooru which saved wiki pages are about
+   * tags aliased since, and moves those entries on, so they need not be
+   * opened one by one (Resolved 51). A few hundred tags go in one request,
+   * and none at all when nothing saved is a wiki page. It runs in the
+   * background; a failed check is tried again the next time the list opens.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
+   */
+  async function checkWikiAliases(user) {
+    let last;
+    try {
+      // Claimed before asking, so a second tab opening the list meanwhile
+      // does not check too (and report the moves as "saved already").
+      last = await claimAliasCheck(user.id, Date.now());
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'wiki alias check unavailable', err);
+      return;
+    }
+    if (last === null) return;
+    try {
+      /** @type {!Map<string, !Array<!Object>>} Saved entries by tag. */
+      const wikis = new Map();
+      for (const page of await listPages(user.id)) {
+        const tag = wikiTagOf(page.url);
+        if (tag) wikis.set(tag, [...(wikis.get(tag) || []), page]);
+      }
+      const aliases = wikis.size ? await fetchAliases([...wikis.keys()]) :
+          new Map();
+      const moved = [];
+      const kept = [];
+      for (const [oldTag, newTag] of aliases) {
+        for (const page of wikis.get(oldTag) || []) {
+          const done = await moveAliasedWiki(user.id, page, oldTag, newTag);
+          (done ? moved : kept).push(`${oldTag} → ${newTag}`);
+        }
+      }
+      if (moved.length) notifyPagesChanged();
+      const message = [
+        moved.length ? `Moved ${countOf(moved.length, 'wiki page')} to ` +
+            `the tags they were aliased to: ${listSome(moved)}.` : '',
+        kept.length ? `Aliased, but the new tag is saved already: ` +
+            `${listSome(kept)}.` : '',
+      ].filter(Boolean).join(' ');
+      if (message) showToast(message, {long: true});
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'wiki alias check failed', err);
+      // Try again the next time the list opens.
+      restoreAliasCheckTime(user.id, last).catch(() => {});
+    }
+  }
+
+  /**
+   * Asks /tag_aliases.json which of `tags` are aliased (active aliases
+   * only). Tag names cannot hold spaces, so they go space-separated.
+   * @param {!Array<string>} tags
+   * @return {!Promise<!Map<string, string>>} Old tag to new tag.
+   */
+  async function fetchAliases(tags) {
+    const batches = [];
+    let size = 0;
+    for (const tag of tags) {
+      const cost = encodeURIComponent(tag).length + 1;
+      const batch = batches[batches.length - 1];
+      if (batch && size + cost <= ALIAS_QUERY_MAX_CHARS &&
+          batch.length < ALIAS_QUERY_LIMIT) {
+        batch.push(tag);
+        size += cost;
+      } else {
+        batches.push([tag]);
+        size = cost;
+      }
+    }
+    const aliases = new Map();
+    for (const batch of batches) {
+      const params = new URLSearchParams({
+        'search[antecedent_name_space]': batch.join(' '),
+        'search[status]': 'active',
+        'only': 'antecedent_name,consequent_name',
+        'limit': String(ALIAS_QUERY_LIMIT),
+      });
+      const response = await fetch(`/tag_aliases.json?${params}`, {
+        credentials: 'same-origin',
+        headers: {Accept: 'application/json'},
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rows = await response.json();
+      if (!Array.isArray(rows)) throw new Error('unexpected response');
+      for (const {antecedent_name: from, consequent_name: to} of rows) {
+        if (typeof from === 'string' && typeof to === 'string' &&
+            to && from !== to) {
+          aliases.set(from, to);
+        }
+      }
+    }
+    return aliases;
+  }
+
+  /**
+   * @param {number} n
+   * @param {string} noun Singular.
+   * @return {string} e.g. "1 wiki page", "2 wiki pages".
+   */
+  function countOf(n, noun) {
+    return `${n} ${n === 1 ? noun : `${noun}s`}`;
+  }
+
+  /**
+   * @param {!Array<string>} items
+   * @return {string} The first three, then how many more.
+   */
+  function listSome(items) {
+    const shown = items.slice(0, 3).join(', ');
+    return items.length > 3 ? `${shown} and ${items.length - 3} more` : shown;
+  }
+
+  // ==========================================================================
+  // === Latest forum page and report end (Resolved 34, 48) ===================
+  // ==========================================================================
+
+  /**
+   * Moves a topic opened as ?page=last on to its newest page. Runs at
+   * document-start: the topic's post count comes from a small JSON request
+   * while Danbooru's page 1 is still loading, and the page number follows
+   * Danbooru's own "page N" link (ForumTopic#last_page). Wherever the link
+   * was opened from (list, popover, new tab), this is where it lands.
+   */
+  function openLatestForumPage() {
+    const match = FORUM_TOPIC_PATTERN.exec(location.pathname);
+    if (!match || !isLatest(location.href)) return;
+    injectStyles(LATEST_CLOAK_ID, LATEST_CLOAK_CSS);
+    const here = new URL(location.href);
+    const limit = here.searchParams.get('limit');
+    const perPage = limit ?
+        Math.min(Math.max(parseInt(limit, 10) || 0, 1), FORUM_LIMIT_MAX) :
+        FORUM_POSTS_PER_PAGE;
+    const uncloak = () => document.getElementById(LATEST_CLOAK_ID)?.remove();
+    // Page 1 is what Danbooru is showing already: only the address changes.
+    const stay = () => {
+      here.searchParams.delete('page');
+      history.replaceState(history.state, '', here.href);
+      uncloak();
+      // Without <html> yet, injectStyles adds the cloak only once it
+      // appears; this catches that late one too.
+      document.addEventListener('DOMContentLoaded', uncloak, {once: true});
+    };
+    fetch(`/forum_topics/${match[1]}.json?only=response_count`, {
+      credentials: 'same-origin',
+      headers: {Accept: 'application/json'},
+    }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    }).then(({response_count: count}) => {
+      if (!Number.isFinite(count)) throw new Error('no response_count');
+      const page = Math.max(Math.ceil(count / perPage), 1);
+      if (page === 1) {
+        stay();
+        return;
+      }
+      here.searchParams.set('page', String(page));
+      location.replace(here.href);
+    }).catch((err) => {
+      console.warn(LOG_PREFIX, 'latest forum page unavailable', err);
+      stay();
+      const report = () => showToast(
+          'Could not find the latest page; showing page 1.', {error: true});
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', report, {once: true});
+      } else {
+        report();
+      }
+    });
+  }
+
+  /**
+   * Moves a report opened with search[to]=latest on to tomorrow's end date
+   * (Resolved 48). The script's own links already carry the date
+   * (openableUrl); this catches the address typed, pasted or opened from
+   * elsewhere. No lookup is needed, so it moves at once.
+   */
+  function openLatestReport() {
+    if (!isReportUrl(location.href) || !isLatest(location.href)) return;
+    location.replace(openableUrl(location.href));
+  }
+
+  // ==========================================================================
+  // === Lifecycle (PLAN D11, Resolved 16) ====================================
+  // ==========================================================================
+  // Danbooru has no Turbo: every navigation is a full page load, so init()
+  // runs once per page. Back/forward can restore a page from the bfcache with
+  // its DOM as it was left; the hooks below re-sync it.
+
+  /** UI that shows saved state registers here to be re-read on restore. */
+  const stateRefreshers = new Set();
+  /** Transient UI (dialogs, popovers, toasts) registers its close here. */
+  const overlayClosers = new Set();
+
+  /** @param {!Set<function()>} callbacks */
+  function runAll(callbacks) {
+    for (const callback of callbacks) {
+      try {
+        callback();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+      }
+    }
+  }
+
+  /** Re-syncs every saved-state indicator after the list changed. */
+  function notifyPagesChanged() {
+    runAll(stateRefreshers);
+  }
+
+  function init() {
+    overlayClosers.add(closeSaveDialog);
+    overlayClosers.add(closePopover);
+    overlayClosers.add(hideToast);
+    // Registered on JSON documents too, so the save key can explain why it
+    // does nothing there.
+    document.addEventListener('keydown', onGlobalKeydown);
+    settingsReady = loadSettings();
+    if (!isHtmlDocument()) return;
+    ensureStyles();
+    const user = getCurrentUser();
+    // The list page also answers logged-out visitors (with a message).
+    if (location.pathname === LIST_PATH) initListPage(user);
+    if (!user) return;
+    initNavItem(user);
+    initMessageMenus(user);
+    initProfileRow(user);
+    initSiteMapLink();
+    initShortcutsHelp();
+    updateAliasedWiki(user);
+  }
+
+  // Close overlays before the page goes into the bfcache, and re-read saved
+  // state when it comes back (another page may have changed the list).
+  window.addEventListener('pagehide', () => runAll(overlayClosers));
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    runAll(overlayClosers);
+    runAll(stateRefreshers);
+  });
+
+  // The script runs at document-start so the list page can hide Danbooru's
+  // 404 content before it is ever painted (Resolved 25); everything else
+  // waits for the parsed document.
+  if (location.pathname === LIST_PATH) {
+    injectStyles(LIST_CLOAK_ID, LIST_CLOAK_CSS);
+    retitleListPage();
+  }
+  openLatestForumPage();
+  openLatestReport();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, {once: true});
+  } else {
+    init();
+  }
+})();
