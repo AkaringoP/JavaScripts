@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.8.0
+// @version      0.9.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -154,6 +154,14 @@
   const WIKI_PAGE_PATH = '/wiki_pages/';
   const WIKI_PAGE_PATTERN = /^\/wiki_pages\/([^/]+)$/;
   const ALIAS_NOTICE = 'This tag has been aliased to';
+  // The list page's daily check of all saved wiki pages (Resolved 51): at
+  // most once a day per browser and account, through /tag_aliases.json.
+  // Tags go in batches that keep the address well under the usual 8KB
+  // request-line limits, and no more than one response page can hold.
+  const ALIAS_CHECK_KEY = 'aliasCheckedAt';
+  const ALIAS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const ALIAS_QUERY_MAX_CHARS = 4000;
+  const ALIAS_QUERY_LIMIT = 1000;
 
   // Characters that must stay percent-encoded when a URL part is shown
   // decoded, because they would change how the text parses back.
@@ -1901,6 +1909,29 @@
       await requestToPromise(store.put({key: SETTINGS_KEY, value}));
       return value;
     });
+  }
+
+  /**
+   * When this browser last checked the account's saved wiki pages for
+   * aliased tags (Resolved 51). A row of its own in the settings store, so
+   * it never mixes with the settings or travels in an export.
+   * @param {number} userId
+   * @return {!Promise<number>} 0 if never.
+   */
+  async function getAliasCheckTime(userId) {
+    const row = await withStore(STORE_SETTINGS, 'readonly', (store) =>
+      requestToPromise(store.get(`${ALIAS_CHECK_KEY}:${userId}`)));
+    return row ? row.value : 0;
+  }
+
+  /**
+   * @param {number} userId
+   * @param {number} time
+   * @return {!Promise<void>}
+   */
+  async function setAliasCheckTime(userId, time) {
+    await withStore(STORE_SETTINGS, 'readwrite', (store) => requestToPromise(
+        store.put({key: `${ALIAS_CHECK_KEY}:${userId}`, value: time})));
   }
 
   // ==========================================================================
@@ -3687,6 +3718,7 @@
       window.addEventListener('popstate', view.showPageFromUrl);
       purgeTombstones(user.id).catch(
           (err) => console.warn(LOG_PREFIX, 'tombstone purge failed', err));
+      checkWikiAliases(user);
       await view.reload();
     } finally {
       // Lifts LIST_CLOAK_CSS once the list (or a message) is in place.
@@ -5232,51 +5264,93 @@
   }
 
   // ==========================================================================
-  // === Aliased wiki pages (Resolved 49) =====================================
+  // === Aliased wiki pages (Resolved 49, 51) =================================
   // ==========================================================================
+  // When a tag is aliased, Danbooru moves its wiki to the new tag but does
+  // not redirect the old address, which then reads "This wiki page does not
+  // exist." (wiki_pages/show, tag_relationships/_alias_and_implication_list).
+  // A saved entry for the old address moves on to the new tag's wiki: when
+  // the old page is opened, and in the list page's daily check.
 
   /**
-   * When a tag is aliased, Danbooru moves its wiki to the new tag but does
-   * not redirect the old address, which then reads "This wiki page does not
-   * exist." (wiki_pages/show, tag_relationships/_alias_and_implication_list).
-   * The notice there names the new tag, so a saved entry for the old
-   * address moves on to the new tag's wiki when it is opened. A title that
-   * was the page's own suggested one follows the new name; one the user
-   * wrote stays.
+   * @param {string} url A sanitized URL.
+   * @return {string} The tag a wiki page is about, as Danbooru writes tag
+   *     names (lower case, underscores); empty for other pages.
+   */
+  function wikiTagOf(url) {
+    const match = WIKI_PAGE_PATTERN.exec(new URL(url).pathname);
+    if (!match) return '';
+    try {
+      return decodeURIComponent(match[1]).trim().toLowerCase()
+          .replace(/\s+/g, '_');
+    } catch (err) {
+      return '';
+    }
+  }
+
+  /**
+   * A wiki page's suggested title, as Danbooru titles the page: the tag's
+   * words, capitalized, then "Wiki" (wiki_pages/show).
+   * @param {string} tag e.g. avoiding_eye_contact
+   * @return {string} e.g. Avoiding Eye Contact Wiki
+   */
+  function wikiTitleFor(tag) {
+    const words = tag.replace(/_/g, ' ').replace(/(^|\s)(\S)/g,
+        (_, space, first) => space + first.toUpperCase());
+    return clampText(`${words} Wiki`, TITLE_MAX);
+  }
+
+  /**
+   * Moves a saved wiki page on to the tag its tag was aliased to. A title
+   * that was the suggested one follows the new name; one the user wrote
+   * stays, as does the memo.
+   * @param {number} userId
+   * @param {!Object} saved The saved entry for the old tag's wiki.
+   * @param {string} oldTag
+   * @param {string} newTag
+   * @return {!Promise<boolean>} False when the new tag's wiki is saved
+   *     already: then both are left as they are.
+   */
+  async function moveAliasedWiki(userId, saved, oldTag, newTag) {
+    const target =
+        sanitizeUrl(`${WIKI_PAGE_PATH}${encodeURIComponent(newTag)}`);
+    if (!target.ok || await getPageByUrl(userId, target.url)) return false;
+    const changes = {url: target.url};
+    if (saved.title.toLowerCase() === wikiTitleFor(oldTag).toLowerCase()) {
+      changes.title = wikiTitleFor(newTag);
+    }
+    await updatePage(userId, saved.id, changes);
+    return true;
+  }
+
+  /**
+   * On an old tag's wiki page, the notice under "This wiki page does not
+   * exist." names the new tag: a saved entry for this page moves there.
    * @param {{id: number}} user
    * @return {!Promise<void>}
    */
   async function updateAliasedWiki(user) {
     const {controller, action} = document.body.dataset;
-    const match = WIKI_PAGE_PATTERN.exec(location.pathname);
-    if (controller !== 'wiki-pages' || action !== 'show' || !match) return;
+    if (controller !== 'wiki-pages' || action !== 'show') return;
     const notice = [
       ...document.querySelectorAll('#wiki-page-body > p.fineprint'),
     ].find((p) => p.textContent.trim().startsWith(ALIAS_NOTICE));
     const link = notice && notice.querySelector('a.wiki-link');
-    const newName = link ? link.textContent.trim() : '';
-    if (!newName) return;
+    const newTag = link ? link.textContent.trim() : '';
     const here = sanitizeUrl(location.href);
-    const target =
-        sanitizeUrl(`${WIKI_PAGE_PATH}${encodeURIComponent(newName)}`);
-    if (!here.ok || !target.ok || here.url === target.url) return;
+    const oldTag = here.ok ? wikiTagOf(here.url) : '';
+    if (!newTag || !oldTag || newTag === oldTag) return;
     try {
       const saved = await getPageByUrl(user.id, here.url);
       if (!saved) return;
-      if (await getPageByUrl(user.id, target.url)) {
-        showToast(`This tag was aliased to ${newName}, which is already ` +
+      if (await moveAliasedWiki(user.id, saved, oldTag, newTag)) {
+        showToast(`Favorite Pages: moved to ${newTag}, the tag this one ` +
+            'was aliased to.', {long: true});
+        notifyPagesChanged();
+      } else {
+        showToast(`This tag was aliased to ${newTag}, which is already ` +
             'in Favorite Pages.', {long: true});
-        return;
       }
-      const changes = {url: target.url};
-      if (saved.title === extractTitle(here.url)) {
-        changes.title = renameTag(saved.title,
-            decodeURIComponent(match[1]), newName);
-      }
-      await updatePage(user.id, saved.id, changes);
-      showToast(`Favorite Pages: moved to ${newName}, the tag this one ` +
-          'was aliased to.', {long: true});
-      notifyPagesChanged();
     } catch (err) {
       console.error(LOG_PREFIX, err);
       showToast(describeError(err), {error: true});
@@ -5284,22 +5358,120 @@
   }
 
   /**
-   * A wiki's suggested title ("Avoiding Eye Contact Wiki") with the tag
-   * swapped for another, written the way Danbooru writes it there: words
-   * apart and capitalized.
-   * @param {string} title
-   * @param {string} oldTag e.g. avoiding_eye_contact
-   * @param {string} newTag
-   * @return {string} `title` unchanged when the old tag is not in it.
+   * Once a day the list page asks Danbooru which saved wiki pages are about
+   * tags aliased since, and moves those entries on, so they need not be
+   * opened one by one (Resolved 51). A few hundred tags go in one request,
+   * and none at all when nothing saved is a wiki page. It runs in the
+   * background; a failed check is tried again the next time the list opens.
+   * @param {{id: number}} user
+   * @return {!Promise<void>}
    */
-  function renameTag(title, oldTag, newTag) {
-    const pretty = (tag) => tag.replace(/_/g, ' ');
-    const start = title.toLowerCase().indexOf(pretty(oldTag).toLowerCase());
-    if (start < 0) return title;
-    const words = pretty(newTag).replace(/(^|\s)(\S)/g,
-        (_, space, first) => space + first.toUpperCase());
-    return clampText(title.slice(0, start) + words +
-        title.slice(start + pretty(oldTag).length), TITLE_MAX);
+  async function checkWikiAliases(user) {
+    let last = 0;
+    try {
+      last = await getAliasCheckTime(user.id);
+      if (Date.now() - last < ALIAS_CHECK_INTERVAL_MS) return;
+      // Claimed before asking, so a second tab opening the list meanwhile
+      // does not check too (and report the moves as "saved already").
+      await setAliasCheckTime(user.id, Date.now());
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'wiki alias check unavailable', err);
+      return;
+    }
+    try {
+      /** @type {!Map<string, !Array<!Object>>} Saved entries by tag. */
+      const wikis = new Map();
+      for (const page of await listPages(user.id)) {
+        const tag = wikiTagOf(page.url);
+        if (tag) wikis.set(tag, [...(wikis.get(tag) || []), page]);
+      }
+      const aliases = wikis.size ? await fetchAliases([...wikis.keys()]) :
+          new Map();
+      const moved = [];
+      const kept = [];
+      for (const [oldTag, newTag] of aliases) {
+        for (const page of wikis.get(oldTag) || []) {
+          const done = await moveAliasedWiki(user.id, page, oldTag, newTag);
+          (done ? moved : kept).push(`${oldTag} → ${newTag}`);
+        }
+      }
+      if (moved.length) notifyPagesChanged();
+      const message = [
+        moved.length ? `Moved ${countOf(moved.length, 'wiki page')} to ` +
+            `the tags they were aliased to: ${listSome(moved)}.` : '',
+        kept.length ? `Aliased, but the new tag is saved already: ` +
+            `${listSome(kept)}.` : '',
+      ].filter(Boolean).join(' ');
+      if (message) showToast(message, {long: true});
+    } catch (err) {
+      console.warn(LOG_PREFIX, 'wiki alias check failed', err);
+      // Try again the next time the list opens.
+      setAliasCheckTime(user.id, last).catch(() => {});
+    }
+  }
+
+  /**
+   * Asks /tag_aliases.json which of `tags` are aliased (active aliases
+   * only). Tag names cannot hold spaces, so they go space-separated.
+   * @param {!Array<string>} tags
+   * @return {!Promise<!Map<string, string>>} Old tag to new tag.
+   */
+  async function fetchAliases(tags) {
+    const batches = [];
+    let size = 0;
+    for (const tag of tags) {
+      const cost = encodeURIComponent(tag).length + 1;
+      const batch = batches[batches.length - 1];
+      if (batch && size + cost <= ALIAS_QUERY_MAX_CHARS &&
+          batch.length < ALIAS_QUERY_LIMIT) {
+        batch.push(tag);
+        size += cost;
+      } else {
+        batches.push([tag]);
+        size = cost;
+      }
+    }
+    const aliases = new Map();
+    for (const batch of batches) {
+      const params = new URLSearchParams({
+        'search[antecedent_name_space]': batch.join(' '),
+        'search[status]': 'active',
+        'only': 'antecedent_name,consequent_name',
+        'limit': String(ALIAS_QUERY_LIMIT),
+      });
+      const response = await fetch(`/tag_aliases.json?${params}`, {
+        credentials: 'same-origin',
+        headers: {Accept: 'application/json'},
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rows = await response.json();
+      if (!Array.isArray(rows)) throw new Error('unexpected response');
+      for (const {antecedent_name: from, consequent_name: to} of rows) {
+        if (typeof from === 'string' && typeof to === 'string' &&
+            to && from !== to) {
+          aliases.set(from, to);
+        }
+      }
+    }
+    return aliases;
+  }
+
+  /**
+   * @param {number} n
+   * @param {string} noun Singular.
+   * @return {string} e.g. "1 wiki page", "2 wiki pages".
+   */
+  function countOf(n, noun) {
+    return `${n} ${n === 1 ? noun : `${noun}s`}`;
+  }
+
+  /**
+   * @param {!Array<string>} items
+   * @return {string} The first three, then how many more.
+   */
+  function listSome(items) {
+    const shown = items.slice(0, 3).join(', ');
+    return items.length > 3 ? `${shown} and ${items.length - 3} more` : shown;
   }
 
   // ==========================================================================
