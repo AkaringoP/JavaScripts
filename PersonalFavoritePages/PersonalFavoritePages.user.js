@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.12.0
+// @version      0.12.1
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -432,6 +432,31 @@
       margin: 0;
       color: var(--muted-text-color);
       font-size: 0.9em;
+    }
+
+    /* Export's storage protection line, apart from the export itself. */
+    .pfp-storage-line {
+      margin: 0;
+      padding-top: var(--pfp-gap);
+      border-top: 1px solid var(--default-border-color);
+      color: var(--muted-text-color);
+      font-size: 0.85em;
+    }
+
+    .pfp-dialog .pfp-link-button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .pfp-dialog .pfp-link-button:hover {
+      background: transparent;
+      color: var(--link-hover-color);
     }
 
     /* Import (D10): a file or pasted text, then the preview. */
@@ -3956,6 +3981,13 @@
   const PAGER_WINDOW = 4;
   /** Focuses the list filter, like Danbooru's own search box key. */
   const FILTER_HOTKEY = Object.freeze({code: 'KeyQ', shiftKey: false});
+  // Export and Import's keys, after their first letters (Resolved 56). New
+  // has none: n is Danbooru's "g then n" (Notes, shortcuts.js).
+  const EXPORT_HOTKEY = Object.freeze({code: 'KeyE', shiftKey: false});
+  const IMPORT_HOTKEY = Object.freeze({code: 'KeyI', shiftKey: false});
+  /** Danbooru's keyboard shortcuts page, and our box on it (or its copy). */
+  const SHORTCUTS_PATH = '/static/keyboard_shortcuts';
+  const SHORTCUTS_SECTION_CLASS = 'pfp-shortcuts';
   /** Distance from the viewport edge that scrolls the page while dragging. */
   const DRAG_EDGE_PX = 48;
   const DRAG_SCROLL_PX = 12;
@@ -4143,13 +4175,19 @@
       root.replaceChildren(view.element);
       stateRefreshers.add(view.reload);
       overlayClosers.add(() => view.closeMenu());
+      // q, and the subnav's e and i (Resolved 56).
+      const listKeys = [
+        [FILTER_HOTKEY, () => view.focusFilter()],
+        [EXPORT_HOTKEY, () => openExportDialog(user)],
+        [IMPORT_HOTKEY, () => openImportDialog(user)],
+      ];
       document.addEventListener('keydown', (event) => {
-        if (!isHotkeyEvent(event) || !matchesHotkey(event, FILTER_HOTKEY)) {
-          return;
-        }
-        // Also keeps the key from being typed into the newly focused filter.
+        if (!isHotkeyEvent(event)) return;
+        const entry = listKeys.find(([hotkey]) => matchesHotkey(event, hotkey));
+        if (!entry) return;
+        // Also keeps the key from being typed into what opens.
         event.preventDefault();
-        view.focusFilter();
+        entry[1]();
       });
       // Back / Forward between list pages (see goToPage).
       window.addEventListener('popstate', view.showPageFromUrl);
@@ -4195,13 +4233,14 @@
     }), makeElement('button', {
       type: 'button',
       className: 'pfp-subnav-action py-1.5 px-3',
-      title: 'Save your list to a file or the clipboard',
+      title: 'Save your list to a file or the clipboard. Shortcut is e',
       text: 'Export',
       onclick: () => openExportDialog(user),
     }), makeElement('button', {
       type: 'button',
       className: 'pfp-subnav-action py-1.5 px-3',
-      title: 'Add or merge pages from an export (file or pasted text)',
+      title: 'Add or merge pages from an export (file or pasted text). ' +
+          'Shortcut is i',
       text: 'Import',
       onclick: () => openImportDialog(user),
     }));
@@ -5519,6 +5558,53 @@
       showToast(message, {long: true});
     }
 
+    // Browser storage protection (D10, in place of a Settings window: user
+    // decision, 2026-11-01). Low on disk space, Chromium and Firefox may
+    // clear a site's data, this list with it; persisted storage is spared.
+    // Asked for only on a press: Firefox shows a permission prompt, and
+    // Chromium decides by how much the site is used.
+    const storage = navigator.storage && navigator.storage.persisted ?
+        navigator.storage : null;
+    const storageText = makeElement('span');
+    const protectButton = makeElement('button', {
+      type: 'button', className: 'pfp-link-button', text: 'Protect',
+      hidden: true, onclick: protect,
+    });
+    const storageLine = makeElement('p', {
+      className: 'pfp-storage-line', hidden: true,
+    }, [storageText, ' ', protectButton]);
+
+    /**
+     * @param {boolean} persisted
+     * @param {boolean=} refused Whether a request was just turned down.
+     */
+    function showStorage(persisted, refused = false) {
+      storageLine.hidden = false;
+      protectButton.hidden = persisted;
+      storageText.textContent = persisted ?
+          'Browser storage: protected. The browser will not clear this ' +
+              'list to free up space.' :
+          refused ?
+          'Browser storage: not protected. The browser said no for now ' +
+              '(it may agree once the site is used more); an export keeps ' +
+              'a copy either way.' :
+          'Browser storage: not protected. Low on disk space, the browser ' +
+              'may clear this list.';
+    }
+
+    async function protect() {
+      protectButton.disabled = true;
+      try {
+        const granted = await storage.persist();
+        showStorage(granted, !granted);
+      } catch (err) {
+        console.warn(LOG_PREFIX, 'storage protection failed', err);
+        showStorage(false, true);
+      } finally {
+        protectButton.disabled = false;
+      }
+    }
+
     const actions = [
       makeElement('button', {
         type: 'button', className: 'button-primary', text: 'Download',
@@ -5547,10 +5633,16 @@
           'aria-label': 'What to export',
         }, [syncOption, shareOption, memoField]),
         summary,
+        storageLine,
       ],
       buttons: actions,
     });
-    if (close) update();
+    if (!close) return;
+    update();
+    if (storage) {
+      storage.persisted().then((persisted) => showStorage(persisted),
+          (err) => console.warn(LOG_PREFIX, 'storage state unknown', err));
+    }
   }
 
   // ==========================================================================
@@ -6344,6 +6436,70 @@
   }
 
   // ==========================================================================
+  // === Keyboard shortcuts page (Resolved 56) ================================
+  // ==========================================================================
+
+  /**
+   * @param {{code: string, shiftKey: boolean}} hotkey
+   * @return {!Array<!Node|string>} The keys in Danbooru's own markup:
+   *     <kbd class="key">shift</kbd>+<kbd class="key">b</kbd>.
+   */
+  function hotkeyKeys(hotkey) {
+    const kbd = (text) => makeElement('kbd', {className: 'key', text});
+    const key = kbd(hotkey.code.replace(/^(?:Key|Digit)/, '').toLowerCase());
+    return hotkey.shiftKey ? [kbd('shift'), '+', key] : [key];
+  }
+
+  /**
+   * Danbooru's keyboard shortcuts get a "Favorite Pages" box after
+   * "Favorite Groups", built like the boxes around it, with the keys as
+   * they are set now: on the page itself (/static/keyboard_shortcuts), and
+   * in the window the ? key opens over any page, which Danbooru fills
+   * from that page's HTML into a jQuery UI dialog appended to <body>
+   * (shortcuts.js, Shortcuts.keyboard_shortcuts). The list page's q is
+   * left out: it is Danbooru's own "Focus search box", which the list's
+   * filter answers.
+   */
+  function initShortcutsHelp() {
+    if (location.pathname === SHORTCUTS_PATH) addShortcutsBox(document);
+    new MutationObserver((records) => {
+      for (const {addedNodes} of records) {
+        for (const node of addedNodes) {
+          if (node instanceof Element && node.classList.contains('ui-dialog')) {
+            addShortcutsBox(node);
+          }
+        }
+      }
+    }).observe(document.body, {childList: true});
+  }
+
+  /**
+   * @param {!Document|!Element} root The shortcuts page, or the ? window.
+   * @return {!Promise<void>}
+   */
+  async function addShortcutsBox(root) {
+    const heading = [...root.querySelectorAll('h2')].find(
+        (node) => node.textContent.trim() === 'Favorite Groups');
+    // Any other dialog: not the shortcuts.
+    if (!heading || !heading.parentElement) return;
+    await settingsReady;
+    if (root.querySelector(`.${SHORTCUTS_SECTION_CLASS}`)) return;
+    const item = (hotkey, text) =>
+      makeElement('li', {}, [...hotkeyKeys(hotkey), ` ${text}`]);
+    heading.parentElement.after(makeElement('div', {
+      className: SHORTCUTS_SECTION_CLASS,
+    }, [
+      makeElement('h2', {text: 'Favorite Pages'}),
+      makeElement('ul', {className: 'space-y-2'}, [
+        item(settings.hotkeySave, 'Save this page (or edit it)'),
+        item(settings.hotkeyList, 'Open the Favorite Pages panel'),
+        item(EXPORT_HOTKEY, 'Export (list page)'),
+        item(IMPORT_HOTKEY, 'Import (list page)'),
+      ]),
+    ]));
+  }
+
+  // ==========================================================================
   // === Site map link (PLAN D9-E) ============================================
   // ==========================================================================
 
@@ -7129,6 +7285,7 @@
     initMessageMenus(user);
     initProfileRow(user);
     initSiteMapLink();
+    initShortcutsHelp();
     updateAliasedWiki(user);
   }
 
