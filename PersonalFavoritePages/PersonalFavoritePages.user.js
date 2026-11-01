@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Personal Favorite Pages
 // @namespace    https://github.com/AkaringoP
-// @version      0.11.1
+// @version      0.12.0
 // @description  Save frequently used Danbooru pages per account, with memos, a custom order and quick navigation.
 // @author       AkaringoP
 // @license      MIT
@@ -38,6 +38,14 @@
   // room for a message's author after them.
   const TITLE_MAX = 300;
   const MEMO_MAX = 1000;
+  /**
+   * Saved pages per account, imported ones included and removals not
+   * counted (Resolved 53): 500 list pages at most, and every export of a
+   * list this size imports again.
+   */
+  const ENTRY_LIMIT = 10000;
+  /** The error savePage and applyImport throw at ENTRY_LIMIT. */
+  const FULL_ERROR = 'list full';
   /** Gap between neighbouring sortOrder values (PLAN D8). */
   const SORT_STEP = 1000;
   /** Tombstones older than this are purged (PLAN D1-6). */
@@ -166,6 +174,41 @@
   // Export files (PLAN D10).
   const EXPORT_SCHEMA_VERSION = 1;
   const EXPORT_FILE_PREFIX = 'danbooru-favorite-pages';
+
+  // Import (PLAN D10, Resolved 36, 53). Files and pasted text are
+  // untrusted: nothing over these limits is read, and no field is taken as
+  // it is. A file may hold ENTRY_LIMIT saved pages; removals do not count
+  // towards that, so the entries overall get a ceiling of their own, and
+  // a rough count of "{" turns away a flood of tiny ones before parsing.
+  const IMPORT_MAX_CHARS = 20 * 1024 * 1024;
+  const IMPORT_MAX_ENTRIES = 50000;
+  const IMPORT_MAX_BRACES = 2 * IMPORT_MAX_ENTRIES;
+  const IMPORT_MAX_URL = 8192;
+  /** The owner's name a file gives, as shown in the preview. */
+  const IMPORT_NAME_MAX = 64;
+  /** Record ids as newId() makes them (UUIDs, or the fallback form). */
+  const IMPORT_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
+  // Characters a file could use to hide or disguise text: control
+  // characters (tab and newlines aside) and the bidirectional overrides
+  // and isolates that make text read differently from how it is stored.
+  const UNSAFE_TEXT = new RegExp('[\\u0000-\\u0008\\u000B\\u000C' +
+      '\\u000E-\\u001F\\u007F-\\u009F\\u202A-\\u202E\\u2066-\\u2069]', 'g');
+  /** Removed titles listed in a Sync preview before "…and N more". */
+  const IMPORT_LIST_MAX = 20;
+  /** Pause after typing or pasting before the text is read. */
+  const IMPORT_PASTE_DELAY_MS = 250;
+  /** Why an imported entry was left out, as the preview says it. */
+  const IMPORT_REASONS = Object.freeze({
+    invalid: 'invalid URLs',
+    external: 'other sites',
+    token: 'one-time tokens',
+    auth: 'login pages',
+    account: 'account security pages',
+    form: 'forms',
+    self: 'the list page itself',
+    malformed: 'malformed',
+    duplicate: 'duplicates',
+  });
 
   // Characters that must stay percent-encoded when a URL part is shown
   // decoded, because they would change how the text parses back.
@@ -389,6 +432,95 @@
       margin: 0;
       color: var(--muted-text-color);
       font-size: 0.9em;
+    }
+
+    /* Import (D10): a file or pasted text, then the preview. */
+    .pfp-import-source {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pfp-gap);
+    }
+
+    .pfp-import-source button {
+      margin: 0;
+    }
+
+    .pfp-import-file {
+      min-width: 0;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-import-preview {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 0.9em;
+    }
+
+    .pfp-import-preview p {
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-import-preview .pfp-import-warning {
+      color: var(--error-color);
+    }
+
+    .pfp-import-removed {
+      margin: 0;
+      padding-left: 1.4em;
+      overflow-wrap: anywhere;
+    }
+
+    /* Add mode: every page with a tick, in a box that scrolls. */
+    .pfp-import-list {
+      max-height: 40vh;
+      margin: 0;
+      padding: 4px 8px;
+      overflow-y: auto;
+      border: 1px solid var(--default-border-color);
+      border-radius: var(--pfp-radius);
+      list-style: none;
+    }
+
+    .pfp-check.pfp-import-item {
+      align-items: flex-start;
+      padding: 3px 0;
+      overflow-wrap: anywhere;
+    }
+
+    .pfp-check.pfp-import-item input {
+      margin-top: 0.2em;
+    }
+
+    .pfp-import-item-url {
+      display: block;
+      color: var(--muted-text-color);
+      font-size: 0.9em;
+    }
+
+    /* A file dragged over the list page. Lets the drag events through. */
+    .pfp-drop-overlay {
+      position: fixed;
+      inset: 8px;
+      z-index: var(--pfp-z-overlay);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 3px dashed var(--link-color);
+      border-radius: var(--pfp-radius);
+      background: color-mix(
+        in srgb, var(--body-background-color) 80%, transparent);
+      color: var(--text-color);
+      font-size: 1.2em;
+      pointer-events: none;
+    }
+
+    .pfp-drop-overlay[hidden] {
+      display: none;
     }
 
     .pfp-dialog [hidden] {
@@ -901,6 +1033,40 @@
       cursor: pointer;
     }
 
+    /* "All 20 on this page are selected. Select all 37 matching items"
+       (Resolved 54), under the count line. */
+    .pfp-page .pfp-select-banner {
+      margin: 0 0 var(--pfp-gap);
+      padding: 4px var(--pfp-gap);
+      border-radius: var(--pfp-radius);
+      background: var(--table-row-hover-background);
+      font-size: 0.85em;
+    }
+
+    .pfp-page .pfp-select-banner[hidden] {
+      display: none;
+    }
+
+    .pfp-page .pfp-link-button {
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      color: var(--link-color);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .pfp-page .pfp-link-button:hover {
+      background: transparent;
+      color: var(--link-hover-color);
+    }
+
+    .pfp-page .pfp-link-button[hidden] {
+      display: none;
+    }
+
     /* The phone list's round marks, "Select all" and "2 / 6" (Resolved
        50); desktops keep the checkboxes and "2 items selected". */
     .pfp-page .pfp-select-box {
@@ -940,6 +1106,19 @@
     .pfp-page .pfp-paginator .pfp-icon {
       width: 1em;
       height: 1em;
+    }
+
+    /* The ellipsis is a button that asks for a page, muted like Danbooru's
+       (its paginator_component.scss drops the border and background). */
+    .pfp-page .pfp-paginator .paginator-ellipsis {
+      padding: 0;
+      box-shadow: none;
+      color: var(--muted-text-color);
+    }
+
+    .pfp-page .pfp-paginator .paginator-ellipsis:hover {
+      background: none;
+      color: var(--link-hover-color);
     }
 
     .pfp-table {
@@ -1828,6 +2007,12 @@
       if (existing && isActive(existing)) {
         record = {...existing, ...values, updatedAt: now};
       } else {
+        // A new page (or one back from removal) needs room (Resolved 53);
+        // editing a saved one does not.
+        const all = await getAllForUser(store, userId);
+        if (all.filter(isActive).length >= ENTRY_LIMIT) {
+          throw new Error(FULL_ERROR);
+        }
         // Unpinned, so it lands just under the pinned pages, which are
         // shown first whatever their sortOrder (Resolved 52).
         const placement = {
@@ -2593,6 +2778,10 @@
       return 'Another saved page already uses this URL.';
     }
     if (message === 'page not found') return 'This page was already removed.';
+    if (message === FULL_ERROR) {
+      return `Favorite Pages is full (${ENTRY_LIMIT.toLocaleString('en')} ` +
+          'pages). Remove some to save more.';
+    }
     if (err && err.name === 'QuotaExceededError') {
       return 'Browser storage is full.';
     }
@@ -2617,13 +2806,14 @@
    * and Settings (D10): the same backdrop rule, Esc, Tab kept inside, fit
    * to the part of the screen that shows, focus handed back on close. It
    * takes the save dialog's slot, so pagehide closes it as well.
-   * @param {{heading: string, body: !Array<?Node>,
-   *     buttons: !Array<?Node>}} spec Buttons in Danbooru's order (primary
-   *     first); Cancel is added at the end.
+   * @param {{heading: string, body: !Array<?Node>, buttons: !Array<?Node>,
+   *     onClose: (function()|undefined)}} spec Buttons in Danbooru's order
+   *     (primary first); Cancel is added at the end. `onClose` runs
+   *     however the modal closes.
    * @return {?function()} Closes the modal; null when another overlay is
    *     open already.
    */
-  function openModal({heading, body, buttons}) {
+  function openModal({heading, body, buttons, onClose}) {
     if (isOverlayOpen()) return null;
     ensureStyles();
     const returnFocus = document.activeElement;
@@ -2676,6 +2866,7 @@
       stopFitting();
       overlay.remove();
       activeDialogClose = null;
+      if (onClose) onClose();
       if (returnFocus instanceof HTMLElement && returnFocus.isConnected) {
         returnFocus.focus({preventScroll: true});
       }
@@ -2684,7 +2875,9 @@
     activeDialogClose = close;
     document.body.appendChild(overlay);
     stopFitting = fitToVisualViewport(overlay);
-    const first = form.querySelector('input, select, textarea, button');
+    // The first control that shows (a hidden file input cannot take it).
+    const first = [...form.querySelectorAll('input, select, textarea, button')]
+        .find((node) => !node.hidden && !node.disabled);
     if (first) first.focus();
     return close;
   }
@@ -3944,6 +4137,7 @@
       }
       // Before the wait, so the header does not shift once the list shows.
       initListSubnav(user);
+      initImportDrop(user);
       await settingsReady;
       const view = createListView(user);
       root.replaceChildren(view.element);
@@ -4001,9 +4195,15 @@
     }), makeElement('button', {
       type: 'button',
       className: 'pfp-subnav-action py-1.5 px-3',
-      title: 'Save your list to a file, the share sheet or the clipboard',
+      title: 'Save your list to a file or the clipboard',
       text: 'Export',
       onclick: () => openExportDialog(user),
+    }), makeElement('button', {
+      type: 'button',
+      className: 'pfp-subnav-action py-1.5 px-3',
+      title: 'Add or merge pages from an export (file or pasted text)',
+      text: 'Import',
+      onclick: () => openImportDialog(user),
     }));
   }
 
@@ -4039,6 +4239,16 @@
     const selected = new Set();
     /** The count line's text while nothing is selected. */
     let countText = '';
+    // Selecting across list pages, as Gmail does (Resolved 54): ticking
+    // the select-all box on one page of a longer list offers "Select all
+    // N" (`offerAll`); pressing it fills `selected` with every row the
+    // filter matches, on any page (`allMatching`). Unticking any row goes
+    // back to this page's ticks, so no selection is ever out of sight
+    // without the line above the table saying so.
+    let allMatching = false;
+    let offerAll = false;
+    /** @type {!Array<string>} Ids of every row the filter matches. */
+    let matchIds = [];
 
     const sortSelect = makeElement('select', {
       'id': 'pfp-sort',
@@ -4077,10 +4287,13 @@
       type: 'checkbox',
       className: 'pfp-select-all',
       onchange: () => {
+        allMatching = false;
         if (selectAll.checked) {
           for (const row of tableRows()) selected.add(row.dataset.id);
+          offerAll = matchIds.length > tableRows().length;
         } else {
           selected.clear();
+          offerAll = false;
         }
         updateSelection();
       },
@@ -4105,10 +4318,29 @@
         text: 'Clear',
         onclick: () => {
           selected.clear();
+          allMatching = false;
+          offerAll = false;
           updateSelection();
         },
       }),
     ]);
+    // Under the count line: "All 20 on this page are selected. Select all
+    // 37 matching items", then "All 37 matching items are selected."
+    const selectEveryMatch = makeElement('button', {
+      type: 'button',
+      className: 'pfp-link-button',
+      onclick: () => {
+        selected.clear();
+        for (const id of matchIds) selected.add(id);
+        allMatching = true;
+        offerAll = false;
+        updateSelection();
+      },
+    });
+    const bannerText = makeElement('span');
+    const selectBanner = makeElement('p', {
+      className: 'pfp-select-banner', hidden: true,
+    }, [bannerText, ' ', selectEveryMatch]);
     // The count doubles as the select-all label; with rows ticked it turns
     // into "N items selected" and the bulk actions show.
     const summary = makeElement('div', {className: 'pfp-summary'}, [
@@ -4144,6 +4376,7 @@
         ]),
       ]),
       summary,
+      selectBanner,
       content,
     ]);
 
@@ -4164,6 +4397,21 @@
       history.pushState(null, '', listPageHref(n));
       render();
       window.scrollTo(0, 0);
+    }
+
+    /**
+     * The paginator's ellipsis: asks for a page number, as Danbooru does,
+     * and turns to it; a number past either end goes to that end, and
+     * anything that is not a number does nothing.
+     * @param {number} last
+     */
+    function jumpToPage(last) {
+      const answer = window.prompt(`Jump to page (1–${last}):`);
+      if (answer === null) return;
+      const n = Number.parseInt(answer.trim(), 10);
+      if (!Number.isFinite(n)) return;
+      const target = Math.min(Math.max(n, 1), last);
+      if (target !== pageNumber) goToPage(target);
     }
 
     function showPageFromUrl() {
@@ -4219,11 +4467,21 @@
       const total = `${pages.length} ${pages.length === 1 ? 'item' : 'items'}`;
       countText = matches.length === pages.length ?
           total : `${matches.length} of ${total}`;
-      // A turned page, new filter or removal takes rows out of view; their
-      // ticks go with them.
-      const shownIds = new Set(shown.map((page) => page.id));
-      for (const id of selected) {
-        if (!shownIds.has(id)) selected.delete(id);
+      // Every match stays selected across turned pages and orders, until
+      // the matches themselves change (a filter, a removal). Otherwise a
+      // turned page, new filter or removal takes rows out of view, and
+      // their ticks go with them.
+      matchIds = matches.map((page) => page.id);
+      if (allMatching && (selected.size !== matchIds.length ||
+          !matchIds.every((id) => selected.has(id)))) {
+        allMatching = false;
+      }
+      if (!allMatching) {
+        offerAll = false;
+        const shownIds = new Set(shown.map((page) => page.id));
+        for (const id of selected) {
+          if (!shownIds.has(id)) selected.delete(id);
+        }
       }
 
       if (!shown.length) {
@@ -4270,35 +4528,63 @@
      */
     function updateSelection() {
       const rows = tableRows();
+      let onPage = 0;
       for (const row of rows) {
         const ticked = selected.has(row.dataset.id);
+        if (ticked) onPage++;
         row.classList.toggle('pfp-row-selected', ticked);
         row.querySelector('.pfp-select').checked = ticked;
       }
       const count = selected.size;
       selectAll.disabled = rows.length === 0;
-      selectAll.checked = count > 0 && count === rows.length;
-      selectAll.indeterminate = count > 0 && count < rows.length;
-      countWide.textContent = count ?
-          `${count} ${count === 1 ? 'item' : 'items'} selected` : countText;
-      countNarrow.textContent = count ? `${count} / ${rows.length}` : countText;
+      selectAll.checked = onPage > 0 && onPage === rows.length;
+      selectAll.indeterminate = onPage > 0 && onPage < rows.length;
+      countWide.textContent = !count ? countText :
+          `${allMatching ? 'All ' : ''}${countOf(count, 'item')} selected`;
+      countNarrow.textContent = !count ? countText :
+          `${count} / ${allMatching ? matchIds.length : rows.length}`;
       bulkActions.hidden = count === 0;
       summary.classList.toggle('pfp-has-selection', count > 0);
+      // The line that offers, then confirms, every match (Resolved 54).
+      const what = query.trim() ? 'matching item' : 'item';
+      const offering = !allMatching && offerAll && rows.length > 0 &&
+          onPage === rows.length && matchIds.length > rows.length;
+      selectBanner.hidden = !allMatching && !offering;
+      selectEveryMatch.hidden = !offering;
+      if (allMatching) {
+        bannerText.textContent =
+            `All ${countOf(count, what)} are selected, on every page.`;
+      } else if (offering) {
+        bannerText.textContent = `All ${rows.length} on this page are ` +
+            'selected.';
+        selectEveryMatch.textContent =
+            `Select all ${countOf(matchIds.length, what)}`;
+      }
     }
 
     async function removeSelected() {
       const ids = [...selected];
       if (!ids.length) return;
-      const what = `${ids.length} ${ids.length === 1 ? 'item' : 'items'}`;
-      if (!window.confirm(`Remove ${what} from Favorite Pages?`)) return;
+      // Say how many are out of sight (Resolved 54).
+      const visible = new Set(tableRows().map((row) => row.dataset.id));
+      const elsewhere = ids.filter((id) => !visible.has(id)).length;
+      const more = !elsewhere ? '' :
+          ` ${elsewhere} of them ${elsewhere === 1 ? 'is' : 'are'} on ` +
+              'other list pages.';
+      if (!window.confirm(`Remove ${countOf(ids.length, 'item')} from ` +
+          `Favorite Pages?${more}`)) {
+        return;
+      }
       try {
         const count = await deletePages(user.id, ids);
-        showToast(`Removed ${count} ${count === 1 ? 'item' : 'items'}.`);
+        showToast(`Removed ${countOf(count, 'item')}.`);
       } catch (err) {
         console.error(LOG_PREFIX, err);
         showToast(describeError(err), {error: true});
       }
       selected.clear();
+      allMatching = false;
+      offerAll = false;
       notifyPagesChanged();
     }
 
@@ -4307,7 +4593,9 @@
      * same in every theme: arrows, the first and last page, PAGER_WINDOW
      * pages either side of the current one and an ellipsis for each gap.
      * Phones show only the first, current and last page (desktop-only /
-     * mobile-only), as on Danbooru.
+     * mobile-only), as on Danbooru. An ellipsis asks for a page to jump to,
+     * as Danbooru's does (paginator_component.js), but turns the page in
+     * place instead of loading it again.
      * @param {number} current
      * @param {number} last
      * @return {!HTMLElement}
@@ -4315,12 +4603,20 @@
     function makePager(current, last) {
       const left = Math.max(2, current - PAGER_WINDOW);
       const right = Math.min(last - 1, current + PAGER_WINDOW);
-      const gap = (mobileOnly) => makeElement('span', {
+      const gap = (mobileOnly) => makeElement('button', {
+        'type': 'button',
         'className': mobileOnly ?
             'paginator-ellipsis mobile-only' : 'paginator-ellipsis',
-        'aria-hidden': 'true',
-        'text': '…',
-      });
+        'aria-label': 'Jump to page',
+        'title': 'Jump to page',
+        'onclick': (event) => {
+          // Danbooru's own handler sits on the document for the same class
+          // and would load the page again: this one answers instead.
+          event.preventDefault();
+          event.stopPropagation();
+          jumpToPage(last);
+        },
+      }, [makeIcon('more')]);
       const number = (n) => {
         if (n === current) {
           return makeElement('span', {
@@ -4410,6 +4706,16 @@
         'className': 'pfp-select',
         'aria-label': `Select "${page.title}"`,
         'onchange': () => {
+          if (allMatching) {
+            // Out of "every match": back to the ticks on this page, so
+            // nothing out of sight stays selected (Resolved 54).
+            allMatching = false;
+            const visible = new Set(tableRows().map((tr) => tr.dataset.id));
+            for (const id of selected) {
+              if (!visible.has(id)) selected.delete(id);
+            }
+          }
+          offerAll = false;
           if (tick.checked) {
             selected.add(page.id);
           } else {
@@ -5245,6 +5551,738 @@
       buttons: actions,
     });
     if (close) update();
+  }
+
+  // ==========================================================================
+  // === Import: reading and merging (PLAN D10) ===============================
+  // ==========================================================================
+  // A file or pasted text may come from anyone, so it is read as data only:
+  // JSON.parse, nothing over the size and count limits, and every entry
+  // rebuilt from the fields it is allowed to have, each checked. URLs pass
+  // the same gate as everything saved (sanitizeUrl, D13). Only a Sync
+  // export of this very account merges into it; anything else can only add
+  // pages. Nothing is written until the preview's Apply, and then in one
+  // transaction.
+
+  /**
+   * @param {*} value
+   * @return {boolean} Whether it is a plain JSON object (not an array).
+   */
+  function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  /**
+   * Imported text, made safe to keep and show: no hidden or direction-
+   * changing characters, single-line where it must be, within its limit.
+   * @param {string} value
+   * @param {number} max
+   * @param {boolean} multiline Keeps newlines and tabs (memos).
+   * @return {string}
+   */
+  function cleanImportedText(value, max, multiline) {
+    const text = value.replace(UNSAFE_TEXT, '');
+    return clampText(multiline ? text.replace(/\r\n?/g, '\n') :
+        text.replace(/\s+/g, ' '), max);
+  }
+
+  /**
+   * @param {*} value
+   * @param {number} now
+   * @return {?number} A usable timestamp (none later than now), or null.
+   */
+  function importedTime(value, now) {
+    return Number.isFinite(value) && value >= 0 ? Math.min(value, now) : null;
+  }
+
+  /**
+   * One entry of a file, rebuilt from its allowed fields. Add mode needs a
+   * page's URL, title and memo only; Sync also takes its id, place, pin
+   * and timestamps, all checked.
+   * @param {*} raw
+   * @param {string} mode 'sync' or 'add'.
+   * @param {number} now
+   * @return {{ok: boolean, page: (?Object|undefined),
+   *     reason: (string|undefined)}} `page` is null for a removal in Add
+   *     mode, which is skipped without counting as invalid.
+   */
+  function readImportedPage(raw, mode, now) {
+    if (!isPlainObject(raw) || typeof raw.url !== 'string' ||
+        raw.url.length > IMPORT_MAX_URL ||
+        !['string', 'undefined'].includes(typeof raw.title) ||
+        !['string', 'undefined'].includes(typeof raw.memo)) {
+      return {ok: false, reason: 'malformed'};
+    }
+    const checked = sanitizeUrl(raw.url);
+    if (!checked.ok) return {ok: false, reason: checked.reason};
+    const page = {
+      url: checked.url,
+      title: cleanImportedText(raw.title || '', TITLE_MAX, false) ||
+          fallbackTitle(checked.url),
+      memo: cleanImportedText(raw.memo || '', MEMO_MAX, true),
+    };
+    if (mode === 'add') {
+      // Removals in another account's file mean nothing here.
+      return {ok: true, page: raw.deletedAt == null ? page : null};
+    }
+    const createdAt = importedTime(raw.createdAt, now);
+    const updatedAt = importedTime(raw.updatedAt, now);
+    const deletedAt =
+        raw.deletedAt === null ? null : importedTime(raw.deletedAt, now);
+    if (typeof raw.id !== 'string' || !IMPORT_ID_PATTERN.test(raw.id) ||
+        !Number.isFinite(raw.sortOrder) || createdAt === null ||
+        updatedAt === null || (raw.deletedAt !== null && deletedAt === null) ||
+        !['boolean', 'undefined'].includes(typeof raw.pinned)) {
+      return {ok: false, reason: 'malformed'};
+    }
+    return {ok: true, page: {
+      ...page, id: raw.id, sortOrder: raw.sortOrder,
+      pinned: raw.pinned === true, createdAt, updatedAt, deletedAt,
+    }};
+  }
+
+  /**
+   * Reads an export (D10). Sync mode only for a Sync / Backup export of
+   * this very account; any other file (another account's, or a Share
+   * export) can only add pages, so it can never change or remove one.
+   * @param {string} text
+   * @param {{id: number, name: string}} user
+   * @return {{ok: boolean, error: (string|undefined), mode: (string|undefined),
+   *     userName: (string|undefined), pages: (!Array<!Object>|undefined),
+   *     invalid: (!Object<string, number>|undefined)}}
+   */
+  function parseImport(text, user) {
+    const fail = (error) => ({ok: false, error});
+    if (typeof text !== 'string' || !text.trim()) {
+      return fail('Nothing to import.');
+    }
+    if (text.length > IMPORT_MAX_CHARS) {
+      return fail('This is too large to import (over 20 MB).');
+    }
+    // Every entry is an object: far more "{" than an export could hold is a
+    // flood of tiny entries, turned away before parsing would build them.
+    let braces = 0;
+    let at = text.indexOf('{');
+    while (at !== -1 && braces <= IMPORT_MAX_BRACES) {
+      braces++;
+      at = text.indexOf('{', at + 1);
+    }
+    if (braces > IMPORT_MAX_BRACES) return fail('This has too many entries.');
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch (err) {
+      return fail('This is not a Favorite Pages export.');
+    }
+    if (!isPlainObject(data) || data.schema_version !== EXPORT_SCHEMA_VERSION ||
+        !Array.isArray(data.pages)) {
+      return fail('This is not a Favorite Pages export.');
+    }
+    if (data.pages.length > IMPORT_MAX_ENTRIES) {
+      return fail('This has too many entries.');
+    }
+    const saved = data.pages.filter((raw) =>
+      isPlainObject(raw) && raw.deletedAt == null).length;
+    if (saved > ENTRY_LIMIT) {
+      return fail(`This has more than ${ENTRY_LIMIT.toLocaleString('en')} ` +
+          'pages, the most Favorite Pages keeps.');
+    }
+    const mode = data.kind === 'sync' && data.user_id === user.id ?
+        'sync' : 'add';
+    const now = Date.now();
+    const pages = [];
+    const invalid = {};
+    const seen = new Set();
+    for (const raw of data.pages) {
+      const {ok, page, reason} = readImportedPage(raw, mode, now);
+      let why = ok ? null : reason;
+      if (page && (seen.has(page.url) || (page.id && seen.has(page.id)))) {
+        why = 'duplicate';
+      }
+      if (why) {
+        invalid[why] = (invalid[why] || 0) + 1;
+      } else if (page) {
+        seen.add(page.url);
+        if (page.id) seen.add(page.id);
+        pages.push(page);
+      }
+    }
+    const userName = typeof data.user_name === 'string' ?
+        cleanImportedText(data.user_name, IMPORT_NAME_MAX, false) : '';
+    return {ok: true, mode, userName, pages, invalid};
+  }
+
+  /**
+   * A record of this account built from a checked import entry (or from a
+   * local record), with only the fields records have.
+   * @param {number} userId
+   * @param {!Object} source
+   * @param {!Object=} overrides
+   * @return {!Object}
+   */
+  function importRecord(userId, source, overrides = {}) {
+    const record = {
+      id: source.id,
+      userId,
+      url: source.url,
+      title: source.title,
+      memo: source.memo,
+      sortOrder: source.sortOrder,
+      pinned: source.pinned === true,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+      deletedAt: source.deletedAt,
+      ...overrides,
+    };
+    record.type = classify(record.url);
+    return record;
+  }
+
+  /**
+   * @param {!Object} a
+   * @param {!Object} b
+   * @return {boolean} Whether the two hold the same content.
+   */
+  function sameContent(a, b) {
+    return a.url === b.url && a.title === b.title && a.memo === b.memo &&
+        a.sortOrder === b.sortOrder && isPinned(a) === isPinned(b) &&
+        a.deletedAt === b.deletedAt && a.createdAt === b.createdAt;
+  }
+
+  /**
+   * Sync mode (D10): record by record, the newer `updatedAt` wins, title,
+   * memo, place, pin and removal alike. A removal newer than the page
+   * removes it here; a page removed here later than the file's copy stays
+   * removed, so a round trip never brings it back. The same page saved
+   * separately on two devices becomes one record, under the id saved
+   * first. A URL change that would collide with another saved page is left
+   * out. Pure: works on copies.
+   * @param {number} userId
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Array<!Object>} incoming Checked Sync entries.
+   * @return {{puts: !Array<!Object>, deletes: !Array<string>,
+   *     counts: !Object<string, number>, removed: !Array<string>}}
+   *     `removed` holds the titles of the pages it would remove.
+   */
+  function planSync(userId, local, incoming) {
+    const byId = new Map(local.map((record) => [record.id, record]));
+    const byUrl = new Map(local.map((record) => [record.url, record]));
+    const puts = new Map();
+    const deletes = new Set();
+    const counts =
+        {added: 0, updated: 0, removed: 0, unchanged: 0, conflicts: 0};
+    const removed = [];
+    const put = (record, previous) => {
+      if (previous && byUrl.get(previous.url) === previous) {
+        byUrl.delete(previous.url);
+      }
+      byId.set(record.id, record);
+      byUrl.set(record.url, record);
+      deletes.delete(record.id);
+      puts.set(record.id, record);
+    };
+    const drop = (record) => {
+      byId.delete(record.id);
+      if (byUrl.get(record.url) === record) byUrl.delete(record.url);
+      puts.delete(record.id);
+      deletes.add(record.id);
+    };
+    const tally = (before, after) => {
+      if (!isActive(before) && isActive(after)) {
+        counts.added++;
+      } else if (isActive(before) && !isActive(after)) {
+        counts.removed++;
+        removed.push(before.title);
+      } else {
+        counts.updated++;
+      }
+    };
+    for (const entry of incoming) {
+      const own = byId.get(entry.id) || null;
+      const holder = byUrl.get(entry.url) || null;
+      if (!own && holder) {
+        // Saved on two devices before they met: one record, under the id
+        // saved first, with the newer content.
+        const newer = entry.updatedAt > holder.updatedAt ? entry : holder;
+        const firstId = entry.createdAt < holder.createdAt ?
+            entry.id : holder.id;
+        const next = importRecord(userId, newer, {
+          id: firstId,
+          createdAt: Math.min(entry.createdAt, holder.createdAt),
+          updatedAt: Math.max(entry.updatedAt, holder.updatedAt),
+        });
+        if (firstId === holder.id && sameContent(holder, next)) {
+          counts.unchanged++;
+          continue;
+        }
+        if (firstId !== holder.id) drop(holder);
+        put(next, firstId === holder.id ? holder : null);
+        tally(holder, next);
+        continue;
+      }
+      if (!own) {
+        // A removal of a page never saved here has nothing to remove.
+        if (!isActive(entry)) {
+          counts.unchanged++;
+          continue;
+        }
+        put(importRecord(userId, entry), null);
+        counts.added++;
+        continue;
+      }
+      if (entry.updatedAt <= own.updatedAt) {
+        counts.unchanged++;
+        continue;
+      }
+      if (holder && holder.id !== own.id) {
+        if (isActive(holder)) {
+          counts.conflicts++;
+          continue;
+        }
+        // Only an old removal holds that URL: it gives way.
+        drop(holder);
+      }
+      const next = importRecord(userId, entry,
+          {createdAt: Math.min(own.createdAt, entry.createdAt)});
+      if (sameContent(own, next)) {
+        counts.unchanged++;
+        continue;
+      }
+      put(next, own);
+      tally(own, next);
+    }
+    return {puts: [...puts.values()], deletes: [...deletes], counts, removed};
+  }
+
+  /**
+   * Add mode (D10): another account's pages, or a Share export, only ever
+   * add to this list. Pages saved here already are skipped and nothing
+   * here changes. New pages get new ids, are not pinned whatever the file
+   * says (Resolved 52), and go in as a block, in the file's order, right
+   * under the pinned pages. A page removed here earlier comes back under
+   * its old id.
+   * @param {number} userId
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Array<!Object>} incoming Checked Add entries.
+   * @param {{includeMemos: boolean, skip: !Set<string>, now: number}}
+   *     options `skip` holds the URLs left unticked in the preview.
+   * @return {{puts: !Array<!Object>, deletes: !Array<string>,
+   *     counts: !Object<string, number>}}
+   */
+  function planAdd(userId, local, incoming, {includeMemos, skip, now}) {
+    const byUrl = new Map(local.map((record) => [record.url, record]));
+    const saved = (entry) => {
+      const holder = byUrl.get(entry.url);
+      return Boolean(holder) && isActive(holder);
+    };
+    const chosen =
+        incoming.filter((entry) => !saved(entry) && !skip.has(entry.url));
+    const top = local.reduce((min, record) =>
+      Math.min(min, record.sortOrder), 0);
+    const puts = chosen.map((entry, i) => {
+      const old = byUrl.get(entry.url);
+      return importRecord(userId, {
+        id: old ? old.id : newId(),
+        url: entry.url,
+        title: entry.title,
+        memo: includeMemos ? entry.memo : '',
+        sortOrder: top - SORT_STEP * (chosen.length - i),
+        pinned: false,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+    });
+    return {puts, deletes: [], counts: {
+      added: puts.length,
+      already: incoming.filter(saved).length,
+    }};
+  }
+
+  /**
+   * @param {!Array<!Object>} local Every record of the account.
+   * @param {!Object} plan From planSync or planAdd.
+   * @return {number} How many pages would be saved after the plan, to keep
+   *     within ENTRY_LIMIT (Resolved 53).
+   */
+  function savedAfter(local, plan) {
+    const {added = 0, removed = 0} = plan.counts;
+    return local.filter(isActive).length + added - removed;
+  }
+
+  /**
+   * Applies an import in one transaction, planned again on what is stored
+   * at that moment (another tab may have changed it since the preview). A
+   * record id that belongs to another account on this browser is never
+   * written over: such a page gets a new id. Any failure leaves the list
+   * as it was.
+   * @param {{id: number}} user
+   * @param {!Object} parsed What parseImport returned.
+   * @param {{includeMemos: boolean, skip: !Set<string>}} options Add mode.
+   * @return {!Promise<!Object<string, number>>} The counts.
+   */
+  function applyImport(user, parsed, options) {
+    return withStore(STORE_PAGES, 'readwrite', async (store) => {
+      const local = await getAllForUser(store, user.id);
+      const plan = parsed.mode === 'sync' ?
+          planSync(user.id, local, parsed.pages) :
+          planAdd(user.id, local, parsed.pages,
+              {...options, now: Date.now()});
+      if (savedAfter(local, plan) > ENTRY_LIMIT) throw new Error(FULL_ERROR);
+      const own = new Set(local.map((record) => record.id));
+      for (const id of plan.deletes) {
+        if (own.has(id)) await requestToPromise(store.delete(id));
+      }
+      for (const record of plan.puts) {
+        if (!own.has(record.id) &&
+            await requestToPromise(store.get(record.id))) {
+          record.id = newId();
+        }
+        await requestToPromise(store.put(record));
+      }
+      return plan.counts;
+    });
+  }
+
+  /**
+   * @param {!File} file
+   * @return {!Promise<string>} Its text, refused before reading when too
+   *     large.
+   */
+  function readImportFile(file) {
+    if (file.size > IMPORT_MAX_CHARS) {
+      return Promise.reject(new Error('This file is too large (over 20 MB).'));
+    }
+    if (file.text) return file.text();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  // ==========================================================================
+  // === Import: dialog and drop zone (PLAN D10) ==============================
+  // ==========================================================================
+
+  /** Hands a file dropped on the page to the open Import dialog. */
+  let importFileHandler = null;
+
+  /**
+   * @param {!Object<string, number>} invalid Count per reason.
+   * @return {string} e.g. " · 3 left out (other sites: 2, malformed: 1)".
+   */
+  function leftOutText(invalid) {
+    const parts = Object.entries(invalid)
+        .map(([reason, n]) => `${IMPORT_REASONS[reason] || reason}: ${n}`);
+    if (!parts.length) return '';
+    const total = Object.values(invalid).reduce((sum, n) => sum + n, 0);
+    return ` · ${total} left out (${parts.join(', ')})`;
+  }
+
+  /**
+   * The list page's Import (D10): an exported file (Choose file, or one
+   * dropped on the page) or the text Copy gave on another device, then a
+   * preview of what it would do, and nothing written before Apply.
+   * Everything the file says is shown as plain text.
+   * @param {{id: number, name: string}} user
+   * @param {?File=} file A file dropped on the page.
+   */
+  function openImportDialog(user, file = null) {
+    if (isOverlayOpen()) {
+      if (file && importFileHandler) importFileHandler(file);
+      return;
+    }
+    let parsed = null;
+    let local = [];
+    let readSeq = 0;
+    let pasteTimer = 0;
+    let busy = false;
+    /** URLs unticked in an Add preview. */
+    const skip = new Set();
+
+    const fileInput = makeElement('input', {
+      type: 'file', accept: '.json,application/json', hidden: true,
+      onchange: () => {
+        const [chosen] = fileInput.files;
+        fileInput.value = '';
+        if (chosen) loadFile(chosen);
+      },
+    });
+    const fileName = makeElement('span', {className: 'pfp-import-file'});
+    const pasteBox = makeElement('textarea', {
+      'name': 'paste', 'rows': 3, 'spellcheck': 'false',
+      'autocomplete': 'off', 'aria-label': 'Exported text',
+      'placeholder': 'Or paste the text copied with Export',
+      'oninput': () => {
+        clearTimeout(pasteTimer);
+        pasteTimer = setTimeout(() => {
+          fileName.textContent = '';
+          read(pasteBox.value);
+        }, IMPORT_PASTE_DELAY_MS);
+      },
+    });
+    const errorLine = makeElement('p', {
+      className: 'pfp-form-error', role: 'alert', hidden: true,
+    });
+    const preview = makeElement('div', {className: 'pfp-import-preview'});
+    const countsLine = makeElement('p', {className: 'pfp-import-counts'});
+    // Shown when the result would pass ENTRY_LIMIT (Resolved 53).
+    const limitLine = makeElement('p', {
+      className: 'pfp-import-warning', hidden: true,
+    });
+    const memoBox = makeElement('input', {
+      type: 'checkbox', name: 'memos', checked: true, onchange: update,
+    });
+    const applyButton = makeElement('button', {
+      type: 'button', className: 'button-primary', text: 'Apply',
+      disabled: true, onclick: apply,
+    });
+
+    function setError(message) {
+      errorLine.textContent = message;
+      errorLine.hidden = !message;
+    }
+
+    /** @param {!File} chosen */
+    async function loadFile(chosen) {
+      clearTimeout(pasteTimer);
+      pasteBox.value = '';
+      fileName.textContent = chosen.name;
+      const seq = ++readSeq;
+      try {
+        const text = await readImportFile(chosen);
+        if (seq === readSeq) await read(text);
+      } catch (err) {
+        if (seq !== readSeq) return;
+        parsed = null;
+        setError(err.message || String(err));
+        show();
+      }
+    }
+
+    /** @param {string} text */
+    async function read(text) {
+      const seq = ++readSeq;
+      parsed = null;
+      skip.clear();
+      const result = text.trim() ? parseImport(text, user) : null;
+      if (result && result.ok) {
+        try {
+          local = await listAllRecords(user.id);
+        } catch (err) {
+          if (seq !== readSeq) return;
+          setError(describeError(err));
+          show();
+          return;
+        }
+      }
+      if (seq !== readSeq) return;
+      parsed = result && result.ok ? result : null;
+      setError(result && !result.ok ? result.error : '');
+      show();
+    }
+
+    /** @return {!Object} The plan for what is shown, on the snapshot. */
+    function plan() {
+      return parsed.mode === 'sync' ?
+          planSync(user.id, local, parsed.pages) :
+          planAdd(user.id, local, parsed.pages,
+              {includeMemos: memoBox.checked, skip, now: Date.now()});
+    }
+
+    /** Builds the preview for a newly read export. */
+    function show() {
+      if (!parsed) {
+        preview.replaceChildren();
+        update();
+        return;
+      }
+      const from = parsed.userName ? `@${parsed.userName}` : 'no name';
+      const line = (text, className = '') =>
+        makeElement('p', {className, text});
+      const nodes = [];
+      if (parsed.mode === 'sync') {
+        const {removed} = plan();
+        nodes.push(line(`From ${from}: a Sync / Backup export of this ` +
+            'account. It is merged into this list; the newer change wins.'));
+        // The account id in a file can be typed by anyone: a different
+        // name is worth a second look before anything is removed.
+        if (parsed.userName &&
+            parsed.userName.toLowerCase() !== user.name.toLowerCase()) {
+          nodes.push(line(`It names the account @${parsed.userName}, not ` +
+              `@${user.name}. Apply only if you made this export.`,
+          'pfp-import-warning'));
+        }
+        nodes.push(countsLine, limitLine);
+        if (removed.length) {
+          nodes.push(line(`It removes ${countOf(removed.length, 'page')}:`,
+              'pfp-import-warning'));
+          const shown = removed.slice(0, IMPORT_LIST_MAX);
+          const more = removed.length - shown.length;
+          nodes.push(makeElement('ul', {className: 'pfp-import-removed'}, [
+            ...shown.map((title) => makeElement('li', {text: title})),
+            more ? makeElement('li', {text: `…and ${more} more`}) : null,
+          ]));
+        }
+      } else {
+        nodes.push(line(`From ${from}: pages to add to your list. Nothing ` +
+            'saved here changes.'));
+        nodes.push(countsLine, limitLine);
+        const saved = new Set(local.filter(isActive)
+            .map((record) => record.url));
+        if (parsed.pages.some((page) => page.memo && !saved.has(page.url))) {
+          nodes.push(makeElement('label', {className: 'pfp-check'},
+              [memoBox, 'Include memos']));
+        }
+        nodes.push(makeElement('ul', {className: 'pfp-import-list'},
+            parsed.pages.map((page) => {
+              const already = saved.has(page.url);
+              const tick = makeElement('input', {
+                type: 'checkbox', checked: !already, disabled: already,
+                onchange: () => {
+                  if (tick.checked) {
+                    skip.delete(page.url);
+                  } else {
+                    skip.add(page.url);
+                  }
+                  update();
+                },
+              });
+              return makeElement('li', {}, [
+                makeElement('label', {className: 'pfp-check pfp-import-item'},
+                    [tick, makeElement('span', {}, [
+                      makeElement('span', {text: page.title}),
+                      makeElement('span', {
+                        className: 'pfp-import-item-url',
+                        text: already ? `${toSitePath(page.url)} · saved` :
+                            toSitePath(page.url),
+                      }),
+                    ])]),
+              ]);
+            })));
+      }
+      preview.replaceChildren(...nodes);
+      update();
+    }
+
+    /** Counts and Apply follow the ticks without rebuilding the list. */
+    function update() {
+      if (!parsed) {
+        applyButton.disabled = true;
+        return;
+      }
+      const planned = plan();
+      const {counts} = planned;
+      const parts = parsed.mode === 'sync' ?
+          [[counts.added, 'new'], [counts.updated, 'updated'],
+            [counts.removed, 'removed'], [counts.unchanged, 'unchanged'],
+            [counts.conflicts, 'left out: URL saved under another page']] :
+          [[counts.added, 'to add'], [counts.already, 'already saved']];
+      countsLine.textContent = parts.filter(([n], i) => n || i < 2)
+          .map(([n, label]) => `${n} ${label}`).join(' · ') +
+          leftOutText(parsed.invalid);
+      const changes = parsed.mode === 'sync' ?
+          counts.added + counts.updated + counts.removed : counts.added;
+      const total = savedAfter(local, planned);
+      const over = total > ENTRY_LIMIT;
+      const limit = ENTRY_LIMIT.toLocaleString('en');
+      const room = Math.max(0, ENTRY_LIMIT - local.filter(isActive).length);
+      limitLine.textContent = !over ? '' : parsed.mode === 'sync' ?
+          `This would make ${total.toLocaleString('en')} pages, over the ` +
+              `limit of ${limit}. Remove some pages first.` :
+          `Only ${countOf(room, 'more page')} fit (the limit is ${limit}). ` +
+              'Untick some to go on.';
+      limitLine.hidden = !over;
+      applyButton.disabled = busy || changes === 0 || over;
+    }
+
+    async function apply() {
+      if (!parsed || busy) return;
+      busy = true;
+      update();
+      try {
+        const counts = await applyImport(user, parsed,
+            {includeMemos: memoBox.checked, skip});
+        close();
+        showToast(parsed.mode === 'sync' ?
+            `Imported: ${counts.added} new, ${counts.updated} updated, ` +
+                `${counts.removed} removed.` :
+            `Added ${countOf(counts.added, 'page')}.`, {long: true});
+        notifyPagesChanged();
+      } catch (err) {
+        console.error(LOG_PREFIX, err);
+        setError(describeError(err));
+        busy = false;
+        update();
+      }
+    }
+
+    const close = openModal({
+      heading: 'Import Favorite Pages',
+      body: [
+        makeElement('div', {className: 'pfp-import-source'}, [
+          makeElement('button', {
+            type: 'button', text: 'Choose file…',
+            onclick: () => fileInput.click(),
+          }),
+          fileName,
+          fileInput,
+        ]),
+        pasteBox,
+        errorLine,
+        preview,
+      ],
+      buttons: [applyButton],
+      onClose: () => {
+        clearTimeout(pasteTimer);
+        readSeq++;
+        importFileHandler = null;
+      },
+    });
+    if (!close) return;
+    importFileHandler = loadFile;
+    if (file) loadFile(file);
+  }
+
+  /**
+   * Dropping a file anywhere on the list page opens Import with it (D10).
+   * Only drags that carry files show the drop overlay; the file goes
+   * through the same checks as one chosen in the dialog.
+   * @param {{id: number, name: string}} user
+   */
+  function initImportDrop(user) {
+    const overlay = makeElement('div', {
+      'className': 'pfp-drop-overlay', 'hidden': true, 'aria-hidden': 'true',
+    }, [makeElement('p', {text: 'Drop the exported file to import it'})]);
+    document.body.appendChild(overlay);
+    let depth = 0;
+    const carriesFiles = (event) => Boolean(event.dataTransfer) &&
+        [...event.dataTransfer.types].includes('Files');
+    window.addEventListener('dragenter', (event) => {
+      if (!carriesFiles(event)) return;
+      depth++;
+      overlay.hidden = false;
+    });
+    window.addEventListener('dragleave', (event) => {
+      if (!carriesFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) overlay.hidden = true;
+    });
+    window.addEventListener('dragover', (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    });
+    window.addEventListener('drop', (event) => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      overlay.hidden = true;
+      const [file] = event.dataTransfer.files;
+      if (file) openImportDialog(user, file);
+    });
   }
 
   // ==========================================================================
@@ -6110,7 +7148,8 @@
     fallbackTitle, toSitePath, listPages, listAllRecords, getPageByUrl,
     countPages, savePage, updatePage, deletePage, deletePages, purgeTombstones,
     reorderPage, renumberAll, getSettings, saveSettings, openSaveDialog,
-    setPagePinned, REJECT_MESSAGES,
+    setPagePinned, parseImport, planSync, planAdd, applyImport,
+    REJECT_MESSAGES,
   };
 
   // The script runs at document-start so the list page can hide Danbooru's
