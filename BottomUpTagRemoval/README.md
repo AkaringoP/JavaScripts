@@ -149,6 +149,9 @@ Rewriting an existing `hatsune_miku` as `char:hatsune_miku` (or `gen:` / `genera
 **Can I remove a tag as `-gen:tag` / `-char:tag`?**
 Yes. It is treated exactly like `-tag`: the popover offers the tag's parents as usual. On submit the script sends Danbooru `-tag` instead, because Danbooru's own parser currently rejects `-<category>:tag`, stops reading there, and treats every tag after it as deleted. Only negated *category* prefixes are rewritten; anything else is sent as typed.
 
+**What about `-rating:s`, `-source:x` and similar?**
+These have no valid removal form, and Danbooru's parser stops at them too — every tag after the token would be deleted. Instead of submitting, the script shows a warning naming the token and the tags that would be lost (with a hint such as `source:none` where one exists). **Remove it and continue** deletes just that token and carries on with the normal submit; **Cancel** goes back to editing with your text unchanged. Covered: `-rating:` `-source:` `-newpool:` `-newfavgroup:` `-disapproved:`. Valid negated metatags (`-status:` `-pool:` `-parent:` `-fav:` `-favgroup:` `-child:` `-upvote:` `-downvote:`) submit normally.
+
 **Will it slow down my submit?**
 Most of the BFS work is prefetched as you edit. The popover usually appears with candidates already filled in (no spinner). Implication lookups are remembered for as long as the page stays open, so continuing to type after removing a tag sends no further requests. The first edit after a page load may briefly show a spinner. If your network is slow or the API is degraded, the script retries 3 times with 1s/2s/4s backoff (worst case ~7s) before showing a fallback dialog asking whether to submit anyway or cancel.
 
@@ -175,7 +178,7 @@ Most common reason: the tag has no implications, or its parents would all be re-
 
 ## Changelog
 
-- **v1.2.0** (2026-11-15) — Letter shortcuts (`a`–`z`) removed: they fired Danbooru's own hotkeys (previous / next post, favorite, …) alongside the row toggle. Category-prefix edits (`char:tag`) no longer count as removals, and `-gen:tag`-style removals work (sent to Danbooru as `-tag`, which avoids a Danbooru parser bug that deleted every tag after such a token). Implication lookups are cached per page and request only the needed fields — far fewer, smaller API requests.
+- **v1.2.0** (2026-11-15) — Letter shortcuts (`a`–`z`) removed: they fired Danbooru's own hotkeys (previous / next post, favorite, …) alongside the row toggle. Category-prefix edits (`char:tag`) no longer count as removals, and `-gen:tag`-style removals work (sent to Danbooru as `-tag`, which avoids a Danbooru parser bug that deleted every tag after such a token). Tokens like `-rating:s` that hit the same bug now show a warning instead of submitting. Implication lookups are cached per page and request only the needed fields — far fewer, smaller API requests.
 - **v1.1.1** (2026-05-02) — Add a small `BottomUpTagRemoval v1.1.1` label above the popover title (kicker / overline style, plain text).
 - **v1.1.0** (2026-05-02) — Maintenance: dead code removal, selector observability (warns in the console when Danbooru's tag-input selector goes missing on a post page), `positionPopover` fallback hardening. **No user-visible behavior change.**
 - **v1.0.4** (2026-04-26) — Fix: restore-on-Cancel correctly drops `-tag`-only directives.

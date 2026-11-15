@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewriting an existing tag with a category prefix (`char:tag`, and `gen:` / `general:` / `character:` / `ch:` / `copy:` / `copyright:` / `co:` / `art:` / `artist:` / `meta:`) was treated as removing the tag and opened the popover. The server keeps such a tag, so it is now treated as present (`ch:` / `co:` since danbooru `c48ecc890`, 2026-11-13).
 - Negated category prefixes (`-gen:tag`, `-char:tag`, …) now mean "remove `tag`": the popover handles them like `-tag`, and on submit they are rewritten to `-tag`. Danbooru's edit parser rejects `-<category>:` as an invalid tag name, stops parsing at that token, and treats every tag after it as removed — `1girl -gen:solo smile …` would have left only `1girl`. `-tag` is valid on every server version, so the rewrite stays harmless once the server is fixed. The textarea text is rewritten only on submit paths that reach the server; a cancelled popover leaves it as typed.
 - A parent present only in prefixed form (`copy:vocaloid`) can now be removed from the popover.
+
+### Added
+- Warning popover for negated metatags Danbooru's parser rejects (`-rating:` `-source:` `-newpool:` `-newfavgroup:` `-disapproved:`). They stop the parse just like `-<category>:` — every tag after them would be deleted — but have no valid meaning to rewrite to. The warning lists the offending tokens, the existing tags that would be lost, and a fix-it hint for `rating` / `source`. **Remove it and continue** drops the tokens and starts a fresh submit (the parent-tag popover still runs); **Cancel** / `Esc` return to editing with the text unchanged. There is no "submit anyway".
 - The internal submit-bypass flag could stay set when the re-submit dispatched no `submit` event, silently skipping the popover on the next submit.
 
 ### Changed
