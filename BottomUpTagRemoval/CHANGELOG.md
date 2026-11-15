@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Letter shortcuts `a`–`z` for candidate rows 10–35. Danbooru binds single letters on the post page (`a` / `d` previous / next post, `f` favorite, `e` edit, …) and those fired together with the row toggle — `a` toggled row 10 *and* left the page. Rows beyond the 9th are click-only; `0`, `1`–`9`, `Esc`, `Ctrl+Enter` are unchanged.
 
 ### Fixed
-- Rewriting an existing tag with a category prefix (`char:tag`, and `gen:` / `general:` / `character:` / `copy:` / `copyright:` / `art:` / `artist:` / `meta:`) was treated as removing the tag and opened the popover. The server keeps such a tag, so it is now treated as present. `ch:` / `co:` are left as removals — the server does not count their value as a present tag.
+- Rewriting an existing tag with a category prefix (`char:tag`, and `gen:` / `general:` / `character:` / `ch:` / `copy:` / `copyright:` / `co:` / `art:` / `artist:` / `meta:`) was treated as removing the tag and opened the popover. The server keeps such a tag, so it is now treated as present (`ch:` / `co:` since danbooru `c48ecc890`, 2026-11-13).
+- Negated category prefixes (`-gen:tag`, `-char:tag`, …) now mean "remove `tag`": the popover handles them like `-tag`, and on submit they are rewritten to `-tag`. Danbooru's edit parser rejects `-<category>:` as an invalid tag name, stops parsing at that token, and treats every tag after it as removed — `1girl -gen:solo smile …` would have left only `1girl`. `-tag` is valid on every server version, so the rewrite stays harmless once the server is fixed. The textarea text is rewritten only on submit paths that reach the server; a cancelled popover leaves it as typed.
 - A parent present only in prefixed form (`copy:vocaloid`) can now be removed from the popover.
 - The internal submit-bypass flag could stay set when the re-submit dispatched no `submit` event, silently skipping the popover on the next submit.
 

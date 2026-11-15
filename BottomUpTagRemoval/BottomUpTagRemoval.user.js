@@ -452,37 +452,38 @@
 
   /**
    * Splits a tag string into a normalized Set of tokens. Whitespace-split,
-   * lowercased, empty strings dropped. Null/undefined input returns an
-   * empty Set.
+   * lowercased, empty strings dropped, each token reduced to the tag it
+   * stands for (`canonicalToken`: `char:foo` → `foo`, `-gen:foo` →
+   * `-foo`). Null/undefined input returns an empty Set.
    *
    * @param {?string|undefined} str
    * @return {!Set<string>}
    */
   function tokenize(str) {
-    return new Set(String(str ?? '').toLowerCase().split(/\s+/).filter(Boolean));
+    return new Set(String(str ?? '').toLowerCase().split(/\s+/)
+        .filter(Boolean).map(canonicalToken));
   }
 
   /**
    * @const {!RegExp} Category-prefix syntax (`char:hatsune_miku`,
-   * `art:bkub`, ...) on an already-lowercased token. The server counts the
-   * value as a tag present in the edit, exactly like the bare name
-   * (danbooru `PostEdit#new_tag_names`), so rewriting `foo` as `char:foo`
-   * is a re-categorization, NOT a removal.
+   * `art:bkub`, `ch:` / `co:`, ...), case-insensitive like the server.
+   * The server counts the value as a tag present in the edit, exactly
+   * like the bare name (danbooru `PostEdit#new_tag_names`), so rewriting
+   * `foo` as `char:foo` is a re-categorization, NOT a removal.
    *
-   * `ch:` / `co:` are deliberately absent: the server accepts them as
-   * category metatags but does not count their value as a present tag, so
-   * replacing `foo` with `ch:foo` really does drop `foo` from the post.
+   * `ch:` / `co:` joined this list upstream on 2026-11-13 (danbooru
+   * c48ecc890 — before that they set the category but dropped the tag).
    */
   const CATEGORY_PREFIX_REGEX =
-      /^(?:gen|general|char|character|copy|copyright|art|artist|meta):(.+)$/;
+      /^(?:gen|general|char|character|ch|copy|copyright|co|art|artist|meta):(.+)$/i;
 
   /**
    * Returns the tag name a textarea token stands for: the value of a
    * category-prefixed token (`char:foo` or `char:"foo"` → `foo`), or the
    * token itself for everything else (plain tags, `-tag` directives,
-   * other metatags).
+   * other metatags). The name keeps the input's letter case.
    *
-   * @param {string} token  Lowercased token.
+   * @param {string} token
    * @return {string}
    */
   function tagNameOfToken(token) {
@@ -500,13 +501,59 @@
   }
 
   /**
+   * Reduces one token to the tag it stands for, keeping a leading `-`:
+   * `char:foo` → `foo`, and `-gen:foo` → `-foo`.
+   *
+   * The negated form is what the user means by `-gen:foo` — "remove
+   * foo"; a category prefix says nothing about removal. Danbooru's edit
+   * parser does not read it that way: it rejects `-<category>:` as an
+   * invalid tag name, silently stops parsing there, and treats EVERY tag
+   * after it as implicitly removed (verified against danbooru
+   * `PostEdit#tag` + `StringParser#zero_or_more`, 2026-11).
+   * `rewriteNegatedPrefixesForServer` sends the server the `-foo` this
+   * function models.
+   *
+   * @param {string} token
+   * @return {string}
+   */
+  function canonicalToken(token) {
+    if (token.startsWith('-')) {
+      return '-' + tagNameOfToken(token.slice(1));
+    }
+    return tagNameOfToken(token);
+  }
+
+  /**
+   * Rewrites every `-<category>:tag` token in the tag input to `-tag`,
+   * leaving all other text untouched. Called on the submit paths that let
+   * the form go to the server, so the server receives the removal the
+   * user meant instead of a string its parser truncates (see
+   * `canonicalToken`). `-tag` is valid on every server version, so this
+   * stays harmless after Danbooru fixes the parser.
+   *
+   * No `input` event is dispatched: the page is about to submit, and an
+   * event here would only re-trigger autocomplete and our prefetch.
+   */
+  function rewriteNegatedPrefixesForServer() {
+    if (!tagInput) {
+      return;
+    }
+    const value = tagInput.value;
+    const rewritten = value.split(/(\s+)/).map((part) =>
+      part.startsWith('-') ? canonicalToken(part) : part).join('');
+    if (rewritten !== value) {
+      tagInput.value = rewritten;
+    }
+  }
+
+  /**
    * Reduces a raw token Set to the tag set that will actually exist on the
    * post after the server parses Danbooru's add/subtract syntax. Drops:
    *   - `-tag` directives themselves (they are instructions, not tags).
    *   - Any `tag` whose `-tag` directive is also present (server resolves
    *     `tag -tag` to "tag is removed").
-   * Category-prefixed tokens count as their bare tag name
-   * (`tagNameOfToken`).
+   * Expects `tokenize` output, whose tokens are already canonical —
+   * `char:foo` arrives as `foo`, `-gen:foo` as `-foo`.
    *
    * This is the single source of truth for "what tags are effectively
    * present" — used by `computeRemoved` (diff vs originalTags) and by
@@ -522,9 +569,8 @@
     const result = new Set();
     for (const t of rawTokens) {
       if (t.startsWith('-')) continue;
-      const name = tagNameOfToken(t);
-      if (rawTokens.has('-' + name)) continue;
-      result.add(name);
+      if (rawTokens.has('-' + t)) continue;
+      result.add(t);
     }
     return result;
   }
@@ -2173,8 +2219,13 @@
    * @param {Event} event
    */
   function handleSubmit(event) {
+    // Every `return` below that does NOT preventDefault lets this submit
+    // reach the server, so each one first calls
+    // rewriteNegatedPrefixesForServer() (v1.2.0). The popover paths reach
+    // the server through submitFormViaNativeFlow → the bypass branch.
     if (bypassNextSubmit) {
       bypassNextSubmit = false;
+      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2190,6 +2241,9 @@
 
     const removed = computeRemoved(tagInput.value);
     if (removed.length === 0) {
+      // Still rewrite: `-gen:foo` for a tag the post doesn't have removes
+      // nothing, but would truncate the server's parse all the same.
+      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2211,6 +2265,7 @@
     // / Rails UJS handlers complete the submission on the FIRST press.
     if (prefetchKey === currentKey && prefetchResult &&
         prefetchResult.status === 'bypass') {
+      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2495,6 +2550,9 @@
       }
     } else {
       bypassNextSubmit = false;
+      // form.submit() fires no submit event, so handleSubmit's rewrite
+      // never runs on this path.
+      rewriteNegatedPrefixesForServer();
       tagForm.submit();
     }
   }
@@ -2524,10 +2582,11 @@
       if (!p || /^\s+$/.test(p)) {
         continue;
       }
-      // tagNameOfToken: a candidate present only as `copy:vocaloid` must
-      // still be removable — finalTokens offered it under its bare name.
+      // canonicalToken: a candidate present only as `copy:vocaloid`, or a
+      // `-solo` directive written `-gen:solo`, must still match — tokenize
+      // reported them under their canonical form.
       const lower = p.toLowerCase();
-      if (!toRemove.has(lower) && !toRemove.has(tagNameOfToken(lower))) {
+      if (!toRemove.has(lower) && !toRemove.has(canonicalToken(lower))) {
         continue;
       }
 
