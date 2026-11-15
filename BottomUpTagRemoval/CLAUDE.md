@@ -16,7 +16,7 @@ Root CLAUDE.md covers the universal principles (search before reading, report be
 
 ## Critical Rules (not mechanically enforced — agent must self-apply)
 
-- **Fragile zone — DO NOT touch casually** (memory `project_butr_submit_lifecycle_fragile`): `submitFormViaNativeFlow`, `handleSubmit`, `showDialog`, `hideDialog`, `applyAndSubmit`, `disableAnchorButton`/`restoreAnchorButton`. Even one-line "harmless" cleanups have caused Submit to stick (v1.0.2 incident). Validate any change in this zone with manual Safari + Tampermonkey before merging.
+- **Fragile zone — DO NOT touch casually** (memory `project_butr_submit_lifecycle_fragile`): `submitFormViaNativeFlow`, `handleSubmit`, `showDialog`, `hideDialog`, `applyAndSubmit`, `disableAnchorButton`/`restoreAnchorButton`. Even one-line "harmless" cleanups have caused Submit to stick (v1.0.2 incident). Validate any change in this zone manually with Tampermonkey on the maintainer's browsers (Chrome, Whale, Firefox) before merging. Safari is no longer a required target (2026-11).
 - **`@version` bump on functional changes** (memory `feedback_version_bump`). Patch for fix, minor for feature, major for breaking. Tampermonkey's update fetcher relies on this line.
 - **CSS prefix `--butr-*`** — isolated from DanbooruInsights' `--di-*`. Container-scoped variable pattern (theme overrides via `[data-butr-theme="dark"]`).
 - **`@grant none` constraint** — no GM_* APIs, no external domains. Same-origin requests only.
@@ -66,7 +66,7 @@ If Opus quota is at risk mid-session, switch main to Sonnet via `/model sonnet` 
 3. Run an upward-closure BFS over `/tag_implications.json` to collect every transitive parent reachable from the removed tags.
 4. Apply Policy B+ filtering (phantom seed/candidate exclusion) — drop candidates that other still-present tags would force the server to re-add.
 5. Render a floating popover anchored under the Edit-tags Submit button, grouped by seed (the removed child) with BottomUp visual ordering (more general parents on top).
-6. User picks which parents to also remove; the script splices them out of the tag string and calls `form.submit()`.
+6. User picks which parents to also remove; the script splices them out of the tag string and re-submits through `form.requestSubmit()` (`submitFormViaNativeFlow`; `form.submit()` only as the Safari < 16 fallback).
 
 ### Bypass cases (popover not shown)
 - 0 removed tags
@@ -77,17 +77,17 @@ If Opus quota is at risk mid-session, switch main to Sonnet via `/model sonnet` 
 
 | Section (line) | Responsibility |
 |---|---|
-| `CONSTANTS` (~18) | `GLOBAL_CSS`, selectors, BFS limits, retry policy, prefetch debounce |
-| `STATE` (~203) | `originalTags`, form/input refs, `abortCtrl`, `isProcessing`, `initGeneration` |
-| `PREFETCH STATE` (~340) | Cache slot, in-flight controller, debounce timer |
-| `STYLE INJECTION` (~416) | `<style>` tag insert (idempotent) |
-| `TAG TOKEN UTILITIES` (~432) | `tokenize`, `finalTokens`, `computeRemoved` (implicit + `-tag` syntax) |
-| `IMPLICATION QUERIES` (~494) | `fetchImplicationsChunk`, `fetchAllImplications`, `upwardClosure`, `findStillImpliedTargets` |
-| `DIALOG` (~888) | Popover DOM build, positioning, theme, keyboard shortcuts, master toggle, cascade uncheck, restore-on-cancel checkbox |
-| `INIT / CLEANUP` (~1745) | Turbo lifecycle, listener wiring |
-| `PREFETCH` (~1821) | `runPrefetch`, `onTextareaInput`, length-delta trigger detection |
-| `SUBMIT HANDLER` (~2001) | `handleSubmit`, plan computation, dialog flow, cache consumption, autocomplete dismissal, `restoreSeedsToInput` |
-| `ENTRY POINTS` (~2503) | `turbo:load` / `turbo:before-visit` / initial `init()` |
+| `CONSTANTS` (~18) | `GLOBAL_CSS`, selectors, prefetch debounce |
+| `STATE` (~237) | `originalTags`, form/input refs, `abortCtrl`, `isProcessing`, `initGeneration` |
+| `PREFETCH STATE` (~374) | Cache slot, in-flight controller, debounce timer |
+| `STYLE INJECTION` (~450) | `<style>` tag insert (idempotent) |
+| `TAG TOKEN UTILITIES` (~466) | `tokenize`, `tagNameOfToken` / `canonicalToken` (category prefix), `rewriteNegatedPrefixesForServer`, `TRUNCATING_METATAG_REGEX` / `findTruncatingTokens`, `finalTokens`, `computeRemoved` (implicit + `-tag` syntax) |
+| `IMPLICATION QUERIES` (~668) | Chunk / page / retry / depth-cap constants, `implicationCache`, `fetchImplicationsPage`, `fetchAllImplicationsByKey`, `upwardClosure`, `findStillImpliedTargets` |
+| `DIALOG` (~1131) | Popover DOM build, positioning, theme, keyboard shortcuts, master toggle, cascade uncheck, restore-on-cancel checkbox, fallback dialog, `showTruncationWarning` |
+| `INIT / CLEANUP` (~2065) | Turbo lifecycle, listener wiring |
+| `PREFETCH` (~2151) | `runPrefetch`, `onTextareaInput`, length-delta trigger detection |
+| `SUBMIT HANDLER` (~2331) | `handleSubmit`, plan computation, dialog flow, cache consumption, autocomplete dismissal, `removeTruncatingTokensAndContinue`, `restoreSeedsToInput` |
+| `ENTRY POINTS` (~2906) | `turbo:load` / `turbo:before-visit` / initial `init()` |
 
 ## Key Design Decisions
 
@@ -99,11 +99,16 @@ If Opus quota is at risk mid-session, switch main to Sonnet via `/model sonnet` 
 - **Cross-section sync** — A candidate reachable from multiple seeds appears in multiple sections; toggling one toggles all clones (via `change` event dispatch).
 - **Anchored floating popover** — `position: fixed`, anchored under the Edit-tags Submit button with viewport-edge clamping. No backdrop. Auto-cancel if anchor is removed from DOM.
 - **Edit-time prefetch** — Length-delta detection on `input` event (>1 immediate, ≤1 debounced 300ms). Plan cached and consumed by `handleSubmit` if input key matches; spinner phase elided. Submit-time fresh fetch falls back on cache miss. Cache-hit bypass (no candidates after Policy B+) lets `handleSubmit` call the native submit path on the first press — no two-press penalty (v1.0.3).
+- **Implication memo (v1.2.0)** — `implicationCache` keeps every lookup (`search key → tag name → rows`, empty array = no implications) for the page lifetime. The prefetch re-runs on each typing pause with a mostly unchanged removed set; without the memo that re-downloaded the same closure every time (measured: 32 requests for three removals + one typed tag, 10 with the memo). A chunk is stored only after its last page arrived — an abort or failure caches nothing. Requests carry `only=id,antecedent_name,consequent_name`. `upwardClosure` stops at `IMPLICATION_MAX_DEPTH` (20) levels.
+- **Category prefixes (v1.2.0)** — `char:foo` replacing `foo` is not a removal: the server counts the value of every category prefix (`gen` `general` `char` `character` `ch` `copy` `copyright` `co` `art` `artist` `meta`, case-insensitive) as a present tag (danbooru `PostEdit#new_tag_names` → `tag_categorization_terms`; `ch:` / `co:` only since upstream `c48ecc890`, 2026-11-13). `tagNameOfToken` / `canonicalToken` are the single place that knows this; `tokenize` returns canonical tokens, so `finalTokens`, `computeRemoved`, the prefetch cache key, `restoreSeedsToInput` and `removeTagsFromInput` all see `char:foo` as `foo` and `-gen:foo` as `-foo`.
+- **Negated category prefixes — script runs ahead of the server (v1.2.0)** — Danbooru's parser (`PostEdit#tag`) raises "Invalid tag name" on `-<category>:`, and `StringParser#zero_or_more` swallows the error and stops: every tag after the token counts as implicitly removed, with no warning (`1girl -gen:solo smile` keeps only `1girl`). Maintainer decision: implement the intended meaning (`-gen:foo` = `-foo`) instead of warning, and let the server catch up. `rewriteNegatedPrefixesForServer` rewrites only `-<category>:x` tokens, only on the submit paths that reach the server (the three non-`preventDefault` returns in `handleSubmit`, plus the `form.submit()` fallback), so a cancelled popover leaves the user's text as typed. It dispatches no `input` event. Other invalid negated metatags truncate the same way but have no intended meaning to rewrite to — see the next entry.
+- **Truncation warning (v1.2.0)** — `-rating:` `-source:` `-newpool:` `-newfavgroup:` `-disapproved:` (`TRUNCATING_METATAG_REGEX`: the metatags with no `-name` entry in danbooru `PostEdit::METATAGS`, verified one by one against the real parser 2026-11) stop the server parse like `-<category>:`. `handleSubmit` checks for them right after the `tagInput`/`tagForm` guard — before the `removed.length === 0` and prefetch-bypass returns, so no path can send them — and shows `showTruncationWarning` in the popover shell (title replaced, master and restore rows hidden with `style.display` because GLOBAL_CSS's `display: flex` beats the `hidden` attribute; `currentRemoved` stays null so Cancel never restores). Primary = `removeTruncatingTokensAndContinue`: strip the tokens, `hideDialog`, clear `isProcessing`, dispatch `input`, then a plain `requestSubmit()` — deliberately NOT `submitFormViaNativeFlow`, whose bypass flag would skip the parent-tag popover the cleaned input may need. No "submit anyway" by design (it could only delete tags). Not covered: an unclosed quote in a metatag value (`source:"abc` with no closing `"`) truncates the parse as well.
 - **Retry policy** — 5xx/429/network → 3 retries with 1s/2s/4s backoff. 4xx → fast-fail. AbortError → propagate. All retries exhausted → in-context fallback dialog ("Submit anyway" / "Cancel"), not a toast.
-- **Keyboard shortcuts** — `0` (master), `1`–`9`, `a`–`z` (case-insensitive, rows 10–35), `Esc` (cancel), `Ctrl+Enter` (submit, including macOS — Danbooru's own convention). Guarded against active textarea/input/contentEditable focus and modifier keys (`Ctrl/Cmd/Alt+letter`). When `Ctrl+Enter` is pressed with autocomplete still open, the submit handler dismisses the dropdown first so submit goes through in a single press (v1.0.2).
+- **Keyboard shortcuts** — `0` (master), `1`–`9`, `Esc` (cancel), `Ctrl+Enter` (submit, including macOS — Danbooru's own convention). Guarded against active textarea/input/contentEditable focus and modifier keys. **No letter shortcuts** (removed v1.2.0): the popover moves focus to its Submit button, where Danbooru's single-letter hotkeys (`a` / `d` / `f` / `e` …, jquery-hotkeys on `document`) are live, so a letter toggled a row *and* ran the site action. Do not re-add letters without also stopping propagation — and then the gaps left by colliding keys make the hint column inconsistent. When `Ctrl+Enter` is pressed with autocomplete still open, the submit handler dismisses the dropdown first so submit goes through in a single press (v1.0.2).
 - **Theme** — Container-scoped CSS variables. Dark detection via `body[data-current-user-theme="dark"]`; popover gets `data-butr-theme="dark"`. Prefix `--butr-*` for isolation from DanbooruInsights' `--di-*`.
 
 ## Turbo Lifecycle
+Danbooru does not ship Turbo (checked against the danbooru source, 2026-11): the tag form is a plain full-page POST and the `turbo:*` listeners never fire. They are kept as inert re-entry safety (shared pattern across this repo's scripts); the direct `init()` call is the one that runs.
 - `turbo:load` + initial direct `init()` call (PostTimeline pattern)
 - `turbo:before-visit` → `cleanup()`: aborts BFS/prefetch, force-hides popover, removes listeners, clears state
 - `init()` calls `cleanup()` first for re-entry safety
@@ -118,7 +123,7 @@ All gates must pass before reporting a task complete. Run them yourself — do n
 |---|---|---|---|
 | G1 | Syntax | `node --check BottomUpTagRemoval.user.js` | JS syntax + bracket balance |
 | G2 | Userscript metadata | Manual: reinstall in Tampermonkey, verify `@version` / `@match` recognized | Header health |
-| G3 | V scenarios | Manual: Safari + Tampermonkey, run sampling per [PLAN.md](PLAN.md) §Verification (cycle-specific) + archive §Verification (V1~V49 baseline) | Behavior regression |
+| G3 | V scenarios | Manual: Tampermonkey on Chrome / Whale / Firefox, run sampling per [PLAN.md](PLAN.md) §Verification (cycle-specific) + archive §Verification (V1~V49 baseline) | Behavior regression |
 
 When a gate fails, fix the root cause — do not whitelist, suppress, or work around. The whole point of mechanical gates is that LLM judgment cannot be trusted for these checks.
 
