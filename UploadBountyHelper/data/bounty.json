@@ -140,13 +140,53 @@
       "completed": false,
       "post_count_at_build": 22,
       "post_count_30d_delta": 0
+    },
+    "89_(8989_99)": {
+      "post_ids": [
+        380900,
+        468179
+      ],
+      "approvers": [
+        "user_872990",
+        "NiceLittleDan"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "79328843"
+      ],
+      "x_handles": [
+        "8989_99",
+        "8a9uu"
+      ],
+      "registered_at_utc": "2025-08-28T23:29:32.999Z",
+      "completed": false,
+      "post_count_at_build": 15,
+      "post_count_30d_delta": 0
+    },
+    "ahad": {
+      "post_ids": [
+        393615
+      ],
+      "approvers": [
+        "VeryActiveDuringTheNight"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "wiresandtrees"
+      ],
+      "registered_at_utc": "2025-10-17T14:22:39.616Z",
+      "completed": false,
+      "post_count_at_build": 15,
+      "post_count_30d_delta": 0
     }
   },
   "by_pixiv": {
     "2915498": "21_ke",
     "19325383": "024_(1a41a4)",
     "37564109": "0_ebj",
-    "54950669": "510_gotoudayo"
+    "54950669": "510_gotoudayo",
+    "79328843": "89_(8989_99)"
   },
   "by_x": {
     "0_ebj": "0_ebj",
@@ -159,12 +199,15 @@
     "37kuki770": "37kuki770",
     "510_gotoudayo": "510_gotoudayo",
     "789illust": "789illust",
+    "8989_99": "89_(8989_99)",
+    "8a9uu": "89_(8989_99)",
     "987654321qaqaqa": "789illust",
     "gecl4_": "024_(1a41a4)",
     "hhhooke": "21_ke",
     "uku3h": "0_ebj",
     "ukumxd": "0_ebj",
     "ver2268581": "789illust",
+    "wiresandtrees": "ahad",
     "z_we3n": "0_ebj",
     "z_we6n": "0_ebj"
   }
