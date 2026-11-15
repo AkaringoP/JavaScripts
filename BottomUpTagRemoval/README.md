@@ -9,7 +9,7 @@ A UserScript for [Danbooru](https://danbooru.donmai.us/) that catches the tags y
 - **Confirms before deleting.** Never auto-removes anything. You see every candidate and uncheck what you want to keep.
 - **Multi-step chains.** Handles transitive implications — removing `idolmaster_cinderella_girls_u149` walks all three levels up.
 - **Smart bypass.** If your edit doesn't actually trigger any cleanup (no removal / no parents / parents would be re-added by other tags you kept), the popover stays out of the way and submit goes through normally.
-- **Keyboard-friendly.** Number/letter shortcuts to toggle rows, `Ctrl+Enter` to submit, `Esc` to cancel.
+- **Keyboard-friendly.** Number shortcuts to toggle rows, `Ctrl+Enter` to submit, `Esc` to cancel.
 - **Cancel-safe.** Cancel closes the popover and leaves you on the edit page with your input untouched. Optional opt-in restore.
 - Works on both `/posts/{id}` and `/posts/{id}/edit`.
 
@@ -123,7 +123,7 @@ If you click **Submit** with this checkbox ticked, restore does nothing — Subm
 
 ### Keyboard shortcuts
 
-All shortcuts are active only when the popover is open and your focus is **not** in the textarea (the popover auto-moves focus to the Submit button when it opens). Modifier keys (`Ctrl`/`Cmd`/`Alt` + letter) are passed through to the browser.
+All shortcuts are active only when the popover is open and your focus is **not** in the textarea (the popover auto-moves focus to the Submit button when it opens). Modifier combinations (`Ctrl`/`Cmd`/`Alt` + key) are passed through to the browser. Letter keys are not used by the popover, so Danbooru's own single-letter shortcuts (`a` / `d` previous / next post, `f` favorite, …) behave exactly as they do without the script.
 
 | Key | Action |
 |---|---|
@@ -131,10 +131,9 @@ All shortcuts are active only when the popover is open and your focus is **not**
 | `Ctrl+Enter` | Submit (works on macOS too — matches Danbooru's own convention) |
 | `0` | Toggle `Delete all` master |
 | `1`–`9` | Toggle the 1st through 9th candidate row (top to bottom across sections) |
-| `a`–`z` (case-insensitive) | Toggle rows 10–35 (`a`=10, `b`=11, … `z`=35) |
 | Mouse | Always works for any row |
 
-A small grey hint label is shown to the left of each row (e.g. `1`, `a`, `b` …) so you can see which key maps to which row. Rows beyond 35 have no shortcut and need to be clicked.
+A small grey hint label is shown to the left of the first nine rows so you can see which key maps to which row. Rows beyond the 9th have no shortcut and need to be clicked.
 
 ## FAQ
 
@@ -144,8 +143,11 @@ The script runs only on `/posts/{id}` and `/posts/{id}/edit`. Bulk update has di
 **What about `-tag` subtraction syntax (Method B)?**
 Detected. If your input has `pinafore_dress -pinafore_dress`, the `-tag` form is treated as a removal, the popover shows the same candidates as a plain delete, and you can decide which parents to also remove.
 
+**What if I re-categorize a tag with a prefix (`char:tag`, `art:tag`, …)?**
+Rewriting an existing `hatsune_miku` as `char:hatsune_miku` (or `gen:` / `general:` / `character:` / `copy:` / `copyright:` / `art:` / `artist:` / `meta:`) is not a removal — Danbooru keeps the tag on the post — so no popover is shown.
+
 **Will it slow down my submit?**
-Most of the BFS work is prefetched as you edit. The popover usually appears with candidates already filled in (no spinner). The first edit after a page load may briefly show a spinner. If your network is slow or the API is degraded, the script retries 3 times with 1s/2s/4s backoff (worst case ~7s) before showing a fallback dialog asking whether to submit anyway or cancel.
+Most of the BFS work is prefetched as you edit. The popover usually appears with candidates already filled in (no spinner). Implication lookups are remembered for as long as the page stays open, so continuing to type after removing a tag sends no further requests. The first edit after a page load may briefly show a spinner. If your network is slow or the API is degraded, the script retries 3 times with 1s/2s/4s backoff (worst case ~7s) before showing a fallback dialog asking whether to submit anyway or cancel.
 
 **What happens if the API call fails completely?**
 You'll see a small fallback dialog with **`Submit anyway`** and **`Cancel`** buttons in the same spot as the normal popover. No silent submission and no silent failure.
@@ -164,12 +166,13 @@ Most common reason: the tag has no implications, or its parents would all be re-
 
 ## Compatibility
 
-- Tested with Tampermonkey on Safari (the maintainer's primary browser).
+- Developed and used with Tampermonkey on Chrome, Whale and Firefox (the maintainer's browsers).
 - Should work on any UserScript manager that supports standard `@match` and `@grant none`.
 - Requires a modern browser (`fetch`, `AbortController`, `URLSearchParams`, optional chaining).
 
 ## Changelog
 
+- **v1.2.0** (2026-11-15) — Letter shortcuts (`a`–`z`) removed: they fired Danbooru's own hotkeys (previous / next post, favorite, …) alongside the row toggle. Category-prefix edits (`char:tag`) no longer count as removals. Implication lookups are cached per page and request only the needed fields — far fewer, smaller API requests.
 - **v1.1.1** (2026-05-02) — Add a small `BottomUpTagRemoval v1.1.1` label above the popover title (kicker / overline style, plain text).
 - **v1.1.0** (2026-05-02) — Maintenance: dead code removal, selector observability (warns in the console when Danbooru's tag-input selector goes missing on a post page), `positionPopover` fallback hardening. **No user-visible behavior change.**
 - **v1.0.4** (2026-04-26) — Fix: restore-on-Cancel correctly drops `-tag`-only directives.

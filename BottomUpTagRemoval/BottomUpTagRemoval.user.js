@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.1.1
+// @version      1.2.0
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -202,7 +202,7 @@
    * @version for auto-update detection, while this constant is only for the
    * in-popover credit display. Keep them in sync on each release.
    */
-  const SCRIPT_VERSION = '1.1.1';
+  const SCRIPT_VERSION = '1.2.0';
 
   /**
    * @const {number} Debounce window for typing-style edits before kicking
@@ -463,11 +463,50 @@
   }
 
   /**
+   * @const {!RegExp} Category-prefix syntax (`char:hatsune_miku`,
+   * `art:bkub`, ...) on an already-lowercased token. The server counts the
+   * value as a tag present in the edit, exactly like the bare name
+   * (danbooru `PostEdit#new_tag_names`), so rewriting `foo` as `char:foo`
+   * is a re-categorization, NOT a removal.
+   *
+   * `ch:` / `co:` are deliberately absent: the server accepts them as
+   * category metatags but does not count their value as a present tag, so
+   * replacing `foo` with `ch:foo` really does drop `foo` from the post.
+   */
+  const CATEGORY_PREFIX_REGEX =
+      /^(?:gen|general|char|character|copy|copyright|art|artist|meta):(.+)$/;
+
+  /**
+   * Returns the tag name a textarea token stands for: the value of a
+   * category-prefixed token (`char:foo` or `char:"foo"` → `foo`), or the
+   * token itself for everything else (plain tags, `-tag` directives,
+   * other metatags).
+   *
+   * @param {string} token  Lowercased token.
+   * @return {string}
+   */
+  function tagNameOfToken(token) {
+    const match = CATEGORY_PREFIX_REGEX.exec(token);
+    if (!match) {
+      return token;
+    }
+    let name = match[1];
+    const quote = name[0];
+    if (name.length > 2 && (quote === '"' || quote === "'") &&
+        name.endsWith(quote)) {
+      name = name.slice(1, -1);
+    }
+    return name;
+  }
+
+  /**
    * Reduces a raw token Set to the tag set that will actually exist on the
    * post after the server parses Danbooru's add/subtract syntax. Drops:
    *   - `-tag` directives themselves (they are instructions, not tags).
    *   - Any `tag` whose `-tag` directive is also present (server resolves
    *     `tag -tag` to "tag is removed").
+   * Category-prefixed tokens count as their bare tag name
+   * (`tagNameOfToken`).
    *
    * This is the single source of truth for "what tags are effectively
    * present" — used by `computeRemoved` (diff vs originalTags) and by
@@ -483,8 +522,9 @@
     const result = new Set();
     for (const t of rawTokens) {
       if (t.startsWith('-')) continue;
-      if (rawTokens.has('-' + t)) continue;
-      result.add(t);
+      const name = tagNameOfToken(t);
+      if (rawTokens.has('-' + name)) continue;
+      result.add(name);
     }
     return result;
   }
@@ -537,6 +577,47 @@
 
   /** @const {string} Search key for batch fetch by consequent (parent) names. */
   const SEARCH_KEY_CONSEQUENT = 'search[consequent_name_array][]';
+
+  /**
+   * @const {string} `only` parameter — the three fields we read (`id` is
+   * the pagination cursor). Without it every row also carries reason,
+   * creator, forum and timestamp fields, roughly tripling the payload.
+   */
+  const IMPLICATION_ONLY_FIELDS = 'id,antecedent_name,consequent_name';
+
+  /**
+   * @const {number} Safety cap on BFS levels in `upwardClosure`. Real
+   * implication chains are a handful of levels deep; the cap only bounds
+   * the request count if the graph is ever much deeper than expected.
+   */
+  const IMPLICATION_MAX_DEPTH = 20;
+
+  /**
+   * @const {!Object<string, string>} Row field that a search key filters
+   * on — used to file fetched rows under the name that asked for them.
+   */
+  const IMPLICATION_NAME_FIELD = {
+    [SEARCH_KEY_ANTECEDENT]: 'antecedent_name',
+    [SEARCH_KEY_CONSEQUENT]: 'consequent_name',
+  };
+
+  /**
+   * Per-page memo of implication lookups: search key → tag name → every
+   * active implication row for that name (an empty array when it has
+   * none). A prefetch runs on each pause while the user types, and its
+   * removed-tag set rarely changes between runs — without the memo every
+   * run re-downloaded the same closure (4+ requests per typing pause).
+   *
+   * Never cleared: implications are site-wide facts, not per-post state,
+   * and the memo dies with the page. Only complete results are stored
+   * (see `fetchAllImplicationsByKey`), so an aborted or failed fetch
+   * leaves no partial entry behind.
+   * @const {!Map<string, !Map<string, !Array<!Object>>>}
+   */
+  const implicationCache = new Map([
+    [SEARCH_KEY_ANTECEDENT, new Map()],
+    [SEARCH_KEY_CONSEQUENT, new Map()],
+  ]);
 
   /**
    * Promise-based sleep that honors an AbortSignal — rejects immediately with
@@ -604,6 +685,7 @@
       params.append(searchKey, n);
     }
     params.set('search[status]', 'active');
+    params.set('only', IMPLICATION_ONLY_FIELDS);
     params.set('limit', String(IMPLICATION_PAGE_LIMIT));
     if (page) {
       params.set('page', page);
@@ -656,9 +738,13 @@
 
   /**
    * Resolves every active implication matching `names` under the given
-   * `searchKey` — chunks the input by IMPLICATION_CHUNK_SIZE, paginates
-   * within each chunk, and inserts a small delay between chunks to ease
-   * rate-limit pressure. Returns a flat array of implication rows.
+   * `searchKey`. Names already in `implicationCache` cost no request; the
+   * rest are chunked by IMPLICATION_CHUNK_SIZE, paginated within each
+   * chunk, and separated by a small delay to ease rate-limit pressure.
+   * Returns a flat array of implication rows.
+   *
+   * A chunk is written to the cache only after its last page arrived, so
+   * an abort or a failed page never caches a truncated row list.
    *
    * @param {string} searchKey  SEARCH_KEY_ANTECEDENT or SEARCH_KEY_CONSEQUENT.
    * @param {!Array<string>} names
@@ -666,23 +752,39 @@
    * @return {!Promise<!Array<!Object>>}
    */
   async function fetchAllImplicationsByKey(searchKey, names, signal) {
-    const results = [];
+    const cache = implicationCache.get(searchKey);
+    const nameField = IMPLICATION_NAME_FIELD[searchKey];
+    const uniqueNames = [...new Set(names)];
+    const missing = uniqueNames.filter((name) => !cache.has(name));
+
     let isFirstChunk = true;
-    for (const chunk of chunked(names, IMPLICATION_CHUNK_SIZE)) {
+    for (const chunk of chunked(missing, IMPLICATION_CHUNK_SIZE)) {
       if (!isFirstChunk) {
         await delayWithSignal(IMPLICATION_CHUNK_DELAY_MS, signal);
       }
       isFirstChunk = false;
 
+      const rows = [];
       let page = null;
       do {
         const {items, nextPage} = await fetchImplicationsPage(
             searchKey, chunk, page, signal);
-        results.push(...items);
+        rows.push(...items);
         page = nextPage;
       } while (page);
+
+      // Every requested name gets an entry — an empty one records "no
+      // implications", which is what makes the final BFS level free.
+      /** @type {!Map<string, !Array<!Object>>} */
+      const rowsByName = new Map(chunk.map((name) => [name, []]));
+      for (const row of rows) {
+        rowsByName.get(row[nameField])?.push(row);
+      }
+      for (const [name, nameRows] of rowsByName) {
+        cache.set(name, nameRows);
+      }
     }
-    return results;
+    return uniqueNames.flatMap((name) => cache.get(name));
   }
 
   /**
@@ -821,8 +923,15 @@
     /** @type {!Map<string, {antecedents: !Set<string>}>} */
     const intermediate = new Map();
     let frontier = Array.from(seeds);
+    let depth = 0;
 
     while (frontier.length > 0) {
+      if (++depth > IMPLICATION_MAX_DEPTH) {
+        console.warn(
+            `[BUTR] implication chain deeper than ${IMPLICATION_MAX_DEPTH} ` +
+            'levels — stopping the upward search early');
+        break;
+      }
       const items = await fetchAllImplications(frontier, signal);
       const next = [];
       for (const imp of items) {
@@ -1040,7 +1149,7 @@
 
     // Move focus into the popover. When the user triggered submit via
     // Ctrl+Enter on the tag textarea, focus stayed there by default —
-    // pressing "0" / "1"–"9" / "a"–"z" would then route the keystroke to
+    // pressing "0" / "1"–"9" would then route the keystroke to
     // the textarea (isEditingText guard kicks in) instead of toggling a
     // checkbox. Putting focus on Submit makes the keyboard shortcuts work
     // out of the box and keeps Enter (without Ctrl) submitting too.
@@ -1189,8 +1298,8 @@
 
   /**
    * Builds a small muted-text keyboard-shortcut indicator span. Used in the
-   * master row ("0") and candidate rows ("1"–"9", "a"–"z", or empty
-   * placeholder for the 36th+ candidate).
+   * master row ("0") and candidate rows ("1"–"9", or empty placeholder
+   * for the 10th+ candidate).
    *
    * @param {string} text
    * @return {!HTMLSpanElement}
@@ -1205,20 +1314,17 @@
   /**
    * Maps a 0-based candidate row index to its keyboard-shortcut label.
    *   0–8   → "1"…"9"
-   *   9–34  → "a"…"z"
-   *   35+   → ""  (empty — click only; placeholder span keeps row alignment)
+   *   9+    → ""  (empty — click only; placeholder span keeps row alignment)
+   *
+   * Letters are not used (dropped in v1.2.0): Danbooru binds single
+   * letters on the post page (`a` / `d` previous / next post, `f`
+   * favorite, `e` edit, ...) and those fired alongside the row toggle.
    *
    * @param {number} index
    * @return {string}
    */
   function candidateKeyHint(index) {
-    if (index < 9) {
-      return String(index + 1);
-    }
-    if (index < 35) {
-      return String.fromCharCode(97 + (index - 9));
-    }
-    return '';
+    return index < 9 ? String(index + 1) : '';
   }
 
   /**
@@ -1423,13 +1529,12 @@
    *                            on macOS too, NOT Cmd)
    *   0                      → toggleMasterCheckbox()
    *   1–9                    → toggleCandidateAt(N − 1)   (rows 1–9)
-   *   a–z (Shift agnostic)   → toggleCandidateAt(9 + idx) (rows 10–35)
    *
-   * Letter / digit shortcuts are guarded by `isEditingText()` (don't
-   * capture digits the user is typing into the textarea) and by a
-   * modifier check (don't capture Ctrl+1 / Cmd+a / Alt+x — leave browser
-   * shortcuts intact). Esc and Ctrl+Enter ignore both guards so the user
-   * can always confirm or dismiss.
+   * Digit shortcuts are guarded by `isEditingText()` (don't capture
+   * digits the user is typing into the textarea) and by a modifier check
+   * (don't capture Ctrl+1 / Alt+1 — leave browser shortcuts intact). Esc
+   * and Ctrl+Enter ignore both guards so the user can always confirm or
+   * dismiss. Letter keys are left alone — see `candidateKeyHint`.
    *
    * @param {KeyboardEvent} e
    */
@@ -1460,10 +1565,8 @@
       return;
     }
 
-    // Modifier-held keys belong to the browser / OS (Ctrl+1 switch tab,
-    // Cmd+a select all, Alt+letter on Mac produces special chars, ...).
-    // Shift is excluded from the guard because case-insensitive letter
-    // matching naturally accepts Shift+a as `A` → lowercased.
+    // Modifier-held keys belong to the browser / OS (Ctrl+1 / Cmd+1 switch
+    // tab, Alt+digit on Mac produces special chars, ...).
     if (e.ctrlKey || e.metaKey || e.altKey) {
       return;
     }
@@ -1477,14 +1580,6 @@
     if (/^[1-9]$/.test(e.key)) {
       e.preventDefault();
       toggleCandidateAt(parseInt(e.key, 10) - 1);
-      return;
-    }
-
-    // Letters a–z (and A–Z via Shift / Caps Lock) map to candidates 10–35.
-    const lower = e.key.length === 1 ? e.key.toLowerCase() : '';
-    if (lower >= 'a' && lower <= 'z') {
-      e.preventDefault();
-      toggleCandidateAt(9 + (lower.charCodeAt(0) - 97));
     }
   }
 
@@ -2379,6 +2474,13 @@
    * resulting event. Falls back to form.submit() on the rare browser
    * that lacks form.requestSubmit (Safari < 16); in that case the bypass
    * flag is cleared because no submit event is dispatched.
+   *
+   * requestSubmit() dispatches `submit` synchronously, so by the time it
+   * returns handleSubmit has already consumed the flag. The `finally`
+   * covers the calls that dispatch nothing (constraint validation
+   * failure, or a call nested inside another submit event): without it
+   * the flag stayed set and silently skipped the popover on the user's
+   * NEXT submit (v1.2.0).
    */
   function submitFormViaNativeFlow() {
     if (!tagForm) {
@@ -2386,7 +2488,11 @@
     }
     if (typeof tagForm.requestSubmit === 'function') {
       bypassNextSubmit = true;
-      tagForm.requestSubmit();
+      try {
+        tagForm.requestSubmit();
+      } finally {
+        bypassNextSubmit = false;
+      }
     } else {
       bypassNextSubmit = false;
       tagForm.submit();
@@ -2418,7 +2524,10 @@
       if (!p || /^\s+$/.test(p)) {
         continue;
       }
-      if (!toRemove.has(p.toLowerCase())) {
+      // tagNameOfToken: a candidate present only as `copy:vocaloid` must
+      // still be removable — finalTokens offered it under its bare name.
+      const lower = p.toLowerCase();
+      if (!toRemove.has(lower) && !toRemove.has(tagNameOfToken(lower))) {
         continue;
       }
 
