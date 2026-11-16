@@ -274,16 +274,23 @@
    * Detection strategy:
    * 1. DOM: Normal post pages always render the image container and the
    *    sidebar options. If either exists, the post is visible.
-   * 2. API: Cross-check `is_banned` via the posts API.
-   * 3. Fallback: If the API is unavailable for this post, look for the
-   *    takedown message in the page body.
+   * 2. Page: The removed-page error (HTTP 451) has the title "Page Removed"
+   *    and a takedown message. Either one is enough, with no request. This
+   *    also covers posts hidden by `is_taken_down`, which is not `is_banned`.
+   * 3. API: Only if neither marker is found (e.g. the wording changed),
+   *    cross-check `is_banned` via the posts API.
    *
    * @param {number|undefined} postId The current post ID from the URL.
    * @return {!Promise<boolean>} True if the post is hidden for this user.
    */
   const detectHiddenPost = async (postId) => {
-    if (document.querySelector('#image-container, #post-options')) {
+    if (document.querySelector('.image-container, #post-options')) {
       return false;
+    }
+    if (/^Page Removed\b/.test(document.title) ||
+        /removed because of a takedown request/i
+            .test(document.body.textContent)) {
+      return true;
     }
     if (!postId) {
       return false;
@@ -298,8 +305,7 @@
     } catch (error) {
       console.warn('NextRandomPost: Banned check failed', error);
     }
-    return /removed because of a takedown request/i
-        .test(document.body.innerText);
+    return false;
   };
 
   /**
