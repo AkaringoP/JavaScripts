@@ -15,8 +15,8 @@ This script adds a **"Next random post"** button to the post options sidebar and
 ### v2.4
 * **Works at your tag limit:** The script now asks Danbooru's `/posts/random.json` for the next post. The old request quietly added a `random:1` term that counted against your search tag limit, so a search that already used every allowed tag always fell back to Danbooru's slower random page.
 * **No dead ends:** When no other post matches your search, a notice says so and you stay on the page, instead of reloading the same post or landing on an error page.
-* **Skips banned, deleted, and recently viewed posts:** Banned posts (a blank "Page Removed" page below Approver level) and deleted posts are left out, unless your search asks for them (e.g. `status:deleted`) or your account is set to show deleted posts. The last 20 posts you viewed in the current tab are skipped too; once a small search has shown every post, it starts over.
-* **Open in a new tab:** The sidebar link now points at the actual next post, so middle-click, Ctrl/⌘+click, and "Open link in new tab" all work. Each new tab gets a different post.
+* **Skips banned, deleted, and recently viewed posts:** Banned posts (a blank "Page Removed" page below Approver level) and deleted posts are left out, unless your search asks for them (e.g. `status:deleted`) or your account is set to show deleted posts. The last 20 posts you viewed in the current tab, including ones you opened from it in a new tab, are skipped too; once a small search has shown every post, it starts over.
+* **Open in a new tab:** The sidebar link now points at the actual next post, so middle-click, Ctrl/⌘+click, and "Open link in new tab" all work. With middle-click and Ctrl/⌘+click, each new tab gets a different post. The right-click menu's "Open link in new tab" can't be detected by the script, so using it twice in a row opens the same post.
 * **Fixes:**
     * Tags with `order:` inside their name (e.g. `fate/grand_order:_first_order`) no longer break the search.
     * The script stays inactive on post sub-pages such as `/posts/123/events` and `/posts/123/favorites`.
