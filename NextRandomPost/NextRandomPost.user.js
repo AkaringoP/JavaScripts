@@ -122,6 +122,27 @@
   };
 
   /**
+   * Builds the API search query for a random post.
+   *
+   * Drops `order:` metatags, which conflict with random ordering. Only whole
+   * tokens that start with `order:` are dropped, so tags that merely contain
+   * it (e.g. `fate/grand_order:_first_order`) are kept.
+   *
+   * @param {string} tags The user's search tags.
+   * @param {number=} excludeId Post ID to exclude from results (typically the
+   *     current post to avoid navigating to the same page).
+   * @return {string} The query to send to the API.
+   */
+  const buildApiQuery = (tags, excludeId) => {
+    const terms = tags.split(/\s+/)
+        .filter((term) => term && !/^order:/i.test(term));
+    if (excludeId) {
+      terms.push(`-id:${excludeId}`);
+    }
+    return terms.join(' ');
+  };
+
+  /**
    * Fetches a random post ID from the API based on the provided tags.
    * Handles API errors gracefully and ensures only one fetch runs at a time.
    *
@@ -138,14 +159,7 @@
     isFetching = true;
 
     try {
-      // Strip existing 'order:...' tags to avoid conflicts with 'random' sorting.
-      let apiQuery =
-          tags.replace(/order:[^\s]+/gi, '').replace(/\s+/g, ' ').trim();
-
-      // Exclude the specified post ID from results.
-      if (excludeId) {
-        apiQuery = apiQuery ? `${apiQuery} -id:${excludeId}` : `-id:${excludeId}`;
-      }
+      const apiQuery = buildApiQuery(tags, excludeId);
 
       // `/posts/random.json` answers directly with one post object. The
       // `/posts.json?random=true` form redirects and appends `random:1`,
