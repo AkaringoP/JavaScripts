@@ -31,6 +31,14 @@
   const NO_MATCH_MESSAGE = 'No other posts match this search.';
 
   /**
+   * How long navigation stays locked after leaving for another page. If the
+   * page never unloads (Stop button, a stalled request), the lock is
+   * released after this delay so the link and shortcut work again.
+   * @const {number}
+   */
+  const NAV_LOCK_MS = 5000;
+
+  /**
    * Maximum delay between two taps to count as a double tap.
    * @const {number}
    */
@@ -102,6 +110,12 @@
    * @type {boolean}
    */
   let isNavigating = false;
+
+  /**
+   * Timer that releases `isNavigating` if a navigation never completes.
+   * @type {number|undefined}
+   */
+  let navLockTimer;
 
   // --- Core Logic ---
 
@@ -275,6 +289,20 @@
   };
 
   /**
+   * Leaves for `url`, keeping `isNavigating` set for `NAV_LOCK_MS` in case
+   * the navigation is cancelled and this page stays.
+   *
+   * @param {string} url
+   */
+  const navigateTo = (url) => {
+    window.location.href = url;
+    clearTimeout(navLockTimer);
+    navLockTimer = setTimeout(() => {
+      isNavigating = false;
+    }, NAV_LOCK_MS);
+  };
+
+  /**
    * Executes the navigation logic.
    *
    * Waits (at most `NAV_WAIT_MS`) for the random-post request of the current
@@ -283,7 +311,8 @@
    * 2. `empty`: stay, and tell the user no other post matches.
    * 3. `error` or timeout: fall back to Danbooru's random URL.
    *
-   * Sets `isNavigating` to true to prevent multiple triggers.
+   * Sets `isNavigating` to true to prevent multiple triggers. It is cleared
+   * right away when staying, and after `NAV_LOCK_MS` when leaving.
    *
    * @return {!Promise<void>}
    */
@@ -298,12 +327,12 @@
         requestRandom(query), NAV_WAIT_MS, {status: 'error'});
 
     if (result.status === 'ok') {
-      window.location.href = buildPostUrl(result.id, query);
+      navigateTo(buildPostUrl(result.id, query));
     } else if (result.status === 'empty') {
       notify(NO_MATCH_MESSAGE);
       isNavigating = false;
     } else {
-      window.location.href = buildFallbackUrl(query);
+      navigateTo(buildFallbackUrl(query));
     }
   };
 
@@ -313,6 +342,7 @@
    */
   const resetState = () => {
     isNavigating = false;
+    clearTimeout(navLockTimer);
     // Drop the cached request because the user might have already seen that
     // post, or the context might be stale upon return.
     prefetch = null;
