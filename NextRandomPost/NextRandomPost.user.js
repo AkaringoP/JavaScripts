@@ -39,6 +39,16 @@
   const NAV_LOCK_MS = 5000;
 
   /**
+   * `status:` / `is:` values that make Danbooru's gallery show deleted posts
+   * (server: `PostSets::Post#has_status_metatag?`). With one of these in the
+   * search, deleted posts are part of what the user asked for.
+   * @const {!Array<string>}
+   */
+  const DELETED_VISIBLE_STATUSES = [
+    'all', 'any', 'active', 'unmoderated', 'modqueue', 'deleted', 'appealed',
+  ];
+
+  /**
    * Maximum delay between two taps to count as a double tap.
    * @const {number}
    */
@@ -150,11 +160,46 @@
   };
 
   /**
+   * Returns metatags that keep posts this user would not normally see out of
+   * the random pick. Both are free metatags (no tag-limit cost).
+   * - `-is:banned`: banned posts are a blank "Page Removed" page below
+   *   Approver, unless the search explicitly asks for banned posts.
+   * - `-status:deleted`: deleted posts are hidden in the gallery unless the
+   *   user's "show deleted posts" setting is on or the search has one of
+   *   `DELETED_VISIBLE_STATUSES`.
+   *
+   * @param {!Array<string>} terms The user's search terms.
+   * @return {!Array<string>}
+   */
+  const buildVisibilityFilters = (terms) => {
+    const user = document.body.dataset;
+    const statuses = terms
+        .map((term) => /^(-?)(?:status|is):(\S+)$/i.exec(term))
+        .filter(Boolean)
+        .map(([, negated, value]) => ({negated, value: value.toLowerCase()}));
+    const filters = [];
+
+    const asksForBanned =
+        statuses.some(({negated, value}) => !negated && value === 'banned');
+    if (user.currentUserIsApprover !== 'true' && !asksForBanned) {
+      filters.push('-is:banned');
+    }
+
+    const showsDeleted = user.currentUserShowDeletedPosts === 'true' ||
+        statuses.some(({value}) => DELETED_VISIBLE_STATUSES.includes(value));
+    if (!showsDeleted) {
+      filters.push('-status:deleted');
+    }
+    return filters;
+  };
+
+  /**
    * Builds the API search query for a random post.
    *
    * Drops `order:` metatags, which conflict with random ordering. Only whole
    * tokens that start with `order:` are dropped, so tags that merely contain
-   * it (e.g. `fate/grand_order:_first_order`) are kept.
+   * it (e.g. `fate/grand_order:_first_order`) are kept. Adds the visibility
+   * filters, which only ever go to the API, never into the URL or search box.
    *
    * @param {string} tags The user's search tags.
    * @param {number=} excludeId Post ID to exclude from results (typically the
@@ -164,6 +209,7 @@
   const buildApiQuery = (tags, excludeId) => {
     const terms = tags.split(/\s+/)
         .filter((term) => term && !/^order:/i.test(term));
+    terms.push(...buildVisibilityFilters(terms));
     if (excludeId) {
       terms.push(`-id:${excludeId}`);
     }
