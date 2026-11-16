@@ -102,25 +102,6 @@
       "post_count_at_build": 40,
       "post_count_30d_delta": 1
     },
-    "510_gotoudayo": {
-      "post_ids": [
-        262287
-      ],
-      "approvers": [
-        "Dogbooru"
-      ],
-      "aliased_from": [],
-      "pixiv_user_ids": [
-        "54950669"
-      ],
-      "x_handles": [
-        "510_gotoudayo"
-      ],
-      "registered_at_utc": "2023-12-16T01:43:47.559Z",
-      "completed": false,
-      "post_count_at_build": 31,
-      "post_count_30d_delta": 0
-    },
     "789illust": {
       "post_ids": [
         388879
@@ -162,34 +143,12 @@
       "completed": false,
       "post_count_at_build": 15,
       "post_count_30d_delta": 0
-    },
-    "aizawa_sachi": {
-      "post_ids": [
-        462239,
-        464155
-      ],
-      "approvers": [
-        "Haruuspex"
-      ],
-      "aliased_from": [],
-      "pixiv_user_ids": [
-        "3884576"
-      ],
-      "x_handles": [
-        "sachichy"
-      ],
-      "registered_at_utc": "2026-08-21T00:40:40.192Z",
-      "completed": true,
-      "post_count_at_build": 415,
-      "post_count_30d_delta": 7
     }
   },
   "by_pixiv": {
     "2915498": "21_ke",
-    "3884576": "aizawa_sachi",
     "19325383": "024_(1a41a4)",
     "37564109": "0_ebj",
-    "54950669": "510_gotoudayo",
     "79328843": "89_(8989_99)"
   },
   "by_x": {
@@ -201,14 +160,12 @@
     "2255nicc": "2525nicc",
     "2525nicc": "2525nicc",
     "37kuki770": "37kuki770",
-    "510_gotoudayo": "510_gotoudayo",
     "789illust": "789illust",
     "8989_99": "89_(8989_99)",
     "8a9uu": "89_(8989_99)",
     "987654321qaqaqa": "789illust",
     "gecl4_": "024_(1a41a4)",
     "hhhooke": "21_ke",
-    "sachichy": "aizawa_sachi",
     "uku3h": "0_ebj",
     "ukumxd": "0_ebj",
     "ver2268581": "789illust",
