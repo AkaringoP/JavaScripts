@@ -432,6 +432,19 @@
       '/posts/random');
 
   /**
+   * Returns the post the prefetch found for `query`, if it has finished and
+   * found one.
+   *
+   * @param {string} query The search tags.
+   * @return {number|undefined}
+   */
+  const getPrefetchedId = (query) => {
+    const result =
+        (prefetch && prefetch.query === query) ? prefetch.result : null;
+    return (result && result.status === 'ok') ? result.id : undefined;
+  };
+
+  /**
    * Points the sidebar link at where it leads right now: the prefetched post
    * when it is ready for the current search, otherwise Danbooru's random URL.
    * A real `href` lets the browser open it in a new tab (middle click,
@@ -442,11 +455,31 @@
       return;
     }
     const query = getCurrentQuery();
-    const result =
-        (prefetch && prefetch.query === query) ? prefetch.result : null;
-    nextLink.href = (result && result.status === 'ok') ?
-        buildPostUrl(result.id, query) :
+    const postId = getPrefetchedId(query);
+    nextLink.href = postId ?
+        buildPostUrl(postId, query) :
         buildFallbackUrl(query);
+  };
+
+  /**
+   * Handles the link being opened in another tab or window by the browser.
+   * The post it led to counts as viewed in this tab, so the next prefetch
+   * skips it and the next new tab gets a different post even in a small
+   * search. Opening through the context menu cannot be detected.
+   */
+  const handleOpenedElsewhere = () => {
+    const openedId = getPrefetchedId(getCurrentQuery());
+    if (openedId) {
+      const [currentId, ...rest] = getRecentPostIds();
+      writeHistory([
+        currentId,
+        openedId,
+        ...rest.filter((id) => id !== openedId),
+      ].slice(0, HISTORY_SIZE));
+    }
+    // The new request settles asynchronously, after the browser has read
+    // the current href.
+    renewPrefetch();
   };
 
   /**
@@ -699,12 +732,13 @@
       }
 
       link.addEventListener('click', (event) => {
-        const opensElsewhere = event.button !== 0 || event.ctrlKey ||
-            event.metaKey || event.shiftKey || event.altKey;
-        if (opensElsewhere) {
-          // The browser opens the current href in a new tab or window. The
-          // new request settles asynchronously, after the browser has read it.
-          renewPrefetch();
+        // Other buttons are handled by `auxclick` below.
+        if (event.button !== 0) {
+          return;
+        }
+        // Ctrl/Cmd/Shift/Alt+click: the browser opens the href elsewhere.
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+          handleOpenedElsewhere();
           return;
         }
         event.preventDefault();
@@ -713,7 +747,7 @@
       // Middle click fires `auxclick`, not `click`.
       link.addEventListener('auxclick', (event) => {
         if (event.button === 1) {
-          renewPrefetch();
+          handleOpenedElsewhere();
         }
       });
 
