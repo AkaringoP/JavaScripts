@@ -477,10 +477,13 @@
       }
     });
 
-    // Handle Browser Back/Forward Cache (bfcache) restoration.
-    // This fixes the issue where 'isNavigating' remains true after clicking 'Back'.
+    // Handle Browser Back/Forward Cache (bfcache) restoration, where the page
+    // comes back with `isNavigating` still set and an already-used prefetch.
+    // Only `persisted` counts: the page's first pageshow fires on load, which
+    // can come while a click is still waiting for the prefetch (large images
+    // on mobile); resetting then would unlock a second navigation.
     window.addEventListener('pageshow', (event) => {
-      if (event.persisted || isNavigating) {
+      if (event.persisted) {
         resetState();
       }
     });
