@@ -326,9 +326,11 @@
 
   /**
    * Fetches a random post that is neither the current post nor one viewed
-   * recently in this tab. If every match was viewed recently, the history is
-   * cleared (keeping the current post) and the fetch is retried once, so
-   * small searches cycle instead of running dry.
+   * recently in this tab. If nothing is left, the fetch is retried once
+   * excluding only the current post. When that finds a post, every match had
+   * been viewed recently, so the history restarts from the current post and
+   * small searches cycle instead of running dry. When it does not, the search
+   * has no other posts at all (e.g. a typo) and the history is kept.
    *
    * @param {string} query The search tags.
    * @return {!Promise<!RandomResult>}
@@ -340,8 +342,11 @@
       return result;
     }
     const currentId = getCurrentPostId();
-    writeHistory([currentId]);
-    return fetchRandom(query, [currentId]);
+    const retry = await fetchRandom(query, [currentId]);
+    if (retry.status === 'ok') {
+      writeHistory([currentId]);
+    }
+    return retry;
   };
 
   /**
