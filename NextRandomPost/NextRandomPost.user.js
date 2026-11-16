@@ -75,7 +75,8 @@
 
   /**
    * Styles for the double-tap zone shown on banned (takedown) post pages.
-   * Injected only when such a page is detected.
+   * Injected only when such a page is detected. `top` / `bottom` are only
+   * defaults: `positionDoubleTapZone` sets them from the header and footer.
    * @const {string}
    */
   const GLOBAL_CSS = `
@@ -154,12 +155,6 @@
   // --- Core Logic ---
 
   /**
-   * Retrieves the current search query from the input box or URL parameters.
-   * Priority is given to the input box value, falling back to URL 'q' or 'tags'.
-   *
-   * @return {string} The current search tags as a trimmed string.
-   */
-  /**
    * Extracts the current post ID from the URL path. Only the post page itself
    * (`/posts/123`) counts; sub-pages such as `/posts/123/events` do not.
    *
@@ -171,6 +166,13 @@
     return match ? parseInt(match[1], 10) : undefined;
   };
 
+  /**
+   * Retrieves the current search query from the input box or URL parameters.
+   * Priority is given to the input box value, falling back to URL 'q' or
+   * 'tags'.
+   *
+   * @return {string} The current search tags as a trimmed string.
+   */
   const getCurrentQuery = () => {
     const searchInput = document.querySelector('#tags') ||
         document.querySelector('input[name="tags"]');
@@ -295,7 +297,8 @@
     // `/posts/random.json` answers directly with one post object. The
     // `/posts.json?random=true` form redirects and appends `random:1`,
     // which counts against the user's tag limit.
-    const apiUrl = `/posts/random.json?tags=${encodeURIComponent(apiQuery)}&only=id`;
+    const apiUrl =
+        `/posts/random.json?tags=${encodeURIComponent(apiQuery)}&only=id`;
 
     try {
       const response = await fetch(apiUrl);
@@ -413,13 +416,15 @@
   };
 
   /**
-   * Builds Danbooru's own random-post URL, used when the API request failed.
+   * Builds Danbooru's own random-post URL, used when the API request failed
+   * or (as the link's href) has not finished yet.
    *
    * @param {string} activeTags The search tags.
    * @return {string}
    */
-  const buildFallbackUrl = (activeTags) =>
-    `/posts/random${activeTags ? '?tags=' + encodeURIComponent(activeTags) : ''}`;
+  const buildFallbackUrl = (activeTags) => (activeTags ?
+      `/posts/random?tags=${encodeURIComponent(activeTags)}` :
+      '/posts/random');
 
   /**
    * Points the sidebar link at where it leads right now: the prefetched post
