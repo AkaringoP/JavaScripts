@@ -147,16 +147,23 @@
         apiQuery = apiQuery ? `${apiQuery} -id:${excludeId}` : `-id:${excludeId}`;
       }
 
-      const apiUrl = `/posts.json?tags=${encodeURIComponent(apiQuery)}&random=true&limit=1&only=id`;
+      // `/posts/random.json` answers directly with one post object. The
+      // `/posts.json?random=true` form redirects and appends `random:1`,
+      // which counts against the user's tag limit.
+      const apiUrl = `/posts/random.json?tags=${encodeURIComponent(apiQuery)}&only=id`;
       const response = await fetch(apiUrl);
 
+      // 404 means no post matches the search: not an error.
+      if (response.status === 404) {
+        return null;
+      }
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const data = await response.json();
       // Only accept a well-formed integer ID from the API response.
-      const id = (data && data.length > 0) ? data[0].id : null;
+      const id = data ? data.id : null;
       return Number.isInteger(id) ? id : null;
     } catch (error) {
       console.warn('NextRandomPost: Fetch failed', error);
