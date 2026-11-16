@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Danbooru Bottom-Up Tag Removal
 // @namespace    https://github.com/AkaringoP
-// @version      1.2.0
+// @version      1.2.1
 // @description  When you remove a tag on submit, also offer to remove its implied parent tags via a confirmation dialog.
 // @author       AkaringoP
 // @license      MIT
@@ -185,21 +185,6 @@
     @keyframes butr-spin {
       to { transform: rotate(360deg); }
     }
-    .butr-warning p {
-      margin: 0 0 6px;
-    }
-    .butr-warning code {
-      font-family: monospace;
-      font-size: 12px;
-      padding: 0 3px;
-      border-radius: 3px;
-      background: var(--butr-bg-hover, rgba(0, 0, 0, 0.06));
-      word-break: break-all;
-    }
-    .butr-warning .butr-warning-hint {
-      color: var(--butr-text-muted, #888888);
-      font-size: 12px;
-    }
   `;
 
   /** @const {string} CSS selector for the post tag input. Same on /posts/{id} and /posts/{id}/edit. */
@@ -217,7 +202,7 @@
    * @version for auto-update detection, while this constant is only for the
    * in-popover credit display. Keep them in sync on each release.
    */
-  const SCRIPT_VERSION = '1.2.0';
+  const SCRIPT_VERSION = '1.2.1';
 
   /**
    * @const {number} Debounce window for typing-style edits before kicking
@@ -519,14 +504,12 @@
    * Reduces one token to the tag it stands for, keeping a leading `-`:
    * `char:foo` → `foo`, and `-gen:foo` → `-foo`.
    *
-   * The negated form is what the user means by `-gen:foo` — "remove
-   * foo"; a category prefix says nothing about removal. Danbooru's edit
-   * parser does not read it that way: it rejects `-<category>:` as an
-   * invalid tag name, silently stops parsing there, and treats EVERY tag
-   * after it as implicitly removed (verified against danbooru
-   * `PostEdit#tag` + `StringParser#zero_or_more`, 2026-11).
-   * `rewriteNegatedPrefixesForServer` sends the server the `-foo` this
-   * function models.
+   * A category prefix says nothing about removal, so `-gen:foo` means
+   * "remove foo". The server reads it the same way since danbooru
+   * 6b167f9 (2026-11-15, issue #6812); before that its parser stopped at
+   * such a token and dropped every tag after it, and v1.2.0 rewrote the
+   * token to `-foo` on submit to work around that. The rewrite is gone
+   * (v1.2.1) — the text is submitted exactly as typed.
    *
    * @param {string} token
    * @return {string}
@@ -536,83 +519,6 @@
       return '-' + tagNameOfToken(token.slice(1));
     }
     return tagNameOfToken(token);
-  }
-
-  /**
-   * Rewrites every `-<category>:tag` token in the tag input to `-tag`,
-   * leaving all other text untouched. Called on the submit paths that let
-   * the form go to the server, so the server receives the removal the
-   * user meant instead of a string its parser truncates (see
-   * `canonicalToken`). `-tag` is valid on every server version, so this
-   * stays harmless after Danbooru fixes the parser.
-   *
-   * No `input` event is dispatched: the page is about to submit, and an
-   * event here would only re-trigger autocomplete and our prefetch.
-   */
-  function rewriteNegatedPrefixesForServer() {
-    if (!tagInput) {
-      return;
-    }
-    const value = tagInput.value;
-    const rewritten = value.split(/(\s+)/).map((part) =>
-      part.startsWith('-') ? canonicalToken(part) : part).join('');
-    if (rewritten !== value) {
-      tagInput.value = rewritten;
-    }
-  }
-
-  /**
-   * @const {!RegExp} Negated metatags Danbooru's edit parser rejects:
-   * metatags that have no `-name` form in danbooru `PostEdit::METATAGS`
-   * (checked 2026-11). Like `-<category>:`, each one raises "Invalid tag
-   * name", the parser stops, and every tag after it counts as removed.
-   * Unlike `-<category>:` there is no intended meaning to rewrite to, so
-   * `handleSubmit` stops and warns instead (`showTruncationWarning`).
-   *
-   * Valid negated metatags (`-parent:` `-status:` `-pool:` `-favgroup:`
-   * `-fav:` `-child:` `-upvote:` `-downvote:`) are deliberately absent.
-   */
-  const TRUNCATING_METATAG_REGEX =
-      /^-(?:rating|source|newpool|newfavgroup|disapproved):/i;
-
-  /**
-   * @const {!Object<string, string>} Optional fix-it hint per metatag,
-   * shown under the truncation warning.
-   */
-  const TRUNCATING_METATAG_HINTS = {
-    rating: 'Every post has a rating. Change it with rating:g, rating:s, ' +
-        'rating:q or rating:e.',
-    source: 'To clear the source, use source:none.',
-  };
-
-  /**
-   * Finds the tokens in a tag string that would make Danbooru stop parsing
-   * (`TRUNCATING_METATAG_REGEX`), plus the existing tags that would be
-   * deleted because they come after the first one.
-   *
-   * `lostTags` = original tags the user kept, minus those the parser would
-   * still read before the first bad token. Tags the user is deliberately
-   * removing are not counted as lost.
-   *
-   * @param {string} value  Tag textarea value.
-   * @return {{tokens: !Array<string>, lostTags: !Array<string>}}  Empty
-   *     `tokens` when the string is safe.
-   */
-  function findTruncatingTokens(value) {
-    const parts = value.split(/\s+/).filter(Boolean);
-    const first = parts.findIndex((t) => TRUNCATING_METATAG_REGEX.test(t));
-    if (first === -1) {
-      return {tokens: [], lostTags: []};
-    }
-    const tokens = [...new Set(
-        parts.filter((t) => TRUNCATING_METATAG_REGEX.test(t)))];
-    const badLower = new Set(tokens.map((t) => t.toLowerCase()));
-    const intended = finalTokens(tokenize(
-        parts.filter((t) => !badLower.has(t.toLowerCase())).join(' ')));
-    const parsed = finalTokens(tokenize(parts.slice(0, first).join(' ')));
-    const lostTags = Array.from(originalTags ?? []).filter(
-        (t) => intended.has(t) && !parsed.has(t));
-    return {tokens, lostTags};
   }
 
   /**
@@ -1855,82 +1761,6 @@
     schedulePosition();
   }
 
-  /** @const {number} Max lost tags listed by name in the warning. */
-  const TRUNCATION_WARNING_MAX_LISTED = 10;
-
-  /**
-   * Shows the truncation warning in place of the parent-tag popover: names
-   * the offending tokens and the existing tags Danbooru would delete. The
-   * primary button removes the tokens and re-runs the normal submit flow;
-   * Cancel (or Esc / outside click) returns to editing with the text
-   * untouched. There is deliberately no "submit anyway" — it would only
-   * delete the listed tags.
-   *
-   * Reuses the popover shell: the parent-tag title, "Delete all" master
-   * row and restore-on-Cancel row are hidden (`currentRemoved` stays null,
-   * so Cancel never restores anything).
-   *
-   * @param {!Array<string>} tokens  Offending tokens as typed.
-   * @param {!Array<string>} lostTags  Existing tags that would be deleted.
-   */
-  function showTruncationWarning(tokens, lostTags) {
-    showDialog();
-    if (!dialogRefs) {
-      return;
-    }
-    const refs = dialogRefs;
-    refs.root.querySelector('h2').textContent =
-        'Danbooru will stop reading your tags here';
-    // style.display, not `hidden`: GLOBAL_CSS gives both rows
-    // `display: flex`, which overrides the hidden attribute.
-    refs.masterCheckbox.parentElement.style.display = 'none';
-    refs.restoreCheckbox.parentElement.style.display = 'none';
-
-    const box = document.createElement('div');
-    box.className = 'butr-warning';
-
-    const what = document.createElement('p');
-    tokens.forEach((token, i) => {
-      if (i > 0) {
-        what.append(', ');
-      }
-      const code = document.createElement('code');
-      code.textContent = token;
-      what.append(code);
-    });
-    what.append(tokens.length === 1 ?
-        ' is not a valid removal.' : ' are not valid removals.');
-    box.append(what);
-
-    const effect = document.createElement('p');
-    if (lostTags.length === 0) {
-      effect.textContent = 'Everything after it would be ignored.';
-    } else {
-      const listed = lostTags.slice(0, TRUNCATION_WARNING_MAX_LISTED);
-      const more = lostTags.length - listed.length;
-      effect.textContent = `Everything after it would be ignored, and ` +
-          `${lostTags.length} existing tag${lostTags.length === 1 ? '' : 's'}` +
-          ` after it would be deleted: ${listed.join(', ')}` +
-          (more > 0 ? `, and ${more} more.` : '.');
-    }
-    box.append(effect);
-
-    const hints = new Set(tokens.map((t) => TRUNCATING_METATAG_HINTS[
-        t.slice(1, t.indexOf(':')).toLowerCase()]).filter(Boolean));
-    for (const hint of hints) {
-      const p = document.createElement('p');
-      p.className = 'butr-warning-hint';
-      p.textContent = hint;
-      box.append(p);
-    }
-
-    refs.sectionsContainer.replaceChildren(box);
-    refs.submitBtn.textContent =
-        tokens.length === 1 ? 'Remove it and continue' : 'Remove them and continue';
-    submitHandler = () => removeTruncatingTokensAndContinue(tokens);
-    schedulePosition();
-  }
-
   /**
    * Cancel routine — invoked by Esc, outside click, Cancel button, or
    * `positionPopover()` when the anchor disappears. Aborts any in-flight
@@ -2364,13 +2194,8 @@
    * @param {Event} event
    */
   function handleSubmit(event) {
-    // Every `return` below that does NOT preventDefault lets this submit
-    // reach the server, so each one first calls
-    // rewriteNegatedPrefixesForServer() (v1.2.0). The popover paths reach
-    // the server through submitFormViaNativeFlow → the bypass branch.
     if (bypassNextSubmit) {
       bypassNextSubmit = false;
-      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2384,23 +2209,8 @@
       return;
     }
 
-    // v1.2.0: tokens like `-rating:s` make Danbooru stop parsing and
-    // delete every tag after them. Checked before every other branch so
-    // no path can send them; the popover flow below never sees them.
-    const truncation = findTruncatingTokens(tagInput.value);
-    if (truncation.tokens.length > 0) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      isProcessing = true;
-      showTruncationWarning(truncation.tokens, truncation.lostTags);
-      return;
-    }
-
     const removed = computeRemoved(tagInput.value);
     if (removed.length === 0) {
-      // Still rewrite: `-gen:foo` for a tag the post doesn't have removes
-      // nothing, but would truncate the server's parse all the same.
-      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2422,7 +2232,6 @@
     // / Rails UJS handlers complete the submission on the FIRST press.
     if (prefetchKey === currentKey && prefetchResult &&
         prefetchResult.status === 'bypass') {
-      rewriteNegatedPrefixesForServer();
       return;
     }
 
@@ -2667,36 +2476,6 @@
   }
 
   /**
-   * Truncation warning's primary action: removes the offending tokens
-   * (Danbooru ignores them anyway), closes the warning and starts a FRESH
-   * submit. Not submitFormViaNativeFlow — that sets the bypass flag, which
-   * would skip the parent-tag popover the cleaned input may now need.
-   * requestSubmit is safe here because this runs from a click / keydown,
-   * never inside a submit event.
-   *
-   * The `input` event (Danbooru's tag counter, our prefetch) is dispatched
-   * after isProcessing is cleared, so the prefetch for the cleaned text
-   * starts right away and the new submit can attach to it.
-   *
-   * @param {!Array<string>} tokens  Offending tokens as typed.
-   */
-  function removeTruncatingTokensAndContinue(tokens) {
-    if (!tagInput || !tagForm) {
-      return;
-    }
-    tagInput.value = removeTagsFromInput(
-        tagInput.value, new Set(tokens.map((t) => t.toLowerCase())));
-    hideDialog();
-    isProcessing = false;
-    tagInput.dispatchEvent(new Event('input', {bubbles: true}));
-    if (typeof tagForm.requestSubmit === 'function') {
-      tagForm.requestSubmit();
-    } else {
-      tagInput.focus({preventScroll: true});
-    }
-  }
-
-  /**
    * Popover's Submit-button handler for the BFS-failure fallback (and the
    * "no actionable candidates" bypass path). Submits the user's input
    * exactly as typed — the script does not modify the textarea.
@@ -2737,9 +2516,6 @@
       }
     } else {
       bypassNextSubmit = false;
-      // form.submit() fires no submit event, so handleSubmit's rewrite
-      // never runs on this path.
-      rewriteNegatedPrefixesForServer();
       tagForm.submit();
     }
   }

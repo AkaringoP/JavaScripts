@@ -5,6 +5,18 @@ All notable changes to **Danbooru Bottom-Up Tag Removal** will be documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-11-15
+
+Follows the server fix for [danbooru#6812](https://github.com/danbooru/danbooru/issues/6812) (commit `6b167f9`): Danbooru now reads `-char:tag` as `-tag`, and parses any other invalid metatag as a regular tag instead of stopping there and removing every tag after it.
+
+### Removed
+- The submit-time rewrite of `-<category>:tag` to `-tag` (v1.2.0 workaround). The tag text is submitted exactly as typed.
+- The warning popover for `-rating:` / `-source:` / `-newpool:` / `-newfavgroup:` / `-disapproved:` (v1.2.0 workaround). These no longer cost any tags, and the server reports them itself.
+
+### Unchanged
+- `-gen:tag`, `-char:tag`, … still count as removing `tag`, so the popover still offers that tag's parents — now matching the server instead of running ahead of it.
+- Everything else from 1.2.0.
+
 ## [1.2.0] - 2026-11-15
 
 ### Removed
