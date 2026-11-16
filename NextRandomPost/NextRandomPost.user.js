@@ -559,6 +559,28 @@
   };
 
   /**
+   * Fits the double-tap zone between the parts of the site header and footer
+   * that are currently on screen. A header or footer that is off screen
+   * takes no room.
+   *
+   * @param {!HTMLElement} zone
+   */
+  const positionDoubleTapZone = (zone) => {
+    // The layout viewport, which `position: fixed` and getBoundingClientRect
+    // both use (`innerHeight` can differ on mobile).
+    const viewportHeight = document.documentElement.clientHeight;
+    const clamp = (value) => Math.min(Math.max(value, 0), viewportHeight);
+    const header = document.querySelector('header');
+    const footer = document.querySelector('footer');
+
+    const top = header ? clamp(header.getBoundingClientRect().bottom) : 0;
+    const bottom = footer ?
+        clamp(viewportHeight - footer.getBoundingClientRect().top) : 0;
+    zone.style.top = `${top}px`;
+    zone.style.bottom = `${bottom}px`;
+  };
+
+  /**
    * Injects a double-tap zone with a subtle hint onto a banned post page,
    * so touch-only (mobile) users can still trigger random navigation.
    * A double tap (or double click) on the right side of the viewport
@@ -585,15 +607,10 @@
     zone.appendChild(hintText);
     document.body.appendChild(zone);
 
-    // Keep the zone clear of the site header and footer when present.
-    const header = document.querySelector('header');
-    if (header) {
-      zone.style.top = `${header.getBoundingClientRect().bottom}px`;
-    }
-    const footer = document.querySelector('footer');
-    if (footer) {
-      zone.style.bottom = `${footer.getBoundingClientRect().height}px`;
-    }
+    // Keep the zone clear of the site header and footer, also after the
+    // screen is rotated or resized (the header can change height).
+    positionDoubleTapZone(zone);
+    window.addEventListener('resize', () => positionDoubleTapZone(zone));
 
     let lastTapTime = 0;
     let lastTapX = 0;
