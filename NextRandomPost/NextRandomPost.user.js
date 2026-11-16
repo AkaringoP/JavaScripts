@@ -39,6 +39,19 @@
   const NAV_LOCK_MS = 5000;
 
   /**
+   * sessionStorage key for the IDs of recently viewed posts (this tab only).
+   * @const {string}
+   */
+  const HISTORY_KEY = 'nrp.recentPostIds';
+
+  /**
+   * How many recently viewed posts (including the current one) are excluded
+   * from the random pick.
+   * @const {number}
+   */
+  const HISTORY_SIZE = 20;
+
+  /**
    * `status:` / `is:` values that make Danbooru's gallery show deleted posts
    * (server: `PostSets::Post#has_status_metatag?`). With one of these in the
    * search, deleted posts are part of what the user asked for.
@@ -171,6 +184,48 @@
   };
 
   /**
+   * Reads the recently viewed post IDs, newest first.
+   *
+   * @return {!Array<number>} Empty if storage is unavailable or corrupt.
+   */
+  const readHistory = () => {
+    try {
+      const ids = JSON.parse(sessionStorage.getItem(HISTORY_KEY) || '[]');
+      return Array.isArray(ids) ?
+          ids.filter((id) => Number.isInteger(id) && id > 0) :
+          [];
+    } catch (error) {
+      return [];
+    }
+  };
+
+  /**
+   * Stores the recently viewed post IDs. Failures (storage blocked or full)
+   * are ignored: the script then only excludes the current post.
+   *
+   * @param {!Array<number>} ids Newest first.
+   */
+  const writeHistory = (ids) => {
+    try {
+      sessionStorage.setItem(HISTORY_KEY, JSON.stringify(ids));
+    } catch (error) {
+      // Ignored, see above.
+    }
+  };
+
+  /**
+   * Returns the posts to exclude from the random pick: the current post
+   * followed by the most recently viewed ones, `HISTORY_SIZE` at most.
+   *
+   * @return {!Array<number>}
+   */
+  const getRecentPostIds = () => {
+    const currentId = getCurrentPostId();
+    return [currentId, ...readHistory().filter((id) => id !== currentId)]
+        .slice(0, HISTORY_SIZE);
+  };
+
+  /**
    * Returns metatags that keep posts this user would not normally see out of
    * the random pick. Both are free metatags (no tag-limit cost).
    * - `-is:banned`: banned posts are a blank "Page Removed" page below
@@ -213,16 +268,16 @@
    * filters, which only ever go to the API, never into the URL or search box.
    *
    * @param {string} tags The user's search tags.
-   * @param {number=} excludeId Post ID to exclude from results (typically the
-   *     current post to avoid navigating to the same page).
+   * @param {!Array<number>} excludeIds Post IDs to exclude from results (the
+   *     current post and recently viewed ones). `id:` costs no tag slot.
    * @return {string} The query to send to the API.
    */
-  const buildApiQuery = (tags, excludeId) => {
+  const buildApiQuery = (tags, excludeIds) => {
     const terms = tags.split(/\s+/)
         .filter((term) => term && !/^order:/i.test(term));
     terms.push(...buildVisibilityFilters(terms));
-    if (excludeId) {
-      terms.push(`-id:${excludeId}`);
+    if (excludeIds.length > 0) {
+      terms.push(`-id:${excludeIds.join(',')}`);
     }
     return terms.join(' ');
   };
@@ -232,12 +287,11 @@
    * reported as a result.
    *
    * @param {string} tags The search tags to use for filtering the random post.
-   * @param {number=} excludeId Post ID to exclude from results (typically the
-   *     current post to avoid navigating to the same page).
+   * @param {!Array<number>} excludeIds Post IDs to exclude from results.
    * @return {!Promise<!RandomResult>}
    */
-  const fetchRandom = async (tags, excludeId) => {
-    const apiQuery = buildApiQuery(tags, excludeId);
+  const fetchRandom = async (tags, excludeIds) => {
+    const apiQuery = buildApiQuery(tags, excludeIds);
     // `/posts/random.json` answers directly with one post object. The
     // `/posts.json?random=true` form redirects and appends `random:1`,
     // which counts against the user's tag limit.
@@ -268,6 +322,26 @@
   };
 
   /**
+   * Fetches a random post that is neither the current post nor one viewed
+   * recently in this tab. If every match was viewed recently, the history is
+   * cleared (keeping the current post) and the fetch is retried once, so
+   * small searches cycle instead of running dry.
+   *
+   * @param {string} query The search tags.
+   * @return {!Promise<!RandomResult>}
+   */
+  const fetchUnseenRandom = async (query) => {
+    const excludeIds = getRecentPostIds();
+    const result = await fetchRandom(query, excludeIds);
+    if (result.status !== 'empty' || excludeIds.length <= 1) {
+      return result;
+    }
+    const currentId = getCurrentPostId();
+    writeHistory([currentId]);
+    return fetchRandom(query, [currentId]);
+  };
+
+  /**
    * Returns the random-post request for `query`, starting one unless the
    * latest request was for the same query.
    *
@@ -279,7 +353,7 @@
       return prefetch.promise;
     }
     const entry = {query, promise: null, result: null};
-    entry.promise = fetchRandom(query, getCurrentPostId()).then((result) => {
+    entry.promise = fetchUnseenRandom(query).then((result) => {
       entry.result = result;
       if (prefetch === entry) {
         syncLinkHref();
@@ -558,6 +632,7 @@
       return;
     }
 
+    writeHistory(getRecentPostIds());
     performPrefetch();
 
     // Enable double-tap navigation on banned (takedown) post pages where
