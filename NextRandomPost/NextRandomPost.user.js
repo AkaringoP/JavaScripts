@@ -109,10 +109,21 @@
    * The random-post request for the most recent query. Requests are keyed by
    * query, so a click after the search box changed starts a new one, and
    * callers asking for the same query share the in-flight promise.
-   * Null until the first request, and after a reset.
-   * @type {?{query: string, promise: !Promise<!RandomResult>}}
+   * Null until the first request, and after a reset. `result` is set once
+   * the promise settles.
+   * @type {?{
+   *   query: string,
+   *   promise: !Promise<!RandomResult>,
+   *   result: ?RandomResult,
+   * }}
    */
   let prefetch = null;
+
+  /**
+   * The "Next random post" sidebar link, once added.
+   * @type {?HTMLAnchorElement}
+   */
+  let nextLink = null;
 
   /**
    * Flag indicating if a navigation event is currently in progress.
@@ -267,8 +278,16 @@
     if (prefetch && prefetch.query === query) {
       return prefetch.promise;
     }
-    prefetch = {query, promise: fetchRandom(query, getCurrentPostId())};
-    return prefetch.promise;
+    const entry = {query, promise: null, result: null};
+    entry.promise = fetchRandom(query, getCurrentPostId()).then((result) => {
+      entry.result = result;
+      if (prefetch === entry) {
+        syncLinkHref();
+      }
+      return result;
+    });
+    prefetch = entry;
+    return entry.promise;
   };
 
   /**
@@ -277,6 +296,15 @@
    */
   const performPrefetch = () => {
     requestRandom(getCurrentQuery());
+  };
+
+  /**
+   * Drops the current request and fetches a new random post, e.g. once the
+   * prefetched post has been opened in another tab.
+   */
+  const renewPrefetch = () => {
+    prefetch = null;
+    performPrefetch();
   };
 
   /**
@@ -318,6 +346,24 @@
    */
   const buildFallbackUrl = (activeTags) =>
     `/posts/random${activeTags ? '?tags=' + encodeURIComponent(activeTags) : ''}`;
+
+  /**
+   * Points the sidebar link at where it leads right now: the prefetched post
+   * when it is ready for the current search, otherwise Danbooru's random URL.
+   * A real `href` lets the browser open it in a new tab (middle click,
+   * Ctrl/Cmd+click, context menu).
+   */
+  const syncLinkHref = () => {
+    if (!nextLink) {
+      return;
+    }
+    const query = getCurrentQuery();
+    const result =
+        (prefetch && prefetch.query === query) ? prefetch.result : null;
+    nextLink.href = (result && result.status === 'ok') ?
+        buildPostUrl(result.id, query) :
+        buildFallbackUrl(query);
+  };
 
   /**
    * Shows a message through Danbooru's notice bar, or the console if the
@@ -391,8 +437,7 @@
     clearTimeout(navLockTimer);
     // Drop the cached request because the user might have already seen that
     // post, or the context might be stale upon return.
-    prefetch = null;
-    performPrefetch();
+    renewPrefetch();
   };
 
   // --- Banned Post Handling ---
@@ -539,15 +584,35 @@
     if (optionsList) {
       const listItem = document.createElement('li');
       const link = document.createElement('a');
+      nextLink = link;
 
-      link.href = '#';
       link.innerText = 'Next random post';
-      link.style.cursor = 'pointer';
       link.title = 'Shortcut: Alt + Shift + →';
+      syncLinkHref();
+
+      // Refresh the target right before the browser reads it, in case the
+      // search box changed since the prefetch.
+      for (const type of ['mousedown', 'touchstart', 'focus', 'contextmenu']) {
+        link.addEventListener(type, syncLinkHref, {passive: true});
+      }
 
       link.addEventListener('click', (event) => {
+        const opensElsewhere = event.button !== 0 || event.ctrlKey ||
+            event.metaKey || event.shiftKey || event.altKey;
+        if (opensElsewhere) {
+          // The browser opens the current href in a new tab or window. The
+          // new request settles asynchronously, after the browser has read it.
+          renewPrefetch();
+          return;
+        }
         event.preventDefault();
         executeNavigation();
+      });
+      // Middle click fires `auxclick`, not `click`.
+      link.addEventListener('auxclick', (event) => {
+        if (event.button === 1) {
+          renewPrefetch();
+        }
       });
 
       listItem.appendChild(link);
