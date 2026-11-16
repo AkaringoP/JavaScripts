@@ -732,12 +732,13 @@
       }
 
       link.addEventListener('click', (event) => {
-        // Other buttons are handled by `auxclick` below.
-        if (event.button !== 0) {
-          return;
-        }
         // Ctrl/Cmd/Shift/Alt+click: the browser opens the href elsewhere.
-        if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+        // So does a non-primary button, on browsers that still send `click`
+        // (not `auxclick`) for it. If one ever sends both, the second call
+        // finds no prefetched post and records nothing.
+        const opensElsewhere = event.button !== 0 || event.ctrlKey ||
+            event.metaKey || event.shiftKey || event.altKey;
+        if (opensElsewhere) {
           handleOpenedElsewhere();
           return;
         }
