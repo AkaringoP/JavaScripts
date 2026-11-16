@@ -99,13 +99,14 @@
    * @return {string} The current search tags as a trimmed string.
    */
   /**
-   * Extracts the current post ID from the URL path.
+   * Extracts the current post ID from the URL path. Only the post page itself
+   * (`/posts/123`) counts; sub-pages such as `/posts/123/events` do not.
    *
-   * @return {number|undefined} The post ID, or undefined when the path does
-   *     not contain one.
+   * @return {number|undefined} The post ID, or undefined when the current page
+   *     is not a post page.
    */
   const getCurrentPostId = () => {
-    const match = window.location.pathname.match(/\/posts\/(\d+)/);
+    const match = window.location.pathname.match(/^\/posts\/(\d+)\/?$/);
     return match ? parseInt(match[1], 10) : undefined;
   };
 
@@ -370,6 +371,11 @@
    * Initializes the script by setting up event listeners and triggering the initial prefetch.
    */
   const init = () => {
+    // `@match` also covers sub-pages (`/posts/123/events`, `/posts/new`, ...).
+    if (!getCurrentPostId()) {
+      return;
+    }
+
     performPrefetch();
 
     // Enable double-tap navigation on banned (takedown) post pages where
