@@ -162,10 +162,105 @@
       "completed": false,
       "post_count_at_build": 15,
       "post_count_30d_delta": 0
+    },
+    "ahad": {
+      "post_ids": [
+        393615
+      ],
+      "approvers": [
+        "VeryActiveDuringTheNight"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "wiresandtrees"
+      ],
+      "registered_at_utc": "2025-10-17T14:22:39.616Z",
+      "completed": false,
+      "post_count_at_build": 15,
+      "post_count_30d_delta": 0
+    },
+    "aizawa_sachi": {
+      "post_ids": [
+        462239,
+        464155
+      ],
+      "approvers": [
+        "Haruuspex"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "3884576"
+      ],
+      "x_handles": [
+        "sachichy"
+      ],
+      "registered_at_utc": "2026-08-21T00:40:40.192Z",
+      "completed": true,
+      "post_count_at_build": 429,
+      "post_count_30d_delta": 21
+    },
+    "akai_takami": {
+      "post_ids": [
+        273415
+      ],
+      "approvers": [
+        "Hereinafter"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "2739958"
+      ],
+      "x_handles": [
+        "akai_takami"
+      ],
+      "registered_at_utc": "2024-03-17T23:38:18.089Z",
+      "completed": false,
+      "post_count_at_build": 42,
+      "post_count_30d_delta": 0
+    },
+    "akiyama_cz4a": {
+      "post_ids": [
+        358856
+      ],
+      "approvers": [
+        "Komzu"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [
+        "1732436"
+      ],
+      "x_handles": [
+        "akiyama_cz4a"
+      ],
+      "registered_at_utc": "2025-05-27T16:55:10.425Z",
+      "completed": false,
+      "post_count_at_build": 235,
+      "post_count_30d_delta": 0
+    },
+    "aleha_84": {
+      "post_ids": [
+        460095
+      ],
+      "approvers": [
+        "Popkornikus"
+      ],
+      "aliased_from": [],
+      "pixiv_user_ids": [],
+      "x_handles": [
+        "84aleha"
+      ],
+      "registered_at_utc": "2026-08-11T20:46:35.488Z",
+      "completed": false,
+      "post_count_at_build": 73,
+      "post_count_30d_delta": 0
     }
   },
   "by_pixiv": {
+    "1732436": "akiyama_cz4a",
+    "2739958": "akai_takami",
     "2915498": "21_ke",
+    "3884576": "aizawa_sachi",
     "19325383": "024_(1a41a4)",
     "37564109": "0_ebj",
     "54950669": "510_gotoudayo",
@@ -182,14 +277,19 @@
     "37kuki770": "37kuki770",
     "510_gotoudayo": "510_gotoudayo",
     "789illust": "789illust",
+    "84aleha": "aleha_84",
     "8989_99": "89_(8989_99)",
     "8a9uu": "89_(8989_99)",
     "987654321qaqaqa": "789illust",
+    "akai_takami": "akai_takami",
+    "akiyama_cz4a": "akiyama_cz4a",
     "gecl4_": "024_(1a41a4)",
     "hhhooke": "21_ke",
+    "sachichy": "aizawa_sachi",
     "uku3h": "0_ebj",
     "ukumxd": "0_ebj",
     "ver2268581": "789illust",
+    "wiresandtrees": "ahad",
     "z_we3n": "0_ebj",
     "z_we6n": "0_ebj"
   }
