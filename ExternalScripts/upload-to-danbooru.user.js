@@ -995,28 +995,32 @@ function initializeDanbooruUpload() {
   const CHECK_INTERVAL_MS = 2000;
   // Media asset IDs that are known to be posted, or whose form was submitted.
   const settled = new Set();
+  // Media asset IDs that were seen without a post.
+  const seenUnposted = new Set();
   let checking = false;
 
   GM_addStyle(`
     .ex-utb-posted-toast {
       position: fixed;
-      left: 16px;
-      right: 16px;
-      bottom: 24px;
+      left: 12px;
+      right: 12px;
+      bottom: 16px;
       width: fit-content;
+      max-width: calc(100vw - 24px);
       margin: 0 auto;
       z-index: 2147483000;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 6px;
       box-sizing: border-box;
-      padding: 12px 16px;
-      border-radius: 8px;
+      padding: 5px 6px 5px 12px;
+      border-radius: 999px;
       background: #b3261e;
       color: white;
-      font-size: 15px;
-      line-height: 1.4;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      font-size: 13px;
+      line-height: 18px;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
 
     .ex-utb-posted-toast a {
@@ -1027,12 +1031,15 @@ function initializeDanbooruUpload() {
 
     .ex-utb-posted-toast button {
       flex: none;
+      width: 22px;
+      height: 22px;
       border: none;
-      background: none;
-      padding: 0 4px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      padding: 0;
       color: white;
-      font-size: 20px;
-      line-height: 1;
+      font-size: 14px;
+      line-height: 22px;
       cursor: pointer;
     }
   `);
@@ -1044,7 +1051,7 @@ function initializeDanbooruUpload() {
       .text(`post #${postId}`);
     const $close = $('<button type="button" aria-label="Close">').text('×');
     $close.on('click', () => $toast.remove());
-    $toast.append($('<span>').append('This file is already on Danbooru: ', $link), $close);
+    $toast.append($('<span>').append('Sniped just now: ', $link), $close);
     $toast.appendTo(document.body);
   };
 
@@ -1059,14 +1066,24 @@ function initializeDanbooruUpload() {
     checking = true;
     try {
       // Not /uploads/<id>.json: that one looks up the artist at the source on every request.
-      const response = await fetch(`/media_assets/${assetId}.json?only=id,post[id]`);
+      // The URL must be absolute: in a Firefox content script a relative one does not resolve
+      // against the page.
+      const url = `${window.location.origin}/media_assets/${assetId}.json?only=id,post[id]`;
+      const response = await fetch(url);
       if (!response.ok) {
         return;
       }
       const postId = (await response.json())?.post?.id;
-      if (postId && !settled.has(assetId)) {
+      if (!postId) {
+        seenUnposted.add(assetId);
+      }
+      else if (!settled.has(assetId)) {
         settled.add(assetId);
-        showToast(postId);
+        // A post found by the first answer was not made while this page was open (e.g. the
+        // form came back from the browser cache after the user posted it): nothing to report.
+        if (seenUnposted.has(assetId)) {
+          showToast(postId);
+        }
       }
     }
     catch (error) {
@@ -1078,9 +1095,9 @@ function initializeDanbooruUpload() {
   };
 
   // After the form is submitted the post that appears is the user's own.
-  document.addEventListener('submit', () => {
+  document.addEventListener('submit', (event) => {
     const assetId = currentAssetId();
-    if (assetId) {
+    if (assetId && $(event.target).is('.upload-form')) {
       settled.add(assetId);
     }
   }, true);

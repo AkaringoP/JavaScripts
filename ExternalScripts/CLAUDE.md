@@ -64,7 +64,12 @@ Only what must not break. One subsection per script.
   or `/upload_media_assets/<id>.json`: Danbooru builds the post form for those
   and looks up the artist at the source site on every request. An asset is
   settled, and no longer polled, once its post was found or its form was
-  submitted (the post that then appears is the user's own).
+  submitted (the post that then appears is the user's own). A post is
+  reported only if an earlier answer on this page showed none; one found by
+  the first answer settles the asset silently.
+- Every `fetch()` in this script takes an absolute URL. The script runs as a
+  content script (`@inject-into content`), and in Firefox a relative URL there
+  does not resolve against the page.
 - pixiv main image: its src flips from a placeholder to i.pximg.net after
   insertion, which element queries cannot see, so `scanMainArtwork()` polls
   every second on every page and attaches to the largest unmarked pximg
