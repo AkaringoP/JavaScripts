@@ -109,6 +109,15 @@
   const MAX_ATTEMPTS = 5;
   const ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[tabindex="-1"]';
   const TWEET_PATH_RE = /^\/(?:i\/web|([^/]+))\/status(?:es)?\/(\d+)/;
+  // A per-image upload needs a ref that names the user; otherwise Danbooru may not find the tweet.
+  const UPLOAD_REF_RE = /^https:\/\/x\.com\/(?!i\/)[^/]+\/status\/\d+$/;
+  const UPLOAD_LOCK_MS = 1500;
+  // Tiles lower than this keep the small button so it does not cover the photo link.
+  const SMALL_TILE_PX = 120;
+  const WATCH_MAX_AGE_MS = 30 * 60 * 1000;
+  // Delays between the re-checks that follow a return to the tab.
+  const RECHECK_DELAYS_MS = [5000, 15000, 40000];
+  const LIKE_RECHECK = GM_getValue('likeRecheck', true);
 
   // -------------- styles --------------
 
@@ -135,6 +144,19 @@
       pointer-events: auto;
       cursor: pointer;
     }
+    .xdsu-bar-seg.xdsu-rechecking {
+      animation: xdsu-pulse 0.8s ease-in-out infinite alternate;
+    }
+    @keyframes xdsu-pulse {
+      from { opacity: 1; }
+      to { opacity: 0.35; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .xdsu-bar-seg.xdsu-rechecking {
+        animation: none;
+        opacity: 0.6;
+      }
+    }
     .xdsu-upload-btn {
       display: grid;
       place-items: center;
@@ -144,17 +166,36 @@
       box-sizing: border-box;
       font-size: 18px;
       position: absolute;
-      bottom: 6px;
+      top: 6px;
       left: 6px;
       z-index: 5;
       background: rgba(0,0,0,0.55);
       border-radius: 4px;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
       cursor: pointer;
+      touch-action: manipulation;
       text-decoration: none !important;
       color: white !important;
       line-height: 1;
     }
-    .xdsu-upload-btn:hover { background: rgba(0,0,0,0.78); }
+    .xdsu-upload-btn::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+    }
+    .xdsu-upload-btn:active { transform: scale(0.92); }
+    .xdsu-upload-btn.xdsu-sent { opacity: 0.6; }
+    .xdsu-upload-btn.xdsu-found { box-shadow: 0 0 0 2px ${COLORS.found}; }
+    @media (hover: hover) {
+      .xdsu-upload-btn:hover { background: rgba(0,0,0,0.78); }
+    }
+    @media (pointer: coarse) {
+      .xdsu-upload-btn:not(.xdsu-small) {
+        width: 40px;
+        height: 40px;
+      }
+      .xdsu-upload-btn:not(.xdsu-small)::after { inset: -6px; }
+    }
     .xdsu-upload-btn img {
       width: 20px;
       height: 20px;
@@ -334,9 +375,28 @@
   const pendingTweetIds = [];
   const pendingHashes = [];
 
-  // [{tweetId, imageHash, kind, photoIndex, bar}] where bar is the segment element.
-  // Video/GIF tiles have kind 'video' and imageHash null.
+  // [{tweetId, imageHash, kind, photoIndex, bar, btn, rechecking, applied}] where bar is the
+  // segment element and btn the tile's upload button. Video/GIF tiles have kind 'video' and
+  // imageHash null. applied is the last state written to the DOM by applyColors.
   const imageRefs = [];
+
+  // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the upload was opened.
+  // Stored so that it survives Firefox discarding and reloading the X tab.
+  const watch = new Map((() => {
+    try {
+      const saved = JSON.parse(GM_getValue('watch', '[]'));
+      return (Array.isArray(saved) ? saved : []).filter((e) => Array.isArray(e) && e[1]
+        && Number.isFinite(e[1].t0) && Number.isFinite(e[1].n0)
+        && Date.now() - e[1].t0 <= WATCH_MAX_AGE_MS);
+    } catch {
+      return [];
+    }
+  })());
+
+  function saveWatch() {
+    GM_setValue('watch', JSON.stringify([...watch]));
+  }
+  saveWatch();
 
   // -------------- DOM scan --------------
 
@@ -496,6 +556,9 @@
       kind: imageHash ? 'image' : 'video',
       photoIndex,
       bar: segment,
+      btn: photoEl.querySelector(':scope > .xdsu-upload-btn'),
+      rechecking: false,
+      applied: null,
     };
     imageRefs.push(ref);
     ensureHashLookup(ref);
@@ -508,15 +571,21 @@
   }
 
   function attachUploadBtn(photoEl, info) {
-    const uploadUrl = buildUploadUrl(info.tweetUrl);
+    // The href (and so a long press "open in new tab") always uploads the whole tweet.
+    const tweetUploadUrl = buildUploadUrl(info.tweetUrl);
 
     const btn = document.createElement('a');
     btn.className = 'xdsu-upload-btn';
+    if (photoEl.clientHeight < SMALL_TILE_PX) {
+      btn.classList.add('xdsu-small');
+    }
     btn.target = '_blank';
-    btn.href = uploadUrl;
+    btn.rel = 'noopener';
+    btn.href = tweetUploadUrl;
+    btn.title = 'Upload to Danbooru';
+    btn.setAttribute('aria-label', 'Upload to Danbooru');
 
     const icon = document.createElement('img');
-    icon.title = 'Upload to Danbooru';
     icon.alt = '';
     icon.onerror = () => {
       btn.textContent = '↑';
@@ -524,31 +593,58 @@
     icon.src = DANBOORU_ICON_URL;
     btn.appendChild(icon);
 
-    let ready = true;
-    const onClick = (ev) => {
-      if (!ready) {
-        return;
+    // A tap uploads only this image when its original jpg/png can be named exactly; otherwise
+    // the whole tweet. Read at tap time because the image src can arrive after the button.
+    const uploadUrl = () => {
+      const img = findTweetImage(photoEl);
+      const hash = img ? parseTwitterImageHash(img.src) : null;
+      if (!hash || !UPLOAD_REF_RE.test(info.tweetUrl)) {
+        return tweetUploadUrl;
       }
+      const src = new URL(img.src);
+      const ext = src.pathname.match(/\.([^./]+)$/);
+      const fmt = src.searchParams.get('format') || (ext && ext[1]);
+      if (fmt !== 'jpg' && fmt !== 'png') {
+        return tweetUploadUrl;
+      }
+      return buildUploadUrl(`https://pbs.twimg.com/media/${hash}?format=${fmt}&name=orig`, info.tweetUrl);
+    };
+
+    let lastOpenAt = 0;
+    const onClick = (ev) => {
       if (ev.button !== undefined && ev.button > 1) {
         return;
       }
+      // Cancel every tap, locked ones included, so none reaches the photo link behind the button.
       ev.preventDefault();
       ev.stopPropagation();
-      ready = false;
-      btn.style.cursor = 'wait';
+      const now = Date.now();
+      if (now - lastOpenAt < UPLOAD_LOCK_MS) {
+        return;
+      }
+      lastOpenAt = now;
+      btn.classList.add('xdsu-sent');
+      watchTweet(info.tweetId);
+      const url = uploadUrl();
+      let tab = null;
       try {
-        GM_openInTab(uploadUrl, {
+        tab = GM_openInTab(url, {
           active: ev.button === 0 && !ev.ctrlKey,
           setParent: true,
         });
       } catch (e) {
         console.error('[XDSU] open tab failed', e);
+        window.open(url, '_blank', 'noopener');
       }
-      btn.style.cursor = '';
-      ready = true;
+      // Extra re-check trigger; the return to this tab (visibilitychange) is the main one.
+      if (tab) {
+        tab.onclose = () => refreshTweetStatus(info.tweetId);
+      }
     };
     btn.addEventListener('click', onClick);
     btn.addEventListener('auxclick', onClick);
+    // A long press may open the href in a new tab from the browser menu.
+    btn.addEventListener('contextmenu', () => watchTweet(info.tweetId));
     // Prevent middle-click autoscroll and click bubbling to the tweet router link.
     btn.addEventListener('mousedown', (e) => {
       e.preventDefault();
@@ -761,16 +857,29 @@
     return null;
   }
 
+  // The only writer of segment state. A segment being re-checked keeps its previous colour,
+  // link and label (and pulses) until the new answer is in.
   function applyColors() {
     for (const ref of imageRefs) {
       if (!ref.bar.isConnected) {
         continue;
       }
       const color = resolveColor(ref);
-      if (ref.bar.style.backgroundColor !== color) {
-        ref.bar.style.backgroundColor = color;
+      const hold = ref.rechecking && color === COLORS.searching;
+      if (!hold) {
+        ref.rechecking = false;
       }
       const matchUrl = resolveMatchUrl(ref);
+      const key = `${color}|${matchUrl || ''}|${hold ? 1 : 0}`;
+      if (ref.applied === key) {
+        continue;
+      }
+      ref.applied = key;
+      ref.bar.classList.toggle('xdsu-rechecking', hold);
+      if (hold) {
+        continue;
+      }
+      ref.bar.style.backgroundColor = color;
       if (matchUrl) {
         ref.bar.dataset.matchUrl = matchUrl;
         ref.bar.classList.add('xdsu-clickable');
@@ -779,6 +888,13 @@
         delete ref.bar.dataset.matchUrl;
         ref.bar.classList.remove('xdsu-clickable');
         ref.bar.removeAttribute('title');
+      }
+      if (ref.btn) {
+        const found = color === COLORS.found;
+        const label = found ? 'Already on Danbooru' : 'Upload to Danbooru';
+        ref.btn.classList.toggle('xdsu-found', found);
+        ref.btn.title = label;
+        ref.btn.setAttribute('aria-label', label);
       }
     }
   }
@@ -818,46 +934,110 @@
     }
   }
 
-  // -------------- Like-button refresh trigger --------------
+  // -------------- re-check after an upload --------------
 
-  // When the user clicks Like (or Unlike) on a tweet we've already searched,
-  // invalidate that tweet's cached search result and re-query. Fits the
-  // workflow of: upload via the icon -> finish on the Danbooru tab -> come
-  // back and like the tweet -> the bar updates to green to confirm.
   const lastRefresh = Object.create(null);
   const REFRESH_DEBOUNCE_MS = 1500;
-  const REFRESH_QUERY_DELAY_MS = 1000;
 
-  function refreshTweetStatus(tweetId) {
-    // Nothing on screen to update (e.g. a text-only tweet).
-    if (!tweetId || !imageRefs.some((ref) => ref.tweetId === tweetId && ref.bar.isConnected)) {
-      return;
+  function isLookupPending(tweetId) {
+    const tc = tweetCache[tweetId];
+    if (tc && tc.state === 'pending') {
+      return true;
     }
-    const hashes = new Set();
-    for (const ref of imageRefs) {
-      if (ref.tweetId === tweetId && ref.imageHash) {
-        hashes.add(ref.imageHash);
-      }
-    }
-    delete tweetCache[tweetId];
-    for (const h of hashes) {
-      delete hashCache[h];
-    }
-    // Immediate visual feedback: matching segments go back to "searching".
-    for (const ref of imageRefs) {
-      if (ref.tweetId === tweetId && ref.bar.isConnected) {
-        ref.bar.style.backgroundColor = COLORS.searching;
-        ref.bar.classList.remove('xdsu-clickable');
-        delete ref.bar.dataset.matchUrl;
-        ref.bar.removeAttribute('title');
-      }
-    }
-    // Slight delay so Danbooru's search index has a chance to pick up a
-    // freshly-completed upload before we query.
-    setTimeout(() => enqueueTweetIdSearch(tweetId), REFRESH_QUERY_DELAY_MS);
+    return imageRefs.some((ref) => ref.tweetId === tweetId && ref.imageHash
+      && hashCache[ref.imageHash] && hashCache[ref.imageHash].state === 'pending');
   }
 
+  // Drops the cached result of a tweet and queries it again. The segments keep showing the old
+  // result while the query runs (see applyColors).
+  function refreshTweetStatus(tweetId) {
+    const refs = imageRefs.filter((ref) => ref.tweetId === tweetId && ref.bar.isConnected);
+    // Nothing on screen to update (e.g. a text-only tweet), or a lookup is already running.
+    if (!refs.length || isLookupPending(tweetId)) {
+      return;
+    }
+    const now = Date.now();
+    if ((lastRefresh[tweetId] || 0) > now - REFRESH_DEBOUNCE_MS) {
+      return;
+    }
+    lastRefresh[tweetId] = now;
+    delete tweetCache[tweetId];
+    for (const ref of imageRefs) {
+      if (ref.tweetId === tweetId && ref.imageHash) {
+        delete hashCache[ref.imageHash];
+      }
+    }
+    for (const ref of refs) {
+      ref.rechecking = true;
+    }
+    // New posts are searchable at once, so there is no delay before the query.
+    enqueueTweetIdSearch(tweetId);
+    applyColors();
+  }
+
+  // Posts currently known for a tweet: its tweet-id lookup plus the hash lookups of its images.
+  function knownPostCount(tweetId) {
+    const tc = tweetCache[tweetId];
+    const hashes = new Set(imageRefs.filter((ref) => ref.tweetId === tweetId && ref.imageHash)
+        .map((ref) => ref.imageHash));
+    return [...hashes].reduce((n, h) => n + (hashCache[h] ? hashCache[h].posts.length : 0),
+        tc ? tc.posts.length : 0);
+  }
+
+  function watchTweet(tweetId) {
+    watch.set(tweetId, {t0: Date.now(), n0: knownPostCount(tweetId)});
+    saveWatch();
+  }
+
+  // One round of re-checks for the watched tweets. Step 0 runs when the tab becomes visible,
+  // the next steps follow on a single timer; an entry is dropped once its post count rose,
+  // after 30 minutes, or after the last step.
+  let recheckTimer = null;
+  function recheckWatched(step) {
+    recheckTimer = null;
+    if (document.hidden) {
+      return;
+    }
+    const now = Date.now();
+    const sizeBefore = watch.size;
+    for (const [id, w] of watch) {
+      if (now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0) {
+        watch.delete(id);
+        continue;
+      }
+      refreshTweetStatus(id);
+      if (step >= RECHECK_DELAYS_MS.length) {
+        watch.delete(id);
+      }
+    }
+    if (watch.size !== sizeBefore) {
+      saveWatch();
+    }
+    if (watch.size) {
+      recheckTimer = setTimeout(() => recheckWatched(step + 1), RECHECK_DELAYS_MS[step]);
+    }
+  }
+
+  let lastReturnAt = 0;
+  function onReturn() {
+    const now = Date.now();
+    // A bfcache restore fires both pageshow and visibilitychange.
+    if (recheckTimer && now - lastReturnAt < 500) {
+      return;
+    }
+    lastReturnAt = now;
+    clearTimeout(recheckTimer);
+    recheckWatched(0);
+  }
+
+  // -------------- Like-button refresh trigger --------------
+
+  // Clicking Like (or Unlike) on a tweet re-queries it. On by default; set the stored value
+  // likeRecheck to false to turn it off.
   function handleLikeClick(ev) {
+    if (!LIKE_RECHECK) {
+      return;
+    }
     const target = ev.target;
     if (!target || !target.closest) {
       return;
@@ -883,11 +1063,6 @@
     if (!tweetId) {
       return;
     }
-    const now = Date.now();
-    if ((lastRefresh[tweetId] || 0) > now - REFRESH_DEBOUNCE_MS) {
-      return;
-    }
-    lastRefresh[tweetId] = now;
     refreshTweetStatus(tweetId);
   }
 
@@ -945,10 +1120,19 @@
   // that doesn't manifest as a DOM addition.
   setInterval(scheduleScan, POLL_INTERVAL_MS);
 
-  // Re-scan when the tab becomes visible again.
+  // Every visibility change cancels the pending re-check; becoming visible re-scans and
+  // starts a new round of re-checks.
   document.addEventListener('visibilitychange', () => {
+    clearTimeout(recheckTimer);
+    recheckTimer = null;
     if (!document.hidden) {
       scheduleScan();
+      onReturn();
+    }
+  });
+  window.addEventListener('pageshow', (ev) => {
+    if (ev.persisted) {
+      onReturn();
     }
   });
 
