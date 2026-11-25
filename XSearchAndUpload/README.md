@@ -125,7 +125,33 @@ Stored with `GM_setValue`: `booru` (host URL), `likeRecheck`, `detectedBatch` (l
 
 ### Verifying a change
 
-x.com (login wall) and Danbooru (browser check) cannot be driven from automation, so changes were verified in a harness: Playwright Chromium with a phone viewport and touch, stub `GM_*` functions (the request stub returns controlled status codes and bodies), synthetic tweet markup that matches the script's selectors, and the script injected unmodified. Tweets must stay mounted and be laid out near the viewport, as on the real site, or queue behaviour is not exercised. Things only a real phone can show: tap accuracy in Firefox for Android, X's own overlays and the viewer's layout, and whether the manager sends Danbooru's cookie.
+x.com (login wall) and Danbooru (browser check) cannot be driven from automation, so changes are verified in the harness under `test/`: Playwright Chromium with a phone viewport and touch, stub `GM_*` functions (the request stub returns controlled status codes and bodies), synthetic tweet markup that matches the script's selectors, and the script injected unmodified.
+
+```bash
+cd XSearchAndUpload/test
+node run_all.js              # every scenario against ../XSearchAndUpload.user.js, about 15 minutes
+node run_lookup.js current s8_tag_limit   # one file, one scenario
+```
+
+It needs Playwright with Chromium (`npm i -g playwright && npx playwright install chromium`, or point `NODE_PATH` at a `node_modules` that has it). Several scenarios wait in real time (60 s queue pauses, retry back-off), which is where the 15 minutes go.
+
+| File | Covers |
+| :--- | :--- |
+| `run_core.js`, `run_core_extra.js` | Happy path, remounts, refresh races, tweet identification |
+| `run_fixes.js` | Icon fallback, video/GIF tiles, the URL setting, failed hash lookups |
+| `run_upload.js` | Re-check after an upload, the Like trigger, the upload button, per-image upload URLs |
+| `run_lookup.js` | Response handling, retries, account limits, queue order, toasts |
+| `run_scroll.js` | The viewport-first queue, with tweets that stay mounted while the page scrolls |
+| `run_matching.js` | Judging by post count, links and labels, photo numbers |
+| `run_bar.js` | Tap targets and tap actions, state shapes and contrast, menu commands |
+| `run_markers.js` | The observer, bars and buttons restored after re-renders |
+| `run_viewer.js` | The photo viewer button |
+| `compare.js`, `compare_dom.js` | Run two versions on the same page and diff requests and DOM; for changes that must not alter behaviour |
+| `perf.js` | Cost of one scan on a page with 25 media tweets |
+
+To compare against an earlier version, put a copy next to the runners (`git show main:XSearchAndUpload/XSearchAndUpload.user.js > base.user.js`) and run `node compare.js base,current`. Copies named `*.user.js` and the `out/` folder are ignored by git.
+
+When writing a scenario, keep tweets mounted and laid out near the viewport, as on the real site, or queue behaviour is not exercised. Things only a real phone can show: tap accuracy in Firefox for Android, X's own overlays and the viewer's layout, and whether the manager sends Danbooru's cookie.
 
 ### History
 
