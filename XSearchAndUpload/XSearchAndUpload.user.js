@@ -62,7 +62,7 @@
   // danbooru/public/logos/danbooru-logo.png (128x128).
   const DANBOORU_ICON_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAsTAAALEwEAmpwYAAAFCklEQVR4nO2cP27UQBTGvyCkKKJAdJSU9BTcAOqcgxR0HCFAhYS4ANBygUQcgDOgKBKKUqBEAgnCnyJDgTaJ1zP2s+fNvOfM9ytQdu0dO/5+73lm2Q1ACCGEEEIIIYSQVtgwPv4DAPsA7hifx3VmMOMbtc4iAsN3gJUADN8JFgIwfEfUFoDhO6OmAAzfIbUEeAjgIxi+O2osA1n5tgxmfLPwwcXh39raxO7ONu7fu1v4lJbH5y9f8ez1B/w4+6M+dslbAMNXoGT4QDkBGL4CpcMHygjA8BWoET6gLwDDV6BW+ICuAAxfgSnh39razD6elgAMX4Gp4e/ubGcfU0MAhq/AnPA1rmOuAAxfAavwgTwBGL4CluED8wVg+ApYhw/ME4DhK+AhfGC6AAxfAS/hA9MEYPgKeAofkAvA8BXwFj4gE4DhK+AxfED2gZBvAG6XPhHyn6nhP3ryamyX7O8FMPxKWHRQyy+GkCtY3T4pgAMs504UwBjriTMFMMZ61UQBjLFeMlOAxsn+XsDem6ca53FtEazTTWEHaBwK0DgUoHEoQONQgMahAI1DARqHAjQOBWgcCtA4FKBxKEDjUIDGoQCNU/rPxJFMQvcfdSiAMSGkg+3nri8BBVAizKzSmACh90N0q4oOFCCBtPXmVulVcXqvTAwVFDtBUwJIqjRefQNVGt0sD2jVAXqhRoYYOYtZLFoA7Sqd1XqTVTp+XgBw3rkFhOSYZaaADgWQ3ksloY4Hldl6B8OX0Z8DhM4Ag2MpWFFcgElVGv9hZL/o1vlVOlp96XTm5NET4KIJCEbzIIDGMkYSatkqndF6Q0K2iXSuX+80Bq6t0j2hiADSCZJ08jx9gjSjSkNyhIGD5c/Hr16/eKiR66s4IVAQAFBZxkhDLVWlIXlm0YOJRpZ08RAEd8i16+tLAPkypv90PNTBm8rkCZIsVGn9a1fpeegdPDF6ugByyBYgexkzufUK227nug5X6cjM5PKZAlUaRgTo3yZ1DSgwByhXpd3xFKp0eBh0QhVPyscruvOac6l+mG6XAH0BLoKSXTHpXVqn9U6rUmnrzanS9fc90p1y/aGOBLoCTJwgJWqy/0yJUEX7rR6Uq9LOKkA2cRIXjQRVAfQmSPLWO6tKB06iv198i+RXlVTpxSogPcjwMTNREeA6VGl2603nNsh59Ly7qZcIfoXOKkB0u69Rpd0HsoY0UKfJ6ou8YvzXix8i2Q5D8fABrVuAwgRJ0nrLVWk60PRxdap06K30GuQLkLmM8VWlU0OtU6UlUX0r+OK56I7rD2VtI2+C1N9BEqpxUVZFdxWg2HpZpXXQWwVcPhPZKbkFrFJblP8vYMWcCRJDtaDgB0LYepdA0U8EEf/wu4GNQwEahwI0DgVoHArQOBSgcShA41CAxqEAjUMBGocCLJiDo5PsMSjAQjk8PsXL9/vZ41CABXJ4fIrnb/fw89ff7LHc/YUQMszB0QlevNvH2W9R+N/HdmAHWBCrtj8h/MdjO1GAhTCx7a/C/zS2IwVYAKXCByiAe0qGD1AA15QOH6AAbqkRPkABXFIrfIACuKNm+AAFcEXt8AEK4AaL8AEK4AKr8AEKYI5l+AAFMMcyfIACmGMZPkABlkCx8AEK4J2i4QPAhmAffv/bhuLhA+wAXqkSPkABPFItfIACeKNq+AAF8ET18AEK4AWT8AEK4AGz8AEKYI1p+IQQQgghhBBCCGmLfxrmmkuV3GutAAAAAElFTkSuQmCC';
 
-  GM_registerMenuCommand('Set Danbooru domain', () => {
+  GM_registerMenuCommand(`Danbooru URL (${new URL(DANBOORU_URL).host})`, () => {
     const cur = GM_getValue('booru', DEFAULT_BOORU_URL);
     const input = prompt('Danbooru URL (including https://)', cur);
     if (input === null) {
@@ -77,13 +77,34 @@
     location.reload();
   });
 
-  const COLORS = {
-    searching: '#9a9a9a',
-    found: '#1a8c1a',
-    foundWeak: '#7ec97e',
-    missing: '#e53935',
-    error: '#3d4ee8',
-  };
+  // Tapping Like (or Unlike) re-checks the tweet. Read on every Like, so the menu toggle applies
+  // at once.
+  let likeRecheck = GM_getValue('likeRecheck', true);
+  const LIKE_MENU_ID = 'xdsu-like-recheck';
+  const likeMenuLabel = () => `Like = re-check: ${likeRecheck ? 'on' : 'off'}`;
+  function toggleLikeRecheck() {
+    likeRecheck = !likeRecheck;
+    GM_setValue('likeRecheck', likeRecheck);
+    // A manager that supports ids returns the given one and replaces the entry in place;
+    // re-registering elsewhere would add a second entry.
+    if (likeMenuRelabels) {
+      GM_registerMenuCommand(likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID});
+    }
+    showToast(likeRecheck ? 'Like now re-checks the tweet' : 'Like no longer re-checks the tweet');
+  }
+  const likeMenuRelabels = GM_registerMenuCommand(likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID})
+    === LIKE_MENU_ID;
+
+  GM_registerMenuCommand('XDSU legend', () => {
+    alert([
+      'Bar under each image:',
+      'Solid green: on Danbooru (tap to open)',
+      'Green stripes: the tweet is only partly on Danbooru (tap to open)',
+      'Red outline: not on Danbooru (tap to check again)',
+      'Blue dashes: lookup failed (tap to retry)',
+      'Thin grey line: checking',
+    ].join('\n'));
+  });
 
   const POLL_INTERVAL_MS = 2000;
   const SCAN_DEBOUNCE_MS = 100;
@@ -115,14 +136,21 @@
   const WATCH_MAX_AGE_MS = 30 * 60 * 1000;
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
-  const LIKE_RECHECK = GM_getValue('likeRecheck', true);
   // Bottom offset of the toast, above X's bottom navigation. Raise it while another fixed
   // control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
 
   // -------------- styles --------------
 
+  // One palette for every X theme: each colour is at least 3:1 against white, #15202b and black.
+  // Each state also has its own shape, so the bar reads without colour.
   GM_addStyle(`
+    :root {
+      --xdsu-found: #1a8c1a;
+      --xdsu-missing: #e53935;
+      --xdsu-error: #5b6cff;
+      --xdsu-searching: #767676;
+    }
     .xdsu-bar {
       display: flex;
       gap: 3px;
@@ -133,18 +161,42 @@
       box-sizing: border-box;
     }
     .xdsu-bar-seg {
+      position: relative;
+      display: block;
       flex: 1 1 0;
       min-width: 0;
       height: 100%;
+      box-sizing: border-box;
       border-radius: 3px;
-      background-color: ${COLORS.searching};
-      transition: background-color 0.3s ease;
-      pointer-events: none;
-    }
-    .xdsu-bar-seg.xdsu-clickable {
       pointer-events: auto;
       cursor: pointer;
     }
+    /* The tap area fills the bar's margins and the gaps between segments. */
+    .xdsu-bar-seg::after {
+      content: '';
+      position: absolute;
+      top: -6px;
+      bottom: -4px;
+      left: -1.5px;
+      right: -1.5px;
+    }
+    .xdsu-bar-seg[data-state="found"] {
+      background: var(--xdsu-found);
+    }
+    .xdsu-bar-seg[data-state="foundWeak"] {
+      background: repeating-linear-gradient(135deg, var(--xdsu-found) 0 3px, transparent 3px 6px);
+    }
+    .xdsu-bar-seg[data-state="missing"] {
+      background: transparent;
+      box-shadow: inset 0 0 0 2px var(--xdsu-missing);
+    }
+    .xdsu-bar-seg[data-state="error"] {
+      background: repeating-linear-gradient(90deg, var(--xdsu-error) 0 4px, transparent 4px 10px);
+    }
+    .xdsu-bar-seg[data-state="searching"] {
+      background: linear-gradient(var(--xdsu-searching), var(--xdsu-searching)) center / 100% 2px no-repeat;
+    }
+    .xdsu-bar-seg[data-state="searching"],
     .xdsu-bar-seg.xdsu-rechecking {
       animation: xdsu-pulse 0.8s ease-in-out infinite alternate;
     }
@@ -153,9 +205,25 @@
       to { opacity: 0.35; }
     }
     @media (prefers-reduced-motion: reduce) {
+      .xdsu-bar-seg[data-state="searching"],
       .xdsu-bar-seg.xdsu-rechecking {
         animation: none;
+      }
+      .xdsu-bar-seg.xdsu-rechecking {
         opacity: 0.6;
+      }
+    }
+    /* Padding, not margin: a margin can collapse into the action row's and let the tap area
+       overlap the Like button. */
+    @media (pointer: coarse) {
+      .xdsu-bar {
+        height: 24px;
+        margin: 0;
+        padding: 9px 0 7px;
+      }
+      .xdsu-bar-seg::after {
+        top: -9px;
+        bottom: -7px;
       }
     }
     .xdsu-upload-btn {
@@ -186,7 +254,7 @@
     }
     .xdsu-upload-btn:active { transform: scale(0.92); }
     .xdsu-upload-btn.xdsu-sent { opacity: 0.6; }
-    .xdsu-upload-btn.xdsu-found { box-shadow: 0 0 0 2px ${COLORS.found}; }
+    .xdsu-upload-btn.xdsu-found { box-shadow: 0 0 0 2px var(--xdsu-found); }
     @media (hover: hover) {
       .xdsu-upload-btn:hover { background: rgba(0,0,0,0.78); }
     }
@@ -473,9 +541,10 @@
   const pendingTweetIds = [];
   const pendingHashes = [];
 
-  // [{tweetId, imageHash, kind, photoIndex, bar, btn, rechecking, applied}] where bar is the
-  // segment element and btn the tile's upload button. Video/GIF tiles have kind 'video' and
-  // imageHash null. applied is the last state written to the DOM by applyColors.
+  // [{tweetId, imageHash, kind, photoIndex, bar, btn, rechecking, applied, openedAt}] where bar
+  // is the segment element and btn the tile's upload button. Video/GIF tiles have kind 'video'
+  // and imageHash null. applied is the last state written to the DOM by applyColors; openedAt is
+  // when a tap on the segment last opened its post.
   const imageRefs = [];
 
   // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the upload was opened.
@@ -632,10 +701,18 @@
       bar.dataset.tweetId = tweetId;
       actionGroup.parentNode.insertBefore(bar, actionGroup);
     }
+    // A segment stays the same <a> for its whole life; applyColors only toggles its href, so
+    // imageRefs keeps tracking it.
     while (bar.children.length < photoCount) {
-      const seg = document.createElement('div');
+      const seg = document.createElement('a');
       seg.className = 'xdsu-bar-seg';
-      seg.style.backgroundColor = COLORS.searching;
+      seg.dataset.state = 'searching';
+      seg.title = 'Checking';
+      seg.setAttribute('aria-label', 'Checking');
+      seg.addEventListener('click', onSegmentClick);
+      seg.addEventListener('auxclick', onSegmentClick);
+      // Keeps x.com's tweet link from reacting to the press.
+      seg.addEventListener('mousedown', (ev) => ev.stopPropagation());
       bar.appendChild(seg);
     }
     // Trim excess (e.g. if the tweet was edited to fewer images).
@@ -687,6 +764,7 @@
       btn: photoEl.querySelector(':scope > .xdsu-upload-btn'),
       rechecking: false,
       applied: null,
+      openedAt: 0,
     };
     imageRefs.push(ref);
     ensureHashLookup(ref);
@@ -1194,46 +1272,46 @@
     return posts.reduce((best, p) => (rank(p) < rank(best) ? p : best));
   }
 
-  function resolveColor(ref) {
+  function resolveState(ref) {
     const tc = tweetCache[ref.tweetId];
     if (!tc || tc.state === 'pending') {
-      return COLORS.searching;
+      return 'searching';
     }
     // Video/GIF refs have no hash and are judged on the tweet result alone.
     const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
     if (tc.state === 'error') {
       if (hc && hc.state === 'done' && hc.posts.length) {
-        return COLORS.found;
+        return 'found';
       }
-      return COLORS.error;
+      return 'error';
     }
-    // No post for the tweet: red at once; the hash lookup turns it green later if it finds one.
+    // No post for the tweet: missing at once; the hash lookup makes it found if it finds one.
     if (tc.posts.length === 0) {
       if (hc && hc.state === 'done' && hc.posts.length) {
-        return COLORS.found;
+        return 'found';
       }
       if (hc && hc.state === 'error') {
-        return COLORS.error;
+        return 'error';
       }
-      // A re-check keeps the old colour until the hash lookup answers, so a post found only by
+      // A re-check keeps the old state until the hash lookup answers, so a post found only by
       // its hash does not blink green -> red -> green.
       if (ref.rechecking && ref.imageHash && (!hc || hc.state === 'pending')) {
-        return COLORS.searching;
+        return 'searching';
       }
       // Before, during or after an empty hash lookup, and video tiles (no hash).
-      return COLORS.missing;
+      return 'missing';
     }
     if (strictMatch(ref, tc.posts)) {
-      return COLORS.found;
+      return 'found';
     }
     // Posts saved from a tweet name only the tweet, so the number of posts decides: a one-image
     // tweet with any post, or as many posts as images, is fully posted.
     const photoCount = photoCountOf(ref);
     const k = countPosts(tc.posts);
     if ((photoCount === 1 && k >= 1) || k >= photoCount) {
-      return COLORS.found;
+      return 'found';
     }
-    return COLORS.foundWeak;
+    return 'foundWeak';
   }
 
   // Posts the segment is judged on: the tweet's, else those found by the image's media hash.
@@ -1265,18 +1343,18 @@
   }
 
   // Text for the segment's title and aria-label.
-  function resolveLabel(ref, color) {
-    if (color === COLORS.searching) {
+  function resolveLabel(ref, state) {
+    if (state === 'searching') {
       return 'Checking';
     }
-    if (color === COLORS.missing) {
+    if (state === 'missing') {
       return 'Not on Danbooru';
     }
-    if (color === COLORS.error) {
+    if (state === 'error') {
       return 'Lookup failed';
     }
     const posts = matchedPosts(ref);
-    if (color === COLORS.foundWeak) {
+    if (state === 'foundWeak') {
       return `${countPosts(posts)} of ${photoCountOf(ref)} images posted`;
     }
     const post = directPost(ref, posts);
@@ -1292,21 +1370,22 @@
     return `On Danbooru: post #${post.id}`;
   }
 
-  // The only writer of segment state. A segment being re-checked keeps its previous colour,
-  // link and label (and pulses) until the new answer is in.
+  // The only writer of segment state. A segment being re-checked keeps its previous state,
+  // link and label (and pulses) until the new answer is in. Found segments are links; missing
+  // and failed ones are buttons (a tap checks again).
   function applyColors() {
     for (const ref of imageRefs) {
       if (!ref.bar.isConnected) {
         continue;
       }
-      const color = resolveColor(ref);
-      const hold = ref.rechecking && color === COLORS.searching;
+      const state = resolveState(ref);
+      const hold = ref.rechecking && state === 'searching';
       if (!hold) {
         ref.rechecking = false;
       }
-      const matchUrl = resolveMatchUrl(ref);
-      const label = resolveLabel(ref, color);
-      const key = `${color}|${matchUrl || ''}|${label}|${hold ? 1 : 0}`;
+      const matchUrl = state === 'found' || state === 'foundWeak' ? resolveMatchUrl(ref) : null;
+      const label = resolveLabel(ref, state);
+      const key = `${state}|${matchUrl || ''}|${label}|${hold ? 1 : 0}`;
       if (ref.applied === key) {
         continue;
       }
@@ -1315,18 +1394,23 @@
       if (hold) {
         continue;
       }
-      ref.bar.style.backgroundColor = color;
+      ref.bar.dataset.state = state;
       ref.bar.title = label;
       ref.bar.setAttribute('aria-label', label);
       if (matchUrl) {
-        ref.bar.dataset.matchUrl = matchUrl;
-        ref.bar.classList.add('xdsu-clickable');
+        ref.bar.href = matchUrl;
+        ref.bar.target = '_blank';
+        ref.bar.rel = 'noopener';
       } else {
-        delete ref.bar.dataset.matchUrl;
-        ref.bar.classList.remove('xdsu-clickable');
+        ref.bar.removeAttribute('href');
+      }
+      if (state === 'missing' || state === 'error') {
+        ref.bar.setAttribute('role', 'button');
+      } else {
+        ref.bar.removeAttribute('role');
       }
       if (ref.btn) {
-        const found = color === COLORS.found;
+        const found = state === 'found';
         const label = found ? 'Already on Danbooru' : 'Upload to Danbooru';
         ref.btn.classList.toggle('xdsu-found', found);
         ref.btn.title = label;
@@ -1335,38 +1419,64 @@
     }
   }
 
-  // -------------- F2: bar segment click delegation --------------
+  // -------------- bar segment taps --------------
 
-  // Capture-phase listener so we win over Twitter's router.
-  document.addEventListener('click', handleBarClick, true);
-  document.addEventListener('auxclick', handleBarClick, true);
-  document.addEventListener('mousedown', (ev) => {
-    if (ev.target.closest && ev.target.closest('.xdsu-bar-seg.xdsu-clickable')) {
-      ev.stopPropagation();
-    }
-  }, true);
+  // Why a lookup failed, for the toast shown when a failed segment is tapped.
+  const ERROR_TEXT = {
+    network: 'Could not reach Danbooru.',
+    server: 'Danbooru had a server error.',
+    blocked: 'Danbooru blocked the request. Open Danbooru once.',
+    limit: 'The search had too many terms for this account.',
+    client: 'Danbooru refused the search.',
+  };
 
-  function handleBarClick(ev) {
-    const seg = ev.target.closest && ev.target.closest('.xdsu-bar-seg.xdsu-clickable');
-    if (!seg) {
-      return;
-    }
+  // Every tap on a segment stops here, so none reaches the tweet or x.com's links. A found
+  // segment opens its post (at most once per UPLOAD_LOCK_MS), a missing one checks again, a
+  // failed one retries now, a searching one does nothing.
+  function onSegmentClick(ev) {
     if (ev.button !== undefined && ev.button > 1) {
-      return;
-    }
-    const url = seg.dataset.matchUrl;
-    if (!url) {
       return;
     }
     ev.preventDefault();
     ev.stopPropagation();
-    try {
-      GM_openInTab(url, {
-        active: ev.button === 0 && !ev.ctrlKey,
-        setParent: true,
-      });
-    } catch (e) {
-      console.error('[XDSU] open post failed', e);
+    const seg = ev.currentTarget;
+    const ref = imageRefs.find((r) => r.bar === seg);
+    if (!ref) {
+      return;
+    }
+    const state = seg.dataset.state;
+    if (state === 'found' || state === 'foundWeak') {
+      const url = seg.getAttribute('href');
+      const now = Date.now();
+      if (!url || now - ref.openedAt < UPLOAD_LOCK_MS) {
+        return;
+      }
+      ref.openedAt = now;
+      try {
+        GM_openInTab(url, {
+          active: ev.button === 0 && !ev.ctrlKey,
+          setParent: true,
+        });
+      } catch (e) {
+        console.error('[XDSU] open post failed', e);
+        window.open(url, '_blank', 'noopener');
+      }
+    } else if (state === 'missing') {
+      refreshTweetStatus(ref.tweetId);
+    } else if (state === 'error') {
+      const tc = tweetCache[ref.tweetId];
+      const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
+      const failed = [tc, hc].find((e) => e && e.state === 'error');
+      // Already being checked again.
+      if (!failed) {
+        return;
+      }
+      retryEntry(tweetCache, pendingTweetIds, ref.tweetId);
+      imageRefs.filter((r) => r.tweetId === ref.tweetId && r.imageHash)
+          .forEach((r) => retryEntry(hashCache, pendingHashes, r.imageHash));
+      resumeQueue();
+      applyColors();
+      showToast(`${ERROR_TEXT[failed.reason] || 'The lookup failed.'} Trying again.`);
     }
   }
 
@@ -1468,10 +1578,10 @@
 
   // -------------- Like-button refresh trigger --------------
 
-  // Clicking Like (or Unlike) on a tweet re-queries it. On by default; set the stored value
-  // likeRecheck to false to turn it off.
+  // Clicking Like (or Unlike) on a tweet re-queries it. On by default; the menu command
+  // "Like = re-check" turns it off.
   function handleLikeClick(ev) {
-    if (!LIKE_RECHECK) {
+    if (!likeRecheck) {
       return;
     }
     const target = ev.target;
