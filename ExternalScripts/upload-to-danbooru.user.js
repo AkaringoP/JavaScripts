@@ -24,6 +24,7 @@
 // @match        *://xfolio.jp/*
 // @match        *://bsky.app/*
 // @match        *://gall.dcinside.com/*
+// @match        *://*.donmai.us/uploads/*
 // @grant        GM_addStyle
 // @grant        GM_getResourceURL
 // @grant        GM_getValue
@@ -988,6 +989,106 @@ function initializeDcinside() {
   });
 }
 
+// On an upload page, tells once when the file being posted has become a post
+// (someone else posted it while the form was open).
+function initializeDanbooruUpload() {
+  const CHECK_INTERVAL_MS = 2000;
+  // Media asset IDs that are known to be posted, or whose form was submitted.
+  const settled = new Set();
+  let checking = false;
+
+  GM_addStyle(`
+    .ex-utb-posted-toast {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 24px;
+      width: fit-content;
+      margin: 0 auto;
+      z-index: 2147483000;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-sizing: border-box;
+      padding: 12px 16px;
+      border-radius: 8px;
+      background: #b3261e;
+      color: white;
+      font-size: 15px;
+      line-height: 1.4;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    }
+
+    .ex-utb-posted-toast a {
+      color: white !important;
+      font-weight: bold;
+      text-decoration: underline !important;
+    }
+
+    .ex-utb-posted-toast button {
+      flex: none;
+      border: none;
+      background: none;
+      padding: 0 4px;
+      color: white;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+  `);
+
+  const showToast = (postId) => {
+    const $toast = $('<div class="ex-utb-posted-toast" role="alert">');
+    const $link = $('<a target="_blank" rel="noopener">')
+      .attr('href', `/posts/${postId}`)
+      .text(`post #${postId}`);
+    const $close = $('<button type="button" aria-label="Close">').text('×');
+    $close.on('click', () => $toast.remove());
+    $toast.append($('<span>').append('This file is already on Danbooru: ', $link), $close);
+    $toast.appendTo(document.body);
+  };
+
+  const currentAssetId = () => $('.upload-container[data-media-asset-id]').attr('data-media-asset-id');
+
+  const check = async () => {
+    const assetId = currentAssetId();
+    if (checking || document.hidden || !assetId || settled.has(assetId)) {
+      return;
+    }
+
+    checking = true;
+    try {
+      // Not /uploads/<id>.json: that one looks up the artist at the source on every request.
+      const response = await fetch(`/media_assets/${assetId}.json?only=id,post[id]`);
+      if (!response.ok) {
+        return;
+      }
+      const postId = (await response.json())?.post?.id;
+      if (postId && !settled.has(assetId)) {
+        settled.add(assetId);
+        showToast(postId);
+      }
+    }
+    catch (error) {
+      console.warn('[upload-to-danbooru] post check failed:', error);
+    }
+    finally {
+      checking = false;
+    }
+  };
+
+  // After the form is submitted the post that appears is the user's own.
+  document.addEventListener('submit', () => {
+    const assetId = currentAssetId();
+    if (assetId) {
+      settled.add(assetId);
+    }
+  }, true);
+
+  setInterval(check, CHECK_INTERVAL_MS);
+  check();
+}
+
 function initialize() {
   GM_addStyle(PROGRAM_CSS);
 
@@ -1034,6 +1135,9 @@ function initialize() {
     default:
       if (window.location.host.endsWith('.fanbox.cc')) {
         initializeFanbox();
+      }
+      else if (window.location.host.endsWith('.donmai.us')) {
+        initializeDanbooruUpload();
       }
   }
 }
