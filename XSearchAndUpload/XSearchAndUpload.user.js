@@ -22,8 +22,10 @@
 // @version      1.0.0
 // ==/UserScript==
 
-/* Lookups also work logged out, but then a search allows only 2 terms, so they take more requests. */
-/* Search term limits: logged out 2, Member 3, Gold+ unlimited. The script reads yours from /profile.json. */
+/* Lookups also work logged out, but then a search allows only 2 terms, so they
+ * take more requests. */
+/* Search term limits: logged out 2, Member 3, Gold+ unlimited. The script reads
+ * yours from /profile.json. */
 
 (function() {
   'use strict';
@@ -35,7 +37,12 @@
 
   const DEFAULT_BOORU_URL = 'https://danbooru.donmai.us';
 
-  // Returns "https://host[/path]" without a trailing slash, or null if the value is not a usable URL.
+  /**
+   * Normalizes a Danbooru URL setting.
+   * @param {*} v The stored or typed value.
+   * @return {?string} "https://host[/path]" without a trailing slash, or null
+   *     if the value is not a usable URL.
+   */
   function normalizeBooruUrl(v) {
     if (typeof v !== 'string') {
       return null;
@@ -56,13 +63,16 @@
     if (u.protocol !== 'https:' && u.protocol !== 'http:') {
       return null;
     }
-    if (u.hostname !== 'localhost' && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(u.hostname)) {
+    if (u.hostname !== 'localhost' &&
+        !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(u.hostname)) {
       return null;
     }
     return (u.origin + u.pathname).replace(/\/+$/, '');
   }
 
-  const DANBOORU_URL = (normalizeBooruUrl(GM_getValue('booru', DEFAULT_BOORU_URL)) || DEFAULT_BOORU_URL) + '/';
+  const storedBooru =
+      normalizeBooruUrl(GM_getValue('booru', DEFAULT_BOORU_URL));
+  const DANBOORU_URL = (storedBooru || DEFAULT_BOORU_URL) + '/';
   // danbooru/public/logos/danbooru-logo.png (128x128).
   const DANBOORU_ICON_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAsTAAALEwEAmpwYAAAFCklEQVR4nO2cP27UQBTGvyCkKKJAdJSU9BTcAOqcgxR0HCFAhYS4ANBygUQcgDOgKBKKUqBEAgnCnyJDgTaJ1zP2s+fNvOfM9ytQdu0dO/5+73lm2Q1ACCGEEEIIIYSQVtgwPv4DAPsA7hifx3VmMOMbtc4iAsN3gJUADN8JFgIwfEfUFoDhO6OmAAzfIbUEeAjgIxi+O2osA1n5tgxmfLPwwcXh39raxO7ONu7fu1v4lJbH5y9f8ez1B/w4+6M+dslbAMNXoGT4QDkBGL4CpcMHygjA8BWoET6gLwDDV6BW+ICuAAxfgSnh39razD6elgAMX4Gp4e/ubGcfU0MAhq/AnPA1rmOuAAxfAavwgTwBGL4CluED8wVg+ApYhw/ME4DhK+AhfGC6AAxfAS/hA9MEYPgKeAofkAvA8BXwFj4gE4DhK+AxfED2gZBvAG6XPhHyn6nhP3ryamyX7O8FMPxKWHRQyy+GkCtY3T4pgAMs504UwBjriTMFMMZ61UQBjLFeMlOAxsn+XsDem6ca53FtEazTTWEHaBwK0DgUoHEoQONQgMahAI1DARqHAjQOBWgcCtA4FKBxKEDjUIDGoQCNU/rPxJFMQvcfdSiAMSGkg+3nri8BBVAizKzSmACh90N0q4oOFCCBtPXmVulVcXqvTAwVFDtBUwJIqjRefQNVGt0sD2jVAXqhRoYYOYtZLFoA7Sqd1XqTVTp+XgBw3rkFhOSYZaaADgWQ3ksloY4Hldl6B8OX0Z8DhM4Ag2MpWFFcgElVGv9hZL/o1vlVOlp96XTm5NET4KIJCEbzIIDGMkYSatkqndF6Q0K2iXSuX+80Bq6t0j2hiADSCZJ08jx9gjSjSkNyhIGD5c/Hr16/eKiR66s4IVAQAFBZxkhDLVWlIXlm0YOJRpZ08RAEd8i16+tLAPkypv90PNTBm8rkCZIsVGn9a1fpeegdPDF6ugByyBYgexkzufUK227nug5X6cjM5PKZAlUaRgTo3yZ1DSgwByhXpd3xFKp0eBh0QhVPyscruvOac6l+mG6XAH0BLoKSXTHpXVqn9U6rUmnrzanS9fc90p1y/aGOBLoCTJwgJWqy/0yJUEX7rR6Uq9LOKkA2cRIXjQRVAfQmSPLWO6tKB06iv198i+RXlVTpxSogPcjwMTNREeA6VGl2603nNsh59Ly7qZcIfoXOKkB0u69Rpd0HsoY0UKfJ6ou8YvzXix8i2Q5D8fABrVuAwgRJ0nrLVWk60PRxdap06K30GuQLkLmM8VWlU0OtU6UlUX0r+OK56I7rD2VtI2+C1N9BEqpxUVZFdxWg2HpZpXXQWwVcPhPZKbkFrFJblP8vYMWcCRJDtaDgB0LYepdA0U8EEf/wu4GNQwEahwI0DgVoHArQOBSgcShA41CAxqEAjUMBGocCLJiDo5PsMSjAQjk8PsXL9/vZ41CABXJ4fIrnb/fw89ff7LHc/YUQMszB0QlevNvH2W9R+N/HdmAHWBCrtj8h/MdjO1GAhTCx7a/C/zS2IwVYAKXCByiAe0qGD1AA15QOH6AAbqkRPkABXFIrfIACuKNm+AAFcEXt8AEK4AaL8AEK4AKr8AEKYI5l+AAFMMcyfIACmGMZPkABlkCx8AEK4J2i4QPAhmAffv/bhuLhA+wAXqkSPkABPFItfIACeKNq+AAF8ET18AEK4AWT8AEK4AGz8AEKYI1p+IQQQgghhBBCCGmLfxrmmkuV3GutAAAAAElFTkSuQmCC';
 
@@ -81,23 +91,28 @@
     location.reload();
   });
 
-  // Tapping Like (or Unlike) re-checks the tweet. Read on every Like, so the menu toggle applies
-  // at once.
+  // Tapping Like (or Unlike) re-checks the tweet. Read on every Like, so the
+  // menu toggle applies at once.
   let likeRecheck = GM_getValue('likeRecheck', true);
   const LIKE_MENU_ID = 'xdsu-like-recheck';
   const likeMenuLabel = () => `Like = re-check: ${likeRecheck ? 'on' : 'off'}`;
+  /** Flips the Like trigger, stores it and confirms with a toast. */
   function toggleLikeRecheck() {
     likeRecheck = !likeRecheck;
     GM_setValue('likeRecheck', likeRecheck);
-    // A manager that supports ids returns the given one and replaces the entry in place;
-    // re-registering elsewhere would add a second entry.
+    // A manager that supports ids returns the given one and replaces the entry
+    // in place; re-registering elsewhere would add a second entry.
     if (likeMenuRelabels) {
-      GM_registerMenuCommand(likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID});
+      GM_registerMenuCommand(
+          likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID});
     }
-    showToast(likeRecheck ? 'Like now re-checks the tweet' : 'Like no longer re-checks the tweet');
+    showToast(likeRecheck ? 'Like now re-checks the tweet' :
+                            'Like no longer re-checks the tweet');
   }
-  const likeMenuRelabels = GM_registerMenuCommand(likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID})
-    === LIKE_MENU_ID;
+  const likeMenuRelabels =
+      GM_registerMenuCommand(
+          likeMenuLabel(), toggleLikeRecheck, {id: LIKE_MENU_ID}) ===
+      LIKE_MENU_ID;
 
   GM_registerMenuCommand('XDSU legend', () => {
     alert([
@@ -115,49 +130,58 @@
   const FLUSH_DEBOUNCE_MS = 250;
   // How often a scroll checks whether queued lookups came into range.
   const SCROLL_CHECK_MS = 200;
-  // Each ~source:*...* in a lookup is one search term (status:any is free). The batch size is the
-  // account's tag_query_limit from /profile.json (logged out 2, Member 3, Gold+ unlimited),
-  // capped at MAX_QUERY_BATCH. The last detected value is stored for when the check fails.
+  // Each ~source:*...* in a lookup is one search term (status:any is free). The
+  // batch size is the account's tag_query_limit from /profile.json (logged out
+  // 2, Member 3, Gold+ unlimited), capped at MAX_QUERY_BATCH. The last detected
+  // value is stored for when the check fails.
   const MAX_QUERY_BATCH = 6;
   const BATCH_STORE_KEY = 'detectedBatch';
   const PROFILE_TIMEOUT_MS = 5000;
   const PROFILE_MAX_AGE_MS = 10 * 60 * 1000;
-  // The server itself may take ~11 s before it answers a slow search with a 500.
+  // The server itself may take ~11 s before it answers a slow search with a
+  // 500.
   const FETCH_TIMEOUT_MS = 15000;
   // A 5xx, timeout or network error is retried once after this delay.
   const RETRY_DELAY_MS = 1500;
   // Pause after 401/403, 429 or two failed batches in a row.
   const PAUSE_MS = 60000;
-  // Delays before a failed network/server lookup is tried again, by number of failures.
+  // Delays before a failed network/server lookup is tried again, by number of
+  // failures.
   const ERROR_BACKOFF_MS = [30000, 120000, 600000];
-  const ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[tabindex="-1"]';
+  const ARTICLE_SELECTOR =
+      'article[data-testid="tweet"], article[tabindex="-1"]';
+  const LIKE_SELECTOR = '[data-testid="like"], [data-testid="unlike"]';
   const TWEET_PATH_RE = /^\/(?:i\/web|([^/]+))\/status(?:es)?\/(\d+)/;
-  // A per-image upload needs a ref that names the user; otherwise Danbooru may not find the tweet.
+  // A per-image upload needs a ref that names the user; otherwise Danbooru may
+  // not find the tweet.
   const UPLOAD_REF_RE = /^https:\/\/x\.com\/(?!i\/)[^/]+\/status\/\d+$/;
   const UPLOAD_LOCK_MS = 1500;
-  // Tiles lower than this keep the small button so it does not cover the photo link.
+  // Tiles lower than this keep the small button so it does not cover the photo
+  // link.
   const SMALL_TILE_PX = 120;
   const WATCH_MAX_AGE_MS = 30 * 60 * 1000;
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
-  // Bottom offset of the toast, above X's bottom navigation. Raise it while another fixed
-  // control uses the same corner.
+  // Bottom offset of the toast, above X's bottom navigation. Raise it while
+  // another fixed control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
-  // The photo viewer's pill sits in the same corner; while it is shown the toast moves up to
-  // toastBottom (pill bottom + 44px pill + 8px gap).
+  // The photo viewer's pill sits in the same corner; while it is shown the
+  // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap).
   const PILL_POS = {
     left: '12px',
     bottom: 'calc(64px + env(safe-area-inset-bottom))',
     toastBottom: 'calc(116px + env(safe-area-inset-bottom))',
   };
-  // Swiping in the viewer changes only the URL; it is checked this often while the pill is shown.
+  // Swiping in the viewer changes only the URL; it is checked this often while
+  // the pill is shown.
   const PILL_URL_CHECK_MS = 150;
   const VIEWER_PATH_RE = /\/status(?:es)?\/\d+\/photo\/(\d+)\/?$/;
 
   // -------------- styles --------------
 
-  // One palette for every X theme: each colour is at least 3:1 against white, #15202b and black.
-  // Each state also has its own shape, so the bar reads without colour.
+  // One palette for every X theme: each colour is at least 3:1 against white,
+  // #15202b and black. Each state also has its own shape, so the bar reads
+  // without colour.
   GM_addStyle(`
     :root {
       --xdsu-found: #1a8c1a;
@@ -198,17 +222,20 @@
       background: var(--xdsu-found);
     }
     .xdsu-bar-seg[data-state="foundWeak"] {
-      background: repeating-linear-gradient(135deg, var(--xdsu-found) 0 3px, transparent 3px 6px);
+      background: repeating-linear-gradient(
+        135deg, var(--xdsu-found) 0 3px, transparent 3px 6px);
     }
     .xdsu-bar-seg[data-state="missing"] {
       background: transparent;
       box-shadow: inset 0 0 0 2px var(--xdsu-missing);
     }
     .xdsu-bar-seg[data-state="error"] {
-      background: repeating-linear-gradient(90deg, var(--xdsu-error) 0 4px, transparent 4px 10px);
+      background: repeating-linear-gradient(
+        90deg, var(--xdsu-error) 0 4px, transparent 4px 10px);
     }
     .xdsu-bar-seg[data-state="searching"] {
-      background: linear-gradient(var(--xdsu-searching), var(--xdsu-searching)) center / 100% 2px no-repeat;
+      background: linear-gradient(var(--xdsu-searching), var(--xdsu-searching))
+        center / 100% 2px no-repeat;
     }
     .xdsu-bar-seg[data-state="searching"],
     .xdsu-bar-seg.xdsu-rechecking {
@@ -227,8 +254,8 @@
         opacity: 0.6;
       }
     }
-    /* Padding, not margin: a margin can collapse into the action row's and let the tap area
-       overlap the Like button. */
+    /* Padding, not margin: a margin can collapse into the action row's and
+       let the tap area overlap the Like button. */
     @media (pointer: coarse) {
       .xdsu-bar {
         height: 24px;
@@ -311,10 +338,11 @@
       text-decoration: underline !important;
     }
     .xdsu-toast.xdsu-above-pill { bottom: ${PILL_POS.toastBottom}; }
-    /* Photo viewer: an icon button like the tile's. Border style and colour follow the bar
-       (solid found, dashed partly posted, red missing, blue dashes failed, grey dots checking);
-       title and aria-label name the state. The background stops inside the border, so the gaps
-       of a dashed or dotted border show the photo; the light ring separates it from dark photos. */
+    /* Photo viewer: an icon button like the tile's. Border style and colour
+       follow the bar (solid found, dashed partly posted, red missing, blue
+       dashes failed, grey dots checking); title and aria-label name the state.
+       The background stops inside the border, so the gaps of a dashed or dotted
+       border show the photo; the light ring separates it from dark photos. */
     .xdsu-pill {
       position: fixed;
       left: ${PILL_POS.left};
@@ -356,6 +384,12 @@
 
   // -------------- helpers --------------
 
+  /**
+   * GM_xmlhttpRequest as a promise; rejects on error, timeout and abort.
+   * @param {string} url
+   * @param {!Object=} params Extra request details.
+   * @return {!Promise<!Object>} The response object.
+   */
   function gmFetch(url, params) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
@@ -371,11 +405,21 @@
     });
   }
 
+  /**
+   * @param {?string} src An image URL.
+   * @return {?string} The media hash of a pbs.twimg.com/media URL, or null.
+   */
   function parseTwitterImageHash(src) {
     const m = src && src.match(/pbs\.twimg\.com\/media\/([A-Za-z0-9_-]+)/);
     return m ? m[1] : null;
   }
 
+  /**
+   * Reads what a post's source says about its tweet.
+   * @param {?string} source
+   * @return {{tweetId: (string|undefined), photoIndex: (number|undefined),
+   *     imageHash: (string|undefined)}}
+   */
   function parseDanbooruSource(source) {
     const out = {};
     if (!source) {
@@ -396,6 +440,11 @@
     return out;
   }
 
+  /**
+   * @param {string} sourceUrl The URL to upload (a tweet or an image).
+   * @param {string=} ref The page the image belongs to.
+   * @return {string} The Danbooru upload page URL.
+   */
   function buildUploadUrl(sourceUrl, ref) {
     const u = new URL('uploads/new', DANBOORU_URL);
     u.searchParams.set('url', sourceUrl);
@@ -405,9 +454,16 @@
     return u.href;
   }
 
-  // entries[i] is cache[keys[i]] as it was when the batch started; skip keys whose
-  // entry was dropped or replaced (e.g. by a like refresh) while the request ran.
-  // tries and at drive the retry back-off (see retryFailed).
+  /**
+   * Marks the lookups of a failed batch as errors. Keys whose entry was dropped
+   * or replaced while the request ran (e.g. by a like refresh) are skipped;
+   * tries and at drive the retry back-off (see retryFailed).
+   * @param {!Object<string, !CacheEntry>} cache
+   * @param {!Array<string>} keys
+   * @param {!Array<(!CacheEntry|undefined)>} entries cache[keys[i]] as it was
+   *     when the batch started.
+   * @param {string} reason
+   */
   function setKeysError(cache, keys, entries, reason) {
     const now = Date.now();
     keys.forEach((k, i) => {
@@ -421,6 +477,10 @@
     });
   }
 
+  /**
+   * Removes everything the script added to an article.
+   * @param {!Element} article
+   */
   function clearArticleMarkers(article) {
     delete article.dataset.xdsuTweetId;
     delete article.dataset.xdsuTweetUrl;
@@ -430,21 +490,35 @@
     });
   }
 
-  // Builds {tweetId, tweetUrl} from a URL path; the URL drops suffixes like /photo/1.
+  /**
+   * @param {?string} pathname A URL path such as /user/status/1/photo/1.
+   * @return {?TweetInfo} The tweet it names, with suffixes like /photo/1
+   *     dropped from the URL, or null.
+   */
   function parseStatusPath(pathname) {
     const m = (pathname || '').match(TWEET_PATH_RE);
     if (!m) {
       return null;
     }
-    return {tweetId: m[2], tweetUrl: `https://x.com/${m[1] || 'i/web'}/status/${m[2]}`};
+    return {
+      tweetId: m[2],
+      tweetUrl: `https://x.com/${m[1] || 'i/web'}/status/${m[2]}`,
+    };
   }
 
-  // Reads the tweet's own permalink, never the one of a quoted tweet (div[role="link"]).
-  // Only the focal tweet of a detail page (article[tabindex="-1"]) falls back to the page URL.
+  /**
+   * Reads the tweet's own permalink, never the one of a quoted tweet
+   * (div[role="link"]). Only the focal tweet of a detail page
+   * (article[tabindex="-1"]) falls back to the page URL.
+   * @param {!Element} article
+   * @return {?TweetInfo}
+   */
   function extractTweetInfo(article) {
-    const time = [...article.querySelectorAll('time')].find((t) => !t.closest('div[role="link"]'));
-    const link = (time && time.closest('a[href*="/status/"]'))
-      || [...article.querySelectorAll('a[href*="/status/"]')].find((a) => !a.closest('div[role="link"]'));
+    const outsideQuote = (el) => !el.closest('div[role="link"]');
+    const time = [...article.querySelectorAll('time')].find(outsideQuote);
+    const links = [...article.querySelectorAll('a[href*="/status/"]')];
+    const link = (time && time.closest('a[href*="/status/"]')) ||
+        links.find(outsideQuote);
     if (link) {
       return parseStatusPath(link.pathname);
     }
@@ -454,8 +528,11 @@
     return null;
   }
 
-  // True when the image hash of a tracked segment no longer matches any image in the
-  // article, i.e. the article now shows different content.
+  /**
+   * @param {!Element} article
+   * @return {boolean} True when the image hash of a tracked segment no longer
+   *     matches any image in the article, i.e. it now shows different content.
+   */
   function mediaChanged(article) {
     const seg = article.querySelector('.xdsu-bar-seg[data-image-hash]');
     if (!seg) {
@@ -468,10 +545,14 @@
     return now.length > 0 && !now.includes(seg.dataset.imageHash);
   }
 
-  // Combined tweetId + tweetUrl extraction with per-article caching.
-  // Keeps the cache while the live permalink still names the cached tweet (or, without a
-  // permalink, while the media is unchanged); otherwise the article was recycled, so all
-  // related markers are cleared.
+  /**
+   * Identifies an article's tweet, cached on the article. The cache is kept
+   * while the live permalink still names the cached tweet (or, without a
+   * permalink, while the media is unchanged); otherwise the article was
+   * recycled and all related markers are cleared.
+   * @param {!Element} article
+   * @return {?TweetInfo}
+   */
   function getTweetInfo(article) {
     const cached = article.dataset.xdsuTweetId;
     const fresh = extractTweetInfo(article);
@@ -479,7 +560,8 @@
       if (fresh ? fresh.tweetId === cached : !mediaChanged(article)) {
         return {
           tweetId: cached,
-          tweetUrl: article.dataset.xdsuTweetUrl || `https://x.com/i/web/status/${cached}`,
+          tweetUrl: article.dataset.xdsuTweetUrl ||
+              `https://x.com/i/web/status/${cached}`,
         };
       }
       clearArticleMarkers(article);
@@ -492,6 +574,11 @@
     return fresh;
   }
 
+  /**
+   * @param {!Element} article
+   * @return {!Array<!Element>} The tweet's own media tiles, without those of a
+   *     quoted tweet or behind an interstitial.
+   */
   function findPhotos(article) {
     const all = article.querySelectorAll('[data-testid="tweetPhoto"]');
     const out = [];
@@ -507,6 +594,10 @@
     return out;
   }
 
+  /**
+   * @param {!Element} photoEl A media tile.
+   * @return {?HTMLImageElement} Its pbs.twimg.com/media image, or null.
+   */
   function findTweetImage(photoEl) {
     const imgs = photoEl.querySelectorAll('img');
     for (const img of imgs) {
@@ -524,9 +615,15 @@
   const toastReasons = new Set();
   let toastEl = null;
 
-  // Shows a short message in the bottom-left corner. A toast with a url opens it when tapped
-  // and stays 8 s; any other toast lets taps through to the page and stays 4 s. A toast with
-  // a reason (an automatic one) shows at most once per session; one without always shows.
+  /**
+   * Shows a short message in the bottom-left corner. A toast with a url opens
+   * it when tapped and stays 8 s; any other toast lets taps through to the page
+   * and stays 4 s.
+   * @param {string} text
+   * @param {{reason: (?string|undefined), url: (?string|undefined)}=} options
+   *     A toast with a reason (an automatic one) shows at most once per
+   *     session; one without always shows.
+   */
   function showToast(text, {reason = null, url = null} = {}) {
     if (reason) {
       if (toastReasons.has(reason)) {
@@ -540,6 +637,7 @@
     }
   }
 
+  /** Shows the first queued toast, then the next one when it ends. */
   function showNextToast() {
     const t = toastQueue[0];
     if (!t) {
@@ -585,35 +683,83 @@
 
   // -------------- state --------------
 
-  // tweetId -> { state: 'pending'|'done'|'error', posts: [{id, photoIndex, imageHash, isDeleted,
-  //              isBanned}] }; an error entry also has
-  //              reason ('network'|'server'|'blocked'|'limit'|'client'), at (last failure) and tries.
+  /**
+   * A Danbooru post found by a lookup.
+   * @typedef {{
+   *   id: number,
+   *   photoIndex: (number|undefined),
+   *   imageHash: (string|undefined),
+   *   isDeleted: boolean,
+   *   isBanned: boolean,
+   * }} Post
+   */
+
+  /**
+   * The result of one lookup. state is 'pending', 'done' or 'error'; an error
+   * entry also has reason ('network', 'server', 'blocked', 'limit' or
+   * 'client'), at (time of the last failure) and tries.
+   * @typedef {{
+   *   state: string,
+   *   posts: !Array<!Post>,
+   *   reason: (string|undefined),
+   *   at: (number|undefined),
+   *   tries: (number|undefined),
+   * }} CacheEntry
+   */
+
+  /**
+   * One media tile of a tweet. bar is its bar segment and btn its upload
+   * button; for the viewer button's own ref bar is that button, btn is null
+   * and photoCount is set. Video and GIF tiles have imageHash null. applied is
+   * the last state applyColors wrote; openedAt is when a tap last opened the
+   * post.
+   * @typedef {{
+   *   tweetId: string,
+   *   imageHash: ?string,
+   *   photoIndex: number,
+   *   bar: !Element,
+   *   btn: ?Element,
+   *   rechecking: boolean,
+   *   applied: ?string,
+   *   openedAt: number,
+   *   photoCount: (number|undefined),
+   * }} ImageRef
+   */
+
+  /** @typedef {{tweetId: string, tweetUrl: string}} TweetInfo */
+
+  /** @const {!Object<string, !CacheEntry>} Lookup results by tweet id. */
   const tweetCache = Object.create(null);
-  // imageHash -> same shape (fallback for tweets that returned no posts).
+  /**
+   * @const {!Object<string, !CacheEntry>} Lookup results by media hash, the
+   * fallback for tweets that returned no posts.
+   */
   const hashCache = Object.create(null);
 
+  /** @const {!Array<string>} Tweet ids waiting for a lookup. */
   const pendingTweetIds = [];
+  /** @const {!Array<string>} Media hashes waiting for a lookup. */
   const pendingHashes = [];
 
-  // [{tweetId, imageHash, photoIndex, bar, btn, rechecking, applied, openedAt}] where bar is the
-  // segment element and btn the tile's upload button. Video/GIF tiles have imageHash null.
-  // applied is the last state written to the DOM by applyColors; openedAt is when a tap on the
-  // segment last opened its post.
+  /** @const {!Array<!ImageRef>} Every tracked tile. */
   const imageRefs = [];
 
-  // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the upload was opened.
-  // Stored so that it survives Firefox discarding and reloading the X tab.
+  // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the
+  // upload was opened. Stored so that it survives Firefox discarding and
+  // reloading the X tab.
   const watch = new Map((() => {
     try {
       const saved = JSON.parse(GM_getValue('watch', '[]'));
-      return (Array.isArray(saved) ? saved : []).filter((e) => Array.isArray(e) && e[1]
-        && Number.isFinite(e[1].t0) && Number.isFinite(e[1].n0)
-        && Date.now() - e[1].t0 <= WATCH_MAX_AGE_MS);
+      return (Array.isArray(saved) ? saved : []).filter(
+          (e) => Array.isArray(e) && e[1] && Number.isFinite(e[1].t0) &&
+              Number.isFinite(e[1].n0) &&
+              Date.now() - e[1].t0 <= WATCH_MAX_AGE_MS);
     } catch {
       return [];
     }
   })());
 
+  /** Stores the watch list. */
   function saveWatch() {
     GM_setValue('watch', JSON.stringify([...watch]));
   }
@@ -621,6 +767,7 @@
 
   // -------------- DOM scan --------------
 
+  /** Processes every tweet article and drops the refs of removed segments. */
   function scanTweets() {
     const articles = document.querySelectorAll(ARTICLE_SELECTOR);
     for (const article of articles) {
@@ -630,8 +777,8 @@
         console.error('[XDSU] article scan failed', e);
       }
     }
-    // Prune disconnected segment refs. Clear their markers too, so the same element
-    // is tracked again if it is re-attached later.
+    // Prune disconnected segment refs. Clear their markers too, so the same
+    // element is tracked again if it is re-attached later.
     for (let i = imageRefs.length - 1; i >= 0; i--) {
       const seg = imageRefs[i].bar;
       if (!seg.isConnected) {
@@ -646,19 +793,25 @@
     }
   }
 
+  /**
+   * Adds the bar and the upload buttons to one tweet and tracks its tiles.
+   * @param {!Element} article
+   */
   function processArticle(article) {
     const info = getTweetInfo(article);
     if (!info) {
       return;
     }
     const photos = findPhotos(article);
-    // Short-circuit articles already fully processed for this tweet, as long as a re-render left
-    // the bar before the Like group, one segment per tile and every button in place.
+    // Short-circuit articles already fully processed for this tweet, as long as
+    // a re-render left the bar before the Like group, one segment per tile and
+    // every button in place.
     const prevBar = article.querySelector('.xdsu-bar');
-    if (article.dataset.xdsuDone === info.tweetId && prevBar
-      && prevBar.children.length === photos.length && prevBar.nextElementSibling
-      && prevBar.nextElementSibling.querySelector('[data-testid="like"], [data-testid="unlike"]')
-      && photos.every((p) => p.querySelector(':scope > .xdsu-upload-btn'))) {
+    const next = prevBar && prevBar.nextElementSibling;
+    if (article.dataset.xdsuDone === info.tweetId && next &&
+        prevBar.children.length === photos.length &&
+        next.querySelector(LIKE_SELECTOR) &&
+        photos.every((p) => p.querySelector(':scope > .xdsu-upload-btn'))) {
       return;
     }
     if (photos.length === 0) {
@@ -678,9 +831,14 @@
     }
   }
 
-  // Photo numbers (1-based) of a tweet's tiles, read from their /photo/N links because a 4-image
-  // grid may be laid out column by column. Tiles without a link take the lowest free numbers.
-  // Duplicate numbers fall back to DOM order for the whole tweet.
+  /**
+   * Photo numbers (1-based) of a tweet's tiles, read from their /photo/N links
+   * because a 4-image grid may be laid out column by column. Tiles without a
+   * link take the lowest free numbers. Duplicate numbers fall back to DOM order
+   * for the whole tweet.
+   * @param {!Array<!Element>} photos
+   * @return {!Array<number>}
+   */
   function photoNumbers(photos) {
     const n = photos.length;
     const nums = photos.map((el) => {
@@ -707,8 +865,14 @@
     });
   }
 
-  // The tweet bar sits as a flex row right above the action group
-  // and has one segment per image.
+  /**
+   * Creates or repairs the tweet's bar: a flex row right above the action group
+   * with one segment per tile.
+   * @param {!Element} article
+   * @param {string} tweetId
+   * @param {number} photoCount
+   * @return {?Element} The bar, or null while the action row is missing.
+   */
   function ensureTweetBar(article, tweetId, photoCount) {
     let actionGroup = null;
 
@@ -719,7 +883,7 @@
     // Like, so this picks the right one in both layouts.
     const groups = article.querySelectorAll('[role="group"]');
     for (const g of groups) {
-      if (g.querySelector('[data-testid="like"], [data-testid="unlike"]')) {
+      if (g.querySelector(LIKE_SELECTOR)) {
         actionGroup = g;
         break;
       }
@@ -733,11 +897,12 @@
     // container that also holds Reply or Retweet -- i.e., the action
     // row -- in case Twitter dropped role="group" from it entirely.
     if (!actionGroup) {
-      const likeBtn = article.querySelector('[data-testid="like"], [data-testid="unlike"]');
+      const likeBtn = article.querySelector(LIKE_SELECTOR);
       if (likeBtn) {
         let walk = likeBtn.parentElement;
         for (let i = 0; i < 6 && walk && walk !== article; i++) {
-          if (walk.querySelector('[data-testid="reply"], [data-testid="retweet"]')) {
+          const others = '[data-testid="reply"], [data-testid="retweet"]';
+          if (walk.querySelector(others)) {
             actionGroup = walk;
             break;
           }
@@ -763,8 +928,8 @@
       // Placed before the Like group existed, or moved by a re-render.
       actionGroup.parentNode.insertBefore(bar, actionGroup);
     }
-    // A segment stays the same <a> for its whole life; applyColors only toggles its href, so
-    // imageRefs keeps tracking it.
+    // A segment stays the same <a> for its whole life; applyColors only toggles
+    // its href, so imageRefs keeps tracking it.
     while (bar.children.length < photoCount) {
       const seg = document.createElement('a');
       seg.className = 'xdsu-bar-seg';
@@ -784,9 +949,18 @@
     return bar;
   }
 
-  // Returns true if the photo is fully tracked (won't need re-processing).
+  /**
+   * Attaches the upload button to a tile and starts tracking its segment.
+   * @param {!Element} photoEl
+   * @param {!TweetInfo} info
+   * @param {number} photoIndex 1-based photo number.
+   * @param {?Element} bar
+   * @return {boolean} True if the tile is fully tracked (won't need
+   *     re-processing).
+   */
   function processPhoto(photoEl, info, photoIndex, bar) {
-    // Upload button: only needs tweet URL, attach immediately (again after a re-render removed it).
+    // Upload button: only needs tweet URL, attach immediately (again after a
+    // re-render removed it).
     let btn = photoEl.querySelector(':scope > .xdsu-upload-btn');
     const newBtn = !btn;
     if (newBtn) {
@@ -839,12 +1013,23 @@
     return true;
   }
 
+  /**
+   * @param {!Element} photoEl
+   * @return {boolean} Whether the tile holds a video or GIF.
+   */
   function isVideoTile(photoEl) {
-    return !!photoEl.querySelector('video, [data-testid="videoPlayer"], img[src*="_video_thumb/"]');
+    return !!photoEl.querySelector(
+        'video, [data-testid="videoPlayer"], img[src*="_video_thumb/"]');
   }
 
+  /**
+   * @param {!Element} photoEl
+   * @param {!TweetInfo} info
+   * @return {!Element} The new upload button.
+   */
   function attachUploadBtn(photoEl, info) {
-    // The href (and so a long press "open in new tab") always uploads the whole tweet.
+    // The href (and so a long press "open in new tab") always uploads the whole
+    // tweet.
     const tweetUploadUrl = buildUploadUrl(info.tweetUrl);
 
     const btn = document.createElement('a');
@@ -871,7 +1056,8 @@
       if (ev.button !== undefined && ev.button > 1) {
         return;
       }
-      // Cancel every tap, locked ones included, so none reaches the photo link behind the button.
+      // Cancel every tap, locked ones included, so none reaches the photo link
+      // behind the button.
       ev.preventDefault();
       ev.stopPropagation();
       const now = Date.now();
@@ -881,13 +1067,16 @@
       lastOpenAt = now;
       btn.classList.add('xdsu-sent');
       // Read at tap time because the image src can arrive after the button.
-      openUpload(ev, info.tweetId, imageUploadUrl(findTweetImage(photoEl), info.tweetUrl));
+      openUpload(
+          ev, info.tweetId,
+          imageUploadUrl(findTweetImage(photoEl), info.tweetUrl));
     };
     btn.addEventListener('click', onClick);
     btn.addEventListener('auxclick', onClick);
     // A long press may open the href in a new tab from the browser menu.
     btn.addEventListener('contextmenu', () => watchTweet(info.tweetId));
-    // Prevent middle-click autoscroll and click bubbling to the tweet router link.
+    // Prevent middle-click autoscroll and click bubbling to the tweet router
+    // link.
     btn.addEventListener('mousedown', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -897,8 +1086,13 @@
     return btn;
   }
 
-  // Upload URL for a tap: only this image (img may be null) when its original jpg/png can be
-  // named exactly and the tweet URL names the user; otherwise the whole tweet.
+  /**
+   * Upload URL for a tap: only this image when its original jpg/png can be
+   * named exactly and the tweet URL names the user; otherwise the whole tweet.
+   * @param {?HTMLImageElement} img
+   * @param {string} tweetUrl
+   * @return {string}
+   */
   function imageUploadUrl(img, tweetUrl) {
     const hash = img ? parseTwitterImageHash(img.src) : null;
     if (!hash || !UPLOAD_REF_RE.test(tweetUrl)) {
@@ -910,10 +1104,18 @@
     if (fmt !== 'jpg' && fmt !== 'png') {
       return buildUploadUrl(tweetUrl);
     }
-    return buildUploadUrl(`https://pbs.twimg.com/media/${hash}?format=${fmt}&name=orig`, tweetUrl);
+    return buildUploadUrl(
+        `https://pbs.twimg.com/media/${hash}?format=${fmt}&name=orig`,
+        tweetUrl);
   }
 
-  // Opens an upload tab and watches the tweet, so it is checked again on the return to this tab.
+  /**
+   * Opens an upload tab and watches the tweet, so it is checked again on the
+   * return to this tab.
+   * @param {!Event} ev The tap.
+   * @param {string} tweetId
+   * @param {string} url
+   */
   function openUpload(ev, tweetId, url) {
     watchTweet(tweetId);
     let tab = null;
@@ -926,7 +1128,8 @@
       console.error('[XDSU] open tab failed', e);
       window.open(url, '_blank', 'noopener');
     }
-    // Extra re-check trigger; the return to this tab (visibilitychange) is the main one.
+    // Extra re-check trigger; the return to this tab (visibilitychange) is the
+    // main one.
     if (tab) {
       tab.onclose = () => refreshTweetStatus(tweetId);
     }
@@ -934,6 +1137,10 @@
 
   // -------------- search queue --------------
 
+  /**
+   * Queues the lookup of a tweet unless one is cached or running.
+   * @param {string} tweetId
+   */
   function enqueueTweetIdSearch(tweetId) {
     if (tweetCache[tweetId]) {
       return;
@@ -945,7 +1152,10 @@
     scheduleFlush();
   }
 
-  // Falls back to a media-hash lookup for an image whose tweet has no posts.
+  /**
+   * Falls back to a media-hash lookup for an image whose tweet has no posts.
+   * @param {!ImageRef} ref
+   */
   function ensureHashLookup(ref) {
     if (!ref.imageHash || hashCache[ref.imageHash]) {
       return;
@@ -961,8 +1171,14 @@
     scheduleFlush();
   }
 
-  // Puts a failed lookup back in the queue. The cache entry stays the same object, so its tries
-  // and at survive and a batch that is still running can write into it.
+  /**
+   * Puts a failed lookup back in the queue. The cache entry stays the same
+   * object, so its tries and at survive and a batch that is still running can
+   * write into it.
+   * @param {!Object<string, !CacheEntry>} cache
+   * @param {!Array<string>} queue
+   * @param {string} key
+   */
   function retryEntry(cache, queue, key) {
     const e = cache[key];
     if (!e || e.state !== 'error') {
@@ -975,25 +1191,30 @@
     scheduleFlush();
   }
 
-  // Goes over the failed lookups: one without a segment on screen is dropped (a remount looks
-  // it up again). With reasons, those are retried at once; without, network/server failures
-  // are retried once their back-off has passed. 'limit' and 'client' never retry on a timer.
+  /**
+   * Goes over the failed lookups: one without a segment on screen is dropped (a
+   * remount looks it up again). 'limit' and 'client' never retry on a timer.
+   * @param {?Array<string>} reasons Reasons to retry at once; with null,
+   *     network and server failures are retried once their back-off has passed.
+   */
   function retryFailed(reasons) {
     const now = Date.now();
     [
       [tweetCache, pendingTweetIds, (ref, k) => ref.tweetId === k],
       [hashCache, pendingHashes, (ref, k) => ref.imageHash === k],
     ].forEach(([cache, queue, owns]) => {
-      Object.keys(cache).filter((k) => cache[k].state === 'error').forEach((k) => {
+      const isError = (k) => cache[k].state === 'error';
+      Object.keys(cache).filter(isError).forEach((k) => {
         const e = cache[k];
         if (!imageRefs.some((ref) => owns(ref, k) && ref.bar.isConnected)) {
           delete cache[k];
           return;
         }
-        const due = reasons
-          ? reasons.includes(e.reason)
-          : (e.reason === 'network' || e.reason === 'server')
-            && now - e.at >= ERROR_BACKOFF_MS[Math.min(e.tries, ERROR_BACKOFF_MS.length) - 1];
+        const backoff =
+            ERROR_BACKOFF_MS[Math.min(e.tries, ERROR_BACKOFF_MS.length) - 1];
+        const transient = e.reason === 'network' || e.reason === 'server';
+        const due = reasons ? reasons.includes(e.reason) :
+                              transient && now - e.at >= backoff;
         if (due) {
           retryEntry(cache, queue, k);
         }
@@ -1001,14 +1222,18 @@
     });
   }
 
-  // The queue stops while offline or paused (pausedUntil). flushPending runs only from the
-  // timer below, and a pause is lifted only through resumeQueue.
+  // The queue stops while offline or paused (pausedUntil). flushPending runs
+  // only from the timer below, and a pause is lifted only through resumeQueue.
   let flushTimer = null;
   let flushRunning = false;
   let pausedUntil = 0;
   let failedBatches = 0;
   const isOffline = () => navigator.onLine === false;
 
+  /**
+   * Arms the queue timer unless it is armed, a flush is running or the browser
+   * is offline.
+   */
   function scheduleFlush() {
     // While offline the 'online' event wakes the queue.
     if (flushTimer || flushRunning || isOffline()) {
@@ -1025,15 +1250,20 @@
       } finally {
         flushRunning = false;
       }
-      // During a pause, wait above stretches to the end of the pause. Keys out of range wait
-      // for a scroll or a scan to bring them in.
-      if (Date.now() < pausedUntil ? pendingTweetIds.length || pendingHashes.length : hasDueKeys()) {
+      // During a pause, wait above stretches to the end of the pause. Keys out
+      // of range wait for a scroll or a scan to bring them in.
+      const more = Date.now() < pausedUntil ?
+          pendingTweetIds.length || pendingHashes.length :
+          hasDueKeys();
+      if (more) {
         scheduleFlush();
       }
     }, wait);
   }
 
-  // Lifts a pause and runs the queue now (on 'online', on return to the tab).
+  /**
+   * Lifts a pause and runs the queue now (on 'online', on return to the tab).
+   */
   function resumeQueue() {
     pausedUntil = 0;
     // A running flush schedules the next one when it ends.
@@ -1050,33 +1280,57 @@
   const ownsTweet = (ref, k) => ref.tweetId === k;
   const ownsHash = (ref, k) => ref.imageHash === k;
 
-  // Distance in px from the viewport to the nearest connected segment of a key (0 when one is
-  // on screen, Infinity when none is connected). A key is in range within one screen height.
+  /**
+   * @param {string} k A tweet id or media hash.
+   * @param {function(!ImageRef, string): boolean} owns Whether a ref belongs to
+   *     the key.
+   * @return {number} Distance in px from the viewport to the key's nearest
+   *     connected segment: 0 when one is on screen, Infinity when none is
+   *     connected. A key is in range within one screen height.
+   */
   function keyDistance(k, owns) {
-    return Math.min(...imageRefs.filter((ref) => owns(ref, k) && ref.bar.isConnected).map((ref) => {
+    const mine = imageRefs.filter((r) => owns(r, k) && r.bar.isConnected);
+    return Math.min(...mine.map((ref) => {
       const b = ref.bar.getBoundingClientRect();
       return Math.max(0, -b.bottom, b.top - window.innerHeight);
     }));
   }
 
+  /** @return {boolean} Whether a queued key is in range of the viewport. */
   function hasDueKeys() {
-    return pendingTweetIds.some((k) => keyDistance(k, ownsTweet) <= window.innerHeight)
-      || pendingHashes.some((k) => keyDistance(k, ownsHash) <= window.innerHeight);
+    const due = (owns) => (k) => keyDistance(k, owns) <= window.innerHeight;
+    return pendingTweetIds.some(due(ownsTweet)) ||
+        pendingHashes.some(due(ownsHash));
   }
 
-  // Takes up to queryBatch keys in range, nearest to the viewport first (newest first among
-  // equals). Keys out of range stay queued. A key whose tweet is no longer on screen is dropped
-  // from the queue and the cache, so it is looked up again if the tweet comes back.
+  /**
+   * Takes up to queryBatch keys in range, nearest to the viewport first (newest
+   * first among equals). Keys out of range stay queued. A key whose tweet is no
+   * longer on screen is dropped from the queue and the cache, so it is looked
+   * up again if the tweet comes back.
+   * @param {!Array<string>} queue
+   * @param {!Object<string, !CacheEntry>} cache
+   * @param {function(!ImageRef, string): boolean} owns
+   * @return {!Array<string>}
+   */
   function takeBatch(queue, cache, owns) {
     const dist = new Map(queue.map((k) => [k, keyDistance(k, owns)]));
-    queue.filter((k) => dist.get(k) === Infinity).forEach((k) => delete cache[k]);
-    const batch = queue.filter((k) => dist.get(k) <= window.innerHeight).reverse()
-        .sort((a, b) => dist.get(a) - dist.get(b)).slice(0, queryBatch);
-    queue.splice(0, queue.length, ...queue.filter((k) => dist.get(k) !== Infinity && !batch.includes(k)));
+    const gone = (k) => dist.get(k) === Infinity;
+    queue.filter(gone).forEach((k) => delete cache[k]);
+    const batch = queue.filter((k) => dist.get(k) <= window.innerHeight)
+        .reverse()
+        .sort((a, b) => dist.get(a) - dist.get(b))
+        .slice(0, queryBatch);
+    const rest = queue.filter((k) => !gone(k) && !batch.includes(k));
+    queue.splice(0, queue.length, ...rest);
     return batch;
   }
 
-  // Tweet lookups go before hash lookups. The profile check never overlaps a lookup.
+  /**
+   * Runs the queue: tweet lookups before hash lookups. The profile check never
+   * overlaps a lookup.
+   * @return {!Promise<void>}
+   */
   async function flushPending() {
     for (;;) {
       if (isOffline() || Date.now() < pausedUntil) {
@@ -1092,7 +1346,8 @@
       const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
       if (ids.length) {
         await runTweetIdBatch(ids);
-        imageRefs.filter((ref) => ref.bar.isConnected).forEach(ensureHashLookup);
+        imageRefs.filter((ref) => ref.bar.isConnected)
+            .forEach(ensureHashLookup);
         applyColors();
         continue;
       }
@@ -1105,11 +1360,17 @@
     }
   }
 
-  // A TagLimitError splits the batch; the parts run in this flush unless the queue stopped.
+  /**
+   * Looks up tweets by id. A TagLimitError splits the batch; the parts run in
+   * this flush unless the queue stopped.
+   * @param {!Array<string>} ids
+   * @return {!Promise<void>}
+   */
   async function runTweetIdBatch(ids) {
-    const tagStr = 'status:any '
-        + ids.map((id) => `~source:*status/${id}*`).join(' ');
-    const parts = await runBatch(ids, tweetCache, pendingTweetIds, tagStr, (info) => info.tweetId);
+    const tagStr = 'status:any ' +
+        ids.map((id) => `~source:*status/${id}*`).join(' ');
+    const parts = await runBatch(
+        ids, tweetCache, pendingTweetIds, tagStr, (info) => info.tweetId);
     for (const part of parts) {
       if (isOffline() || Date.now() < pausedUntil) {
         pendingTweetIds.unshift(...part);
@@ -1119,10 +1380,16 @@
     }
   }
 
+  /**
+   * Looks up images by media hash; splits like runTweetIdBatch.
+   * @param {!Array<string>} hashes
+   * @return {!Promise<void>}
+   */
   async function runHashBatch(hashes) {
-    const tagStr = 'status:any '
-        + hashes.map((h) => `~source:*media/${h}*`).join(' ');
-    const parts = await runBatch(hashes, hashCache, pendingHashes, tagStr, (info) => info.imageHash);
+    const tagStr = 'status:any ' +
+        hashes.map((h) => `~source:*media/${h}*`).join(' ');
+    const parts = await runBatch(
+        hashes, hashCache, pendingHashes, tagStr, (info) => info.imageHash);
     for (const part of parts) {
       if (isOffline() || Date.now() < pausedUntil) {
         pendingHashes.unshift(...part);
@@ -1134,8 +1401,13 @@
 
   const warnedStatus = new Set();
 
-  // Sorts a posts.json response (null after a network error or timeout) into {posts} or
-  // {reason, retry, message}. reason 'tagLimit' and 'rateLimited' are handled by runBatch.
+  /**
+   * Sorts a posts.json response. The reasons 'tagLimit' and 'rateLimited' are
+   * handled by runBatch.
+   * @param {?Object} resp Null after a network error or timeout.
+   * @return {{posts: (!Array<!Object>|undefined), reason: (string|undefined),
+   *     retry: (boolean|undefined), message: (string|undefined)}}
+   */
   function classifyResponse(resp) {
     if (!resp || !resp.status) {
       return {reason: 'network', retry: true};
@@ -1156,7 +1428,8 @@
     if (s === 422 && error === 'PostQuery::TagLimitError') {
       return {reason: 'tagLimit', message};
     }
-    // Danbooru itself does not send these for a search, so it is Cloudflare or a firewall.
+    // Danbooru itself does not send these for a search, so it is Cloudflare or
+    // a firewall.
     if (s === 401 || s === 403) {
       return {reason: 'blocked'};
     }
@@ -1173,11 +1446,22 @@
     return {reason: 'server', retry: s >= 500};
   }
 
-  // Runs one lookup and writes the result into the entries that existed when it started.
-  // Returns the key groups to run again, which is only non-empty after a TagLimitError.
+  /**
+   * Runs one lookup and writes the result into the entries that existed when it
+   * started.
+   * @param {!Array<string>} keys
+   * @param {!Object<string, !CacheEntry>} cache
+   * @param {!Array<string>} queue The queue the keys came from.
+   * @param {string} tagStr The search.
+   * @param {function(!Object): (string|undefined)} keyOf The key a parsed
+   *     source belongs to.
+   * @return {!Promise<!Array<!Array<string>>>} The key groups to run again,
+   *     non-empty only after a TagLimitError.
+   */
   async function runBatch(keys, cache, queue, tagStr, keyOf) {
-    const url = `${DANBOORU_URL}posts.json?limit=100&only=id,source,is_deleted,is_banned`
-      + `&tags=${encodeURIComponent(tagStr)}`;
+    const url = `${DANBOORU_URL}posts.json?limit=100` +
+        `&only=id,source,is_deleted,is_banned` +
+        `&tags=${encodeURIComponent(tagStr)}`;
     const entries = keys.map((k) => cache[k]);
     let res = classifyResponse(await gmFetch(url).catch(() => null));
     if (res.retry) {
@@ -1220,7 +1504,9 @@
       const n = m ? parseInt(m[1], 10) : 0;
       const size = n >= 1 && n < keys.length ? n : Math.ceil(keys.length / 2);
       queryBatch = Math.min(queryBatch, size);
-      return Array.from({length: Math.ceil(keys.length / size)}, (_, i) => keys.slice(i * size, (i + 1) * size));
+      const count = Math.ceil(keys.length / size);
+      return Array.from(
+          {length: count}, (_, i) => keys.slice(i * size, (i + 1) * size));
     }
     if (res.reason === 'rateLimited') {
       queue.unshift(...keys.filter((k) => !queue.includes(k)));
@@ -1230,12 +1516,16 @@
     setKeysError(cache, keys, entries, res.reason);
     if (res.reason === 'blocked') {
       // Everything still queued would be refused too.
-      [[tweetCache, pendingTweetIds], [hashCache, pendingHashes]].forEach(([c, q]) => {
+      const queues =
+          [[tweetCache, pendingTweetIds], [hashCache, pendingHashes]];
+      queues.forEach(([c, q]) => {
         setKeysError(c, q, q.map((k) => c[k]), 'blocked');
         q.length = 0;
       });
       pausedUntil = now + PAUSE_MS;
-      showToast('Danbooru blocked the request – open Danbooru once', {reason: 'blocked'});
+      showToast(
+          'Danbooru blocked the request – open Danbooru once',
+          {reason: 'blocked'});
     } else if (res.reason !== 'client' && ++failedBatches >= 2) {
       failedBatches = 0;
       pausedUntil = now + PAUSE_MS;
@@ -1245,24 +1535,33 @@
 
   // -------------- account check --------------
 
-  // /profile.json answers 200 logged out too. Without a usable answer the last detected size
-  // (or 2) stays in use.
+  // /profile.json answers 200 logged out too. Without a usable answer the last
+  // detected size (or 2) stays in use.
   const storedBatch = GM_getValue(BATCH_STORE_KEY, null);
-  let queryBatch = Number.isInteger(storedBatch) && storedBatch >= 1 && storedBatch <= MAX_QUERY_BATCH
-    ? storedBatch : 2;
+  const batchStored = Number.isInteger(storedBatch) && storedBatch >= 1 &&
+      storedBatch <= MAX_QUERY_BATCH;
+  let queryBatch = batchStored ? storedBatch : 2;
   let profileBatch = null;
   let profileAnonymous = false;
   let profileCheckedAt = 0;
   let profileCheck = null;
   let profileWanted = false;
 
-  const SAFE_MODE_TOAST = 'Danbooru safe mode is on – only rating:g posts are visible';
+  const SAFE_MODE_TOAST =
+      'Danbooru safe mode is on – only rating:g posts are visible';
 
+  /**
+   * Reads the account's search term limit and safe-mode setting from
+   * /profile.json and sets the batch size.
+   * @return {!Promise<void>}
+   */
   async function checkProfile() {
     let p = null;
     try {
-      const resp = await gmFetch(`${DANBOORU_URL}profile.json`, {timeout: PROFILE_TIMEOUT_MS});
-      p = resp.status >= 200 && resp.status < 300 ? JSON.parse(resp.responseText) : null;
+      const resp = await gmFetch(
+          `${DANBOORU_URL}profile.json`, {timeout: PROFILE_TIMEOUT_MS});
+      const ok = resp.status >= 200 && resp.status < 300;
+      p = ok ? JSON.parse(resp.responseText) : null;
     } catch {
       p = null;
     }
@@ -1284,13 +1583,18 @@
       retryFailed(['limit']);
     }
     if (profileAnonymous) {
-      showToast('Not logged in to Danbooru – lookups limited', {reason: 'anonymous', url: `${DANBOORU_URL}login`});
+      showToast(
+          'Not logged in to Danbooru – lookups limited',
+          {reason: 'anonymous', url: `${DANBOORU_URL}login`});
     }
     if (p.enable_safe_mode === true) {
       showToast(SAFE_MODE_TOAST, {reason: 'safeMode'});
     }
   }
 
+  /**
+   * Starts the account check unless one is running or the browser is offline.
+   */
   function startProfileCheck() {
     if (profileCheck || isOffline()) {
       return;
@@ -1301,7 +1605,7 @@
     });
   }
 
-  // Checks the account now, or between two lookups when a flush is running.
+  /** Checks the account now, or between two lookups when a flush is running. */
   function requestProfileCheck() {
     profileWanted = true;
     if (!flushRunning) {
@@ -1311,8 +1615,12 @@
 
   // -------------- coloring --------------
 
-  // Read at judgement time: a tile that arrives late adds a segment. The pill's own ref carries
-  // its count (see syncPill).
+  /**
+   * @param {!ImageRef} ref
+   * @return {number} The tweet's tile count, read at judgement time because a
+   *     tile that arrives late adds a segment. The viewer's own ref carries its
+   *     count (see syncPill).
+   */
   function photoCountOf(ref) {
     if (ref === pillRef) {
       return ref.photoCount;
@@ -1320,23 +1628,37 @@
     return ref.bar.parentElement ? ref.bar.parentElement.children.length : 1;
   }
 
-  // Number of posts a tweet has on Danbooru: the live ones, or all when every one is deleted.
-  // Children are counted: a child with the same tweet source is another image of the tweet (a
-  // deleted lower-quality duplicate is not live).
+  /**
+   * @param {!Array<!Post>} posts
+   * @return {number} The number of posts a tweet has on Danbooru: the live
+   *     ones, or all when every one is deleted. Children are counted: a child
+   *     with the same tweet source is another image of the tweet (a deleted
+   *     lower-quality duplicate is not live).
+   */
   function countPosts(posts) {
     const live = posts.filter((p) => !p.isDeleted);
     return live.length || posts.length;
   }
 
-  // A post whose source names this very image (media hash or /photo/N).
+  /**
+   * @param {!ImageRef} ref
+   * @param {!Array<!Post>} posts
+   * @return {(!Post|undefined)} A post whose source names this very image
+   *     (media hash or /photo/N).
+   */
   function strictMatch(ref, posts) {
-    return posts.find((p) => (p.imageHash && p.imageHash === ref.imageHash)
-      || (p.photoIndex && p.photoIndex === ref.photoIndex));
+    return posts.find((p) => (p.imageHash && p.imageHash === ref.imageHash) ||
+      (p.photoIndex && p.photoIndex === ref.photoIndex));
   }
 
-  // The post a segment links to directly: its strict match, else the tweet's only post, picking
-  // a normal post before a deleted one before a banned one (a banned post page is HTTP 451 below
-  // Approver). Null when the tweet has several posts.
+  /**
+   * @param {!ImageRef} ref
+   * @param {!Array<!Post>} posts
+   * @return {?Post} The post a segment links to directly: its strict match,
+   *     else the tweet's only post, picking a normal post before a deleted one
+   *     before a banned one (a banned post page is HTTP 451 below Approver).
+   *     Null when the tweet has several posts.
+   */
   function directPost(ref, posts) {
     const exact = strictMatch(ref, posts);
     if (exact || countPosts(posts) !== 1) {
@@ -1346,6 +1668,10 @@
     return posts.reduce((best, p) => (rank(p) < rank(best) ? p : best));
   }
 
+  /**
+   * @param {!ImageRef} ref
+   * @return {string} 'searching', 'found', 'foundWeak', 'missing' or 'error'.
+   */
   function resolveState(ref) {
     const tc = tweetCache[ref.tweetId];
     if (!tc || tc.state === 'pending') {
@@ -1359,7 +1685,8 @@
       }
       return 'error';
     }
-    // No post for the tweet: missing at once; the hash lookup makes it found if it finds one.
+    // No post for the tweet: missing at once; the hash lookup makes it found if
+    // it finds one.
     if (tc.posts.length === 0) {
       if (hc && hc.state === 'done' && hc.posts.length) {
         return 'found';
@@ -1367,19 +1694,21 @@
       if (hc && hc.state === 'error') {
         return 'error';
       }
-      // A re-check keeps the old state until the hash lookup answers, so a post found only by
-      // its hash does not blink green -> red -> green.
+      // A re-check keeps the old state until the hash lookup answers, so a post
+      // found only by its hash does not blink green -> red -> green.
       if (ref.rechecking && ref.imageHash && (!hc || hc.state === 'pending')) {
         return 'searching';
       }
-      // Before, during or after an empty hash lookup, and video tiles (no hash).
+      // Before, during or after an empty hash lookup, and video tiles (no
+      // hash).
       return 'missing';
     }
     if (strictMatch(ref, tc.posts)) {
       return 'found';
     }
-    // Posts saved from a tweet name only the tweet, so the number of posts decides: a one-image
-    // tweet with any post, or as many posts as images, is fully posted.
+    // Posts saved from a tweet name only the tweet, so the number of posts
+    // decides: a one-image tweet with any post, or as many posts as images, is
+    // fully posted.
     const photoCount = photoCountOf(ref);
     const k = countPosts(tc.posts);
     if ((photoCount === 1 && k >= 1) || k >= photoCount) {
@@ -1388,7 +1717,11 @@
     return 'foundWeak';
   }
 
-  // Posts the segment is judged on: the tweet's, else those found by the image's media hash.
+  /**
+   * @param {!ImageRef} ref
+   * @return {!Array<!Post>} The posts the segment is judged on: the tweet's,
+   *     else those found by the image's media hash.
+   */
   function matchedPosts(ref) {
     const tc = tweetCache[ref.tweetId];
     if (tc && tc.state === 'done' && tc.posts.length) {
@@ -1401,7 +1734,10 @@
     return [];
   }
 
-  // Returns a Danbooru URL to navigate to when the segment is clicked, or null.
+  /**
+   * @param {!ImageRef} ref
+   * @return {?string} The Danbooru URL a tap on the segment opens, or null.
+   */
   function resolveMatchUrl(ref) {
     const posts = matchedPosts(ref);
     if (!posts.length) {
@@ -1416,7 +1752,11 @@
     return `${DANBOORU_URL}posts?tags=${encodeURIComponent(tags)}`;
   }
 
-  // Text for the segment's title and aria-label.
+  /**
+   * @param {!ImageRef} ref
+   * @param {string} state
+   * @return {string} Text for the segment's title and aria-label.
+   */
   function resolveLabel(ref, state) {
     if (state === 'searching') {
       return 'Checking';
@@ -1444,9 +1784,12 @@
     return `On Danbooru: post #${post.id}`;
   }
 
-  // The only writer of segment state. A segment being re-checked keeps its previous state,
-  // link and label (and pulses) until the new answer is in. Found segments are links; missing
-  // and failed ones are buttons (a tap checks again).
+  /**
+   * The only writer of segment state. A segment being re-checked keeps its
+   * previous state, link and label (and pulses) until the new answer is in.
+   * Found segments are links; missing and failed ones are buttons (a tap checks
+   * again).
+   */
   function applyColors() {
     for (const ref of imageRefs) {
       if (!ref.bar.isConnected) {
@@ -1461,7 +1804,8 @@
       if (ref === pillRef) {
         continue;
       }
-      const matchUrl = state === 'found' || state === 'foundWeak' ? resolveMatchUrl(ref) : null;
+      const linked = state === 'found' || state === 'foundWeak';
+      const matchUrl = linked ? resolveMatchUrl(ref) : null;
       const label = resolveLabel(ref, state);
       const key = `${state}|${matchUrl || ''}|${label}|${hold ? 1 : 0}`;
       if (ref.applied === key) {
@@ -1511,9 +1855,12 @@
     client: 'Danbooru refused the search.',
   };
 
-  // Every tap on a segment stops here, so none reaches the tweet or x.com's links. A found
-  // segment opens its post (at most once per UPLOAD_LOCK_MS), a missing one checks again, a
-  // failed one retries now, a searching one does nothing.
+  /**
+   * Every tap on a segment stops here, so none reaches the tweet or x.com's
+   * links. A found segment opens its post, a missing one checks again, a failed
+   * one retries now, a searching one does nothing.
+   * @param {!Event} ev
+   */
   function onSegmentClick(ev) {
     if (ev.button !== undefined && ev.button > 1) {
       return;
@@ -1535,7 +1882,12 @@
     }
   }
 
-  // Opens a ref's post link, at most once per UPLOAD_LOCK_MS.
+  /**
+   * Opens a ref's post link, at most once per UPLOAD_LOCK_MS.
+   * @param {!Event} ev
+   * @param {!ImageRef} ref
+   * @param {?string} url
+   */
   function openPost(ev, ref, url) {
     const now = Date.now();
     if (!url || now - ref.openedAt < UPLOAD_LOCK_MS) {
@@ -1553,7 +1905,11 @@
     }
   }
 
-  // Runs the failed lookups of a ref's tweet and images again now and says why they failed.
+  /**
+   * Runs the failed lookups of a ref's tweet and images again now and says why
+   * they failed.
+   * @param {!ImageRef} ref
+   */
   function retryLookup(ref) {
     const tc = tweetCache[ref.tweetId];
     const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
@@ -1567,15 +1923,17 @@
         .forEach((r) => retryEntry(hashCache, pendingHashes, r.imageHash));
     resumeQueue();
     applyColors();
-    showToast(`${ERROR_TEXT[failed.reason] || 'The lookup failed.'} Trying again.`);
+    const why = ERROR_TEXT[failed.reason] || 'The lookup failed.';
+    showToast(`${why} Trying again.`);
   }
 
   // -------------- photo viewer pill --------------
 
-  // On /<user>/status/<id>/photo/<n> one fixed pill shows photo n of that tweet. It mirrors the
-  // tracked segment of that photo when its article is still mounted under the viewer; otherwise
-  // it owns a ref in imageRefs (bar = the pill, so the queue sees it on screen) and is looked up
-  // by itself. Everything is driven by the URL; the viewer's markup is not relied on.
+  // On /<user>/status/<id>/photo/<n> one fixed pill shows photo n of that
+  // tweet. It mirrors the tracked segment of that photo when its article is
+  // still mounted under the viewer; otherwise it owns a ref in imageRefs (bar =
+  // the pill, so the queue sees it on screen) and is looked up by itself.
+  // Everything is driven by the URL; the viewer's markup is not relied on.
   let pillEl = null;
   // The pill's own ref, or null while it mirrors a segment.
   let pillRef = null;
@@ -1587,13 +1945,23 @@
   let pillTimer = null;
   let pillUploadAt = 0;
 
-  // The viewer's image n: the n-th media image outside any tweet and outside links to a tweet
-  // (profile media tiles). Null unless that image is on screen, i.e. the pick is plausible.
+  /**
+   * @return {!Array<!HTMLImageElement>} The media images outside any tweet and
+   *     outside links to a tweet (profile media tiles).
+   */
   function viewerImages() {
-    return [...document.querySelectorAll('img[src*="pbs.twimg.com/media/"]')]
-        .filter((img) => !img.closest('article') && !img.closest('a[href*="/status/"]'));
+    const imgs = document.querySelectorAll('img[src*="pbs.twimg.com/media/"]');
+    return [...imgs].filter(
+        (img) => !img.closest('article') &&
+            !img.closest('a[href*="/status/"]'));
   }
 
+  /**
+   * @param {!Array<!HTMLImageElement>} imgs
+   * @param {number} n 1-based photo number.
+   * @return {?HTMLImageElement} The viewer's image n, or null unless that image
+   *     is on screen, i.e. the pick is plausible.
+   */
   function viewerImage(imgs, n) {
     const img = imgs[n - 1];
     if (!img) {
@@ -1602,11 +1970,15 @@
     const r = img.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
-    return r.width > 0 && cx >= 0 && cx <= window.innerWidth && cy >= 0 && cy <= window.innerHeight
-      ? img : null;
+    const onScreen = r.width > 0 && cx >= 0 && cx <= window.innerWidth &&
+        cy >= 0 && cy <= window.innerHeight;
+    return onScreen ? img : null;
   }
 
-  // The image an upload tap names: the mirrored segment's tile, else the viewer's image n.
+  /**
+   * @return {?HTMLImageElement} The image an upload tap names: the mirrored
+   *     segment's tile, else the viewer's image n.
+   */
   function pillImage() {
     if (pillSrc.ref !== pillRef) {
       const tile = pillSrc.ref.btn && pillSrc.ref.btn.parentElement;
@@ -1615,6 +1987,7 @@
     return viewerImage(viewerImages(), pillRef.photoIndex);
   }
 
+  /** Removes the viewer button's own ref from imageRefs. */
   function dropPillRef() {
     const i = imageRefs.indexOf(pillRef);
     if (i >= 0) {
@@ -1623,6 +1996,7 @@
     pillRef = null;
   }
 
+  /** Removes the viewer button and everything that belongs to it. */
   function closePill() {
     if (!pillEl) {
       return;
@@ -1638,13 +2012,14 @@
     if (toastEl) {
       toastEl.classList.remove('xdsu-above-pill');
     }
-    // A lookup only the pill wanted is dropped by the next flush (see takeBatch).
+    // A lookup only the pill wanted is dropped by the next flush (see
+    // takeBatch).
     if (pendingTweetIds.length || pendingHashes.length) {
       scheduleFlush();
     }
   }
 
-  // Shows, updates or removes the pill for the current URL.
+  /** Shows, updates or removes the viewer button for the current URL. */
   function syncPill() {
     const m = location.pathname.match(VIEWER_PATH_RE);
     const info = m && parseStatusPath(location.pathname);
@@ -1678,7 +2053,8 @@
       });
       // The viewer may react to a press on its own (swipe, hide its controls).
       ['touchstart', 'pointerdown'].forEach((type) => {
-        pillEl.addEventListener(type, (e) => e.stopPropagation(), {passive: true});
+        pillEl.addEventListener(
+            type, (e) => e.stopPropagation(), {passive: true});
       });
       pillTimer = setInterval(() => {
         if (location.pathname !== pillPath) {
@@ -1692,18 +2068,21 @@
     if (!pillEl.isConnected) {
       (document.body || document.documentElement).appendChild(pillEl);
     }
-    const seg = imageRefs.find((r) => r !== pillRef && r.tweetId === info.tweetId && r.photoIndex === n
-      && r.bar.isConnected);
+    const seg = imageRefs.find(
+        (r) => r !== pillRef && r.tweetId === info.tweetId &&
+            r.photoIndex === n && r.bar.isConnected);
     if (seg) {
       dropPillRef();
       const art = seg.bar.closest('article');
-      pillSrc = {ref: seg, tweetUrl: (art && art.dataset.xdsuTweetUrl) || info.tweetUrl};
+      const artUrl = art && art.dataset.xdsuTweetUrl;
+      pillSrc = {ref: seg, tweetUrl: artUrl || info.tweetUrl};
     } else {
       const imgs = viewerImages();
       const img = viewerImage(imgs, n);
       const hash = img ? parseTwitterImageHash(img.src) : null;
-      if (!pillRef || !imageRefs.includes(pillRef) || pillRef.tweetId !== info.tweetId
-        || pillRef.photoIndex !== n || (hash && hash !== pillRef.imageHash)) {
+      if (!pillRef || !imageRefs.includes(pillRef) ||
+          pillRef.tweetId !== info.tweetId || pillRef.photoIndex !== n ||
+          (hash && hash !== pillRef.imageHash)) {
         dropPillRef();
         pillRef = {
           tweetId: info.tweetId,
@@ -1718,10 +2097,13 @@
         };
         imageRefs.push(pillRef);
       }
-      // Photo count: the bar of a mounted article of the tweet, else the viewer's images when
-      // image n was found among them, else n. Never less than n.
-      const bar = [...document.querySelectorAll('.xdsu-bar')].find((b) => b.dataset.tweetId === info.tweetId);
-      pillRef.photoCount = Math.max(n, bar ? bar.children.length : img ? imgs.length : 0);
+      // Photo count: the bar of a mounted article of the tweet, else the
+      // viewer's images when image n was found among them, else n. Never less
+      // than n.
+      const bar = [...document.querySelectorAll('.xdsu-bar')].find(
+          (b) => b.dataset.tweetId === info.tweetId);
+      const seen = img ? imgs.length : 0;
+      pillRef.photoCount = Math.max(n, bar ? bar.children.length : seen);
       pillSrc = {ref: pillRef, tweetUrl: info.tweetUrl};
       enqueueTweetIdSearch(info.tweetId);
       ensureHashLookup(pillRef);
@@ -1729,7 +2111,10 @@
     renderPill();
   }
 
-  // Draws the pill from its ref. While the ref is re-checked the pill keeps what it showed.
+  /**
+   * Draws the viewer button from its ref. While the ref is re-checked the
+   * button keeps what it showed.
+   */
   function renderPill() {
     if (!pillSrc.ref.bar.isConnected) {
       syncPill();
@@ -1750,7 +2135,9 @@
       href = resolveMatchUrl(ref);
       action = 'open';
     } else if (state === 'foundWeak') {
-      label = `Upload to Danbooru · ${countPosts(matchedPosts(ref))} of ${photoCountOf(ref)} posted`;
+      const posted = countPosts(matchedPosts(ref));
+      label =
+          `Upload to Danbooru · ${posted} of ${photoCountOf(ref)} posted`;
       href = buildUploadUrl(pillSrc.tweetUrl);
       action = 'upload';
     } else if (state === 'missing') {
@@ -1782,7 +2169,8 @@
     } else {
       pillEl.removeAttribute('href');
     }
-    // Without an href the <a> has no role of its own, so its label would not be its name.
+    // Without an href the <a> has no role of its own, so its label would not be
+    // its name.
     if (href) {
       pillEl.removeAttribute('role');
     } else {
@@ -1795,7 +2183,11 @@
     }
   }
 
-  // Every tap on the pill stops here, so none reaches the viewer or x.com's handlers.
+  /**
+   * Every tap on the viewer button stops here, so none reaches the viewer or
+   * x.com's handlers.
+   * @param {!Event} ev
+   */
   function onPillClick(ev) {
     if (ev.button !== undefined && ev.button > 1) {
       return;
@@ -1815,7 +2207,8 @@
         return;
       }
       pillUploadAt = now;
-      openUpload(ev, ref.tweetId, imageUploadUrl(pillImage(), pillSrc.tweetUrl));
+      openUpload(
+          ev, ref.tweetId, imageUploadUrl(pillImage(), pillSrc.tweetUrl));
     } else if (action === 'retry') {
       retryLookup(ref);
     }
@@ -1826,20 +2219,33 @@
   const lastRefresh = Object.create(null);
   const REFRESH_DEBOUNCE_MS = 1500;
 
+  /**
+   * @param {string} tweetId
+   * @return {boolean} Whether the tweet's lookup or one of its hash lookups is
+   *     pending.
+   */
   function isLookupPending(tweetId) {
     const tc = tweetCache[tweetId];
     if (tc && tc.state === 'pending') {
       return true;
     }
-    return imageRefs.some((ref) => ref.tweetId === tweetId && ref.imageHash
-      && hashCache[ref.imageHash] && hashCache[ref.imageHash].state === 'pending');
+    return imageRefs.some((ref) => {
+      const hc = ref.tweetId === tweetId && ref.imageHash &&
+          hashCache[ref.imageHash];
+      return hc && hc.state === 'pending';
+    });
   }
 
-  // Drops the cached result of a tweet and queries it again. The segments keep showing the old
-  // result while the query runs (see applyColors).
+  /**
+   * Drops the cached result of a tweet and queries it again. The segments keep
+   * showing the old result while the query runs (see applyColors).
+   * @param {string} tweetId
+   */
   function refreshTweetStatus(tweetId) {
-    const refs = imageRefs.filter((ref) => ref.tweetId === tweetId && ref.bar.isConnected);
-    // Nothing on screen to update (e.g. a text-only tweet), or a lookup is already running.
+    const refs = imageRefs.filter(
+        (ref) => ref.tweetId === tweetId && ref.bar.isConnected);
+    // Nothing on screen to update (e.g. a text-only tweet), or a lookup is
+    // already running.
     if (!refs.length || isLookupPending(tweetId)) {
       return;
     }
@@ -1862,24 +2268,39 @@
     applyColors();
   }
 
-  // Posts currently known for a tweet: its tweet-id lookup plus the hash lookups of its images.
+  /**
+   * @param {string} tweetId
+   * @return {number} Posts currently known for a tweet: its tweet-id lookup
+   *     plus the hash lookups of its images.
+   */
   function knownPostCount(tweetId) {
     const tc = tweetCache[tweetId];
-    const hashes = new Set(imageRefs.filter((ref) => ref.tweetId === tweetId && ref.imageHash)
-        .map((ref) => ref.imageHash));
-    return [...hashes].reduce((n, h) => n + (hashCache[h] ? hashCache[h].posts.length : 0),
-        tc ? tc.posts.length : 0);
+    const hashes = new Set(
+        imageRefs.filter((ref) => ref.tweetId === tweetId && ref.imageHash)
+            .map((ref) => ref.imageHash));
+    const found = (h) => (hashCache[h] ? hashCache[h].posts.length : 0);
+    return [...hashes].reduce(
+        (n, h) => n + found(h), tc ? tc.posts.length : 0);
   }
 
+  /**
+   * Remembers a tweet opened for upload, so it is re-checked on return.
+   * @param {string} tweetId
+   */
   function watchTweet(tweetId) {
     watch.set(tweetId, {t0: Date.now(), n0: knownPostCount(tweetId)});
     saveWatch();
   }
 
-  // One round of re-checks for the watched tweets. Step 0 runs when the tab becomes visible,
-  // the next steps follow on a single timer; an entry is dropped once its post count rose,
-  // after 30 minutes, or after the last step.
+  // One round of re-checks for the watched tweets. Step 0 runs when the tab
+  // becomes visible, the next steps follow on a single timer; an entry is
+  // dropped once its post count rose, after 30 minutes, or after the last step.
   let recheckTimer = null;
+  /**
+   * Runs one round of re-checks for the watched tweets.
+   * @param {number} step 0 when the tab becomes visible; later steps follow on
+   *     the timer.
+   */
   function recheckWatched(step) {
     recheckTimer = null;
     if (document.hidden) {
@@ -1901,11 +2322,13 @@
       saveWatch();
     }
     if (watch.size) {
-      recheckTimer = setTimeout(() => recheckWatched(step + 1), RECHECK_DELAYS_MS[step]);
+      recheckTimer = setTimeout(
+          () => recheckWatched(step + 1), RECHECK_DELAYS_MS[step]);
     }
   }
 
   let lastReturnAt = 0;
+  /** Starts a round of re-checks when the user comes back to the tab. */
   function onReturn() {
     const now = Date.now();
     // A bfcache restore fires both pageshow and visibilitychange.
@@ -1919,6 +2342,10 @@
 
   // -------------- Like-button refresh trigger --------------
 
+  /**
+   * Re-checks the tweet whose Like (or Unlike) button was clicked.
+   * @param {!Event} ev
+   */
   function handleLikeClick(ev) {
     if (!likeRecheck) {
       return;
@@ -1927,7 +2354,7 @@
     if (!target || !target.closest) {
       return;
     }
-    const likeBtn = target.closest('[data-testid="like"], [data-testid="unlike"]');
+    const likeBtn = target.closest(LIKE_SELECTOR);
     if (!likeBtn) {
       return;
     }
@@ -1959,6 +2386,7 @@
   // -------------- MutationObserver + polling fallback --------------
 
   let scanTimer = null;
+  /** Schedules a scan unless one is pending. */
   function scheduleScan() {
     if (scanTimer) {
       return;
@@ -1969,6 +2397,7 @@
     }, SCAN_DEBOUNCE_MS);
   }
 
+  /** Runs one scan: tweets, dropped lookups, retries, repaint. */
   function tick() {
     if (document.hidden) {
       return;
@@ -1976,14 +2405,15 @@
     try {
       scanTweets();
       syncPill();
-      // A lookup dropped while its tweet was off screen (see takeBatch) runs again if the same
-      // segment came back before a scan saw it leave.
+      // A lookup dropped while its tweet was off screen (see takeBatch) runs
+      // again if the same segment came back before a scan saw it leave.
       imageRefs.filter((ref) => ref.bar.isConnected).forEach((ref) => {
         enqueueTweetIdSearch(ref.tweetId);
         ensureHashLookup(ref);
       });
       retryFailed(null);
-      // A queued key can come into range without a scroll (remount, layout change).
+      // A queued key can come into range without a scroll (remount, layout
+      // change).
       if (hasDueKeys()) {
         scheduleFlush();
       }
@@ -1993,7 +2423,8 @@
     }
   }
 
-  // Scrolling brings queued keys into range. Capture also sees an inner element scrolling.
+  // Scrolling brings queued keys into range. Capture also sees an inner element
+  // scrolling.
   let scrollTimer = null;
   window.addEventListener('scroll', () => {
     if (scrollTimer) {
@@ -2007,17 +2438,23 @@
     }, SCROLL_CHECK_MS);
   }, {capture: true, passive: true});
 
+  /** Watches the page for added nodes that are not the script's own. */
   function startObserver() {
     if (!document.body) {
       setTimeout(startObserver, 50);
       return;
     }
-    // The script's own insertions, and text it writes into its elements, need no scan.
-    const OWN = '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
-    const own = (n) => n.nodeType === Node.ELEMENT_NODE && n.matches(OWN);
+    // The script's own insertions, and text it writes into its elements, need
+    // no scan.
+    const ownSelector =
+        '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
+    const own = (n) =>
+      n.nodeType === Node.ELEMENT_NODE && n.matches(ownSelector);
     const observer = new MutationObserver((mutations) => {
-      if (mutations.some((mut) => mut.addedNodes.length > 0 && ![...mut.addedNodes].every(own)
-        && !mut.target.closest(OWN))) {
+      const foreign = (mut) => mut.addedNodes.length > 0 &&
+          ![...mut.addedNodes].every(own) &&
+          !mut.target.closest(ownSelector);
+      if (mutations.some(foreign)) {
         scheduleScan();
       }
     });
@@ -2032,18 +2469,21 @@
   // that doesn't manifest as a DOM addition.
   setInterval(scheduleScan, POLL_INTERVAL_MS);
 
-  // Every visibility change cancels the pending re-check; becoming visible re-scans and
-  // starts a new round of re-checks.
-  // A return to the tab also retries failed lookups at once and checks the account again when
-  // it was logged out, the last check is old, or lookups failed in a way that logging in or a
-  // Cloudflare check in another tab can fix.
+  // Every visibility change cancels the pending re-check; becoming visible
+  // re-scans and starts a new round of re-checks. A return to the tab also
+  // retries failed lookups at once and checks the account again when it was
+  // logged out, the last check is old, or lookups failed in a way that logging
+  // in or a Cloudflare check in another tab can fix.
   document.addEventListener('visibilitychange', () => {
     clearTimeout(recheckTimer);
     recheckTimer = null;
     if (!document.hidden) {
-      const recheckProfile = profileAnonymous || Date.now() - profileCheckedAt > PROFILE_MAX_AGE_MS
-        || [tweetCache, hashCache].some((cache) => Object.values(cache).some((e) => e.state === 'error'
-          && (e.reason === 'limit' || e.reason === 'blocked')));
+      const needsAccount = (e) => e.state === 'error' &&
+          (e.reason === 'limit' || e.reason === 'blocked');
+      const recheckProfile = profileAnonymous ||
+          Date.now() - profileCheckedAt > PROFILE_MAX_AGE_MS ||
+          [tweetCache, hashCache].some(
+              (cache) => Object.values(cache).some(needsAccount));
       retryFailed(['network', 'server', 'blocked']);
       resumeQueue();
       if (recheckProfile) {

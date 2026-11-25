@@ -153,6 +153,10 @@ To compare against an earlier version, put a copy next to the runners (`git show
 
 When writing a scenario, keep tweets mounted and laid out near the viewport, as on the real site, or queue behaviour is not exercised. Things only a real phone can show: tap accuracy in Firefox for Android, X's own overlays and the viewer's layout, and whether the manager sends Danbooru's cookie.
 
+### Style
+
+The script follows the [Google JavaScript Style Guide](https://google.github.io/styleguide/jsguide.html): 80 columns, JSDoc on every function, line breaks after operators. It lints clean with `eslint-config-google` apart from two kinds of report that are expected: `new-cap` on the `GM_*` calls, and `max-len` on the metadata block and the embedded icon, which cannot be wrapped.
+
 ### History
 
 The November 2026 audit rewrote most of the script in steps:
@@ -167,6 +171,7 @@ The November 2026 audit rewrote most of the script in steps:
 | `c265499` | Tappable bar, shape per state, menu commands |
 | `3387c1e` | Cleanup, restore of bars and buttons after re-renders |
 | `e56e78d`, `0cbf6cb` | Photo viewer button, header fields |
+| `3897d86` | Scenario harness under `test/` |
 
 ### Open items
 
