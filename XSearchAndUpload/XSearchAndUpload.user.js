@@ -13,12 +13,13 @@
 // @grant        GM_registerMenuCommand
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js
 // @connect      danbooru.donmai.us
+// @connect      donmai.us
 // @noframes
 // @version      1.0.0
 // ==/UserScript==
 
-/* You must be logged into Danbooru for the search to work. */
-/* Gold+ account is recommended so OR-tag batching can use up to 6 tags per query. */
+/* Lookups also work logged out, but then a search allows only 2 terms, so they take more requests. */
+/* Search term limits: logged out 2, Member 3, Gold+ unlimited. The script reads yours from /profile.json. */
 
 (function() {
   'use strict';
@@ -76,19 +77,6 @@
     location.reload();
   });
 
-  GM_registerMenuCommand('Set query batch size', () => {
-    const cur = GM_getValue('queryBatch', 3);
-    const msg = 'Wildcards per Danbooru query (1-5).\n'
-      + 'Lower = more requests but works on Member accounts (limit 6 wildcards).\n'
-      + 'Each unit uses 2 wildcards. 3 = 6 wildcards (Gold-safe), 1 = 2 wildcards (Member-safe).';
-    const input = prompt(msg, String(cur));
-    const n = parseInt(input, 10);
-    if (n >= 1 && n <= 5) {
-      GM_setValue('queryBatch', n);
-      location.reload();
-    }
-  });
-
   const COLORS = {
     searching: '#9a9a9a',
     found: '#1a8c1a',
@@ -100,13 +88,21 @@
   const POLL_INTERVAL_MS = 2000;
   const SCAN_DEBOUNCE_MS = 100;
   const FLUSH_DEBOUNCE_MS = 250;
-  // Each batched ~source:*foo* uses 2 wildcards. Danbooru limits:
-  //   Member: 6 wildcards (batch up to 3), Gold: 12 (up to 5+), Platinum: more.
-  // Default 3 is Member-safe; users on higher tiers can raise via menu.
-  const storedBatch = GM_getValue('queryBatch', 3);
-  const QUERY_BATCH = Math.max(1, Math.min(5, Number.isInteger(storedBatch) ? storedBatch : 3));
-  const FETCH_TIMEOUT_MS = 20000;
-  const MAX_ATTEMPTS = 5;
+  // Each ~source:*...* in a lookup is one search term (status:any is free). The batch size is the
+  // account's tag_query_limit from /profile.json (logged out 2, Member 3, Gold+ unlimited),
+  // capped at MAX_QUERY_BATCH. The last detected value is stored for when the check fails.
+  const MAX_QUERY_BATCH = 6;
+  const BATCH_STORE_KEY = 'detectedBatch';
+  const PROFILE_TIMEOUT_MS = 5000;
+  const PROFILE_MAX_AGE_MS = 10 * 60 * 1000;
+  // The server itself may take ~11 s before it answers a slow search with a 500.
+  const FETCH_TIMEOUT_MS = 15000;
+  // A 5xx, timeout or network error is retried once after this delay.
+  const RETRY_DELAY_MS = 1500;
+  // Pause after 401/403, 429 or two failed batches in a row.
+  const PAUSE_MS = 60000;
+  // Delays before a failed network/server lookup is tried again, by number of failures.
+  const ERROR_BACKOFF_MS = [30000, 120000, 600000];
   const ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[tabindex="-1"]';
   const TWEET_PATH_RE = /^\/(?:i\/web|([^/]+))\/status(?:es)?\/(\d+)/;
   // A per-image upload needs a ref that names the user; otherwise Danbooru may not find the tweet.
@@ -118,6 +114,9 @@
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
   const LIKE_RECHECK = GM_getValue('likeRecheck', true);
+  // Bottom offset of the toast, above X's bottom navigation. Raise it while another fixed
+  // control uses the same corner.
+  const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
 
   // -------------- styles --------------
 
@@ -202,6 +201,31 @@
       display: block;
       border: none;
     }
+    .xdsu-toast {
+      position: fixed;
+      left: 12px;
+      bottom: ${TOAST_BOTTOM};
+      max-width: calc(100vw - 100px);
+      min-height: 44px;
+      box-sizing: border-box;
+      display: none;
+      align-items: center;
+      padding: 8px 14px;
+      border-radius: 8px;
+      background: rgba(15, 20, 25, 0.92);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      color: white !important;
+      font: 14px/1.35 system-ui, sans-serif;
+      text-decoration: none !important;
+      z-index: 2147483000;
+      pointer-events: none;
+    }
+    .xdsu-toast.xdsu-show { display: flex; }
+    .xdsu-toast.xdsu-action {
+      pointer-events: auto;
+      cursor: pointer;
+      text-decoration: underline !important;
+    }
   `);
 
   // -------------- helpers --------------
@@ -257,10 +281,16 @@
 
   // entries[i] is cache[keys[i]] as it was when the batch started; skip keys whose
   // entry was dropped or replaced (e.g. by a like refresh) while the request ran.
-  function setKeysError(cache, keys, entries) {
+  // tries and at drive the retry back-off (see retryFailed).
+  function setKeysError(cache, keys, entries, reason) {
+    const now = Date.now();
     keys.forEach((k, i) => {
-      if (entries[i] && cache[k] === entries[i]) {
-        entries[i].state = 'error';
+      const e = entries[i];
+      if (e && cache[k] === e) {
+        e.state = 'error';
+        e.reason = reason;
+        e.at = now;
+        e.tries = (e.tries || 0) + 1;
       }
     });
   }
@@ -364,10 +394,76 @@
     return null;
   }
 
+  // -------------- toast --------------
+
+  // Phones have no console or tooltips, so problems are reported here.
+  const toastQueue = [];
+  const toastReasons = new Set();
+  let toastEl = null;
+
+  // Shows a short message in the bottom-left corner. A toast with a url opens it when tapped
+  // and stays 8 s; any other toast lets taps through to the page and stays 4 s. A toast with
+  // a reason (an automatic one) shows at most once per session; one without always shows.
+  function showToast(text, {reason = null, url = null} = {}) {
+    if (reason) {
+      if (toastReasons.has(reason)) {
+        return;
+      }
+      toastReasons.add(reason);
+    }
+    toastQueue.push({text, url});
+    if (toastQueue.length === 1) {
+      showNextToast();
+    }
+  }
+
+  function showNextToast() {
+    const t = toastQueue[0];
+    if (!t) {
+      return;
+    }
+    if (!toastEl) {
+      toastEl = document.createElement('a');
+      toastEl.className = 'xdsu-toast';
+      toastEl.setAttribute('aria-live', 'polite');
+      toastEl.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!toastEl.href) {
+          return;
+        }
+        try {
+          GM_openInTab(toastEl.href, {active: true, setParent: true});
+        } catch (e) {
+          console.error('[XDSU] open tab failed', e);
+          window.open(toastEl.href, '_blank', 'noopener');
+        }
+        toastEl.classList.remove('xdsu-show');
+      });
+      (document.body || document.documentElement).appendChild(toastEl);
+    }
+    toastEl.textContent = t.text;
+    if (t.url) {
+      toastEl.href = t.url;
+      toastEl.target = '_blank';
+      toastEl.rel = 'noopener';
+    } else {
+      toastEl.removeAttribute('href');
+    }
+    toastEl.classList.toggle('xdsu-action', !!t.url);
+    toastEl.classList.add('xdsu-show');
+    setTimeout(() => {
+      toastEl.classList.remove('xdsu-show');
+      toastQueue.shift();
+      showNextToast();
+    }, t.url ? 8000 : 4000);
+  }
+
   // -------------- state --------------
 
-  // tweetId -> { state: 'pending'|'done'|'error',
-  //              posts: [{id, source, tweetId, photoIndex, imageHash, rating, score}] }
+  // tweetId -> { state: 'pending'|'done'|'error', posts: [{id, source, tweetId, photoIndex,
+  //              imageHash, isDeleted, isBanned}] }; an error entry also has
+  //              reason ('network'|'server'|'blocked'|'limit'|'client'), at (last failure) and tries.
   const tweetCache = Object.create(null);
   // imageHash -> same shape (fallback for tweets that returned no posts).
   const hashCache = Object.create(null);
@@ -683,12 +779,60 @@
     scheduleFlush();
   }
 
-  let flushTimer = null;
-  let flushRunning = false;
-  function scheduleFlush() {
-    if (flushTimer || flushRunning) {
+  // Puts a failed lookup back in the queue. The cache entry stays the same object, so its tries
+  // and at survive and a batch that is still running can write into it.
+  function retryEntry(cache, queue, key) {
+    const e = cache[key];
+    if (!e || e.state !== 'error') {
       return;
     }
+    e.state = 'pending';
+    if (!queue.includes(key)) {
+      queue.push(key);
+    }
+    scheduleFlush();
+  }
+
+  // Goes over the failed lookups: one without a segment on screen is dropped (a remount looks
+  // it up again). With reasons, those are retried at once; without, network/server failures
+  // are retried once their back-off has passed. 'limit' and 'client' never retry on a timer.
+  function retryFailed(reasons) {
+    const now = Date.now();
+    [
+      [tweetCache, pendingTweetIds, (ref, k) => ref.tweetId === k],
+      [hashCache, pendingHashes, (ref, k) => ref.imageHash === k],
+    ].forEach(([cache, queue, owns]) => {
+      Object.keys(cache).filter((k) => cache[k].state === 'error').forEach((k) => {
+        const e = cache[k];
+        if (!imageRefs.some((ref) => owns(ref, k) && ref.bar.isConnected)) {
+          delete cache[k];
+          return;
+        }
+        const due = reasons
+          ? reasons.includes(e.reason)
+          : (e.reason === 'network' || e.reason === 'server')
+            && now - e.at >= ERROR_BACKOFF_MS[Math.min(e.tries, ERROR_BACKOFF_MS.length) - 1];
+        if (due) {
+          retryEntry(cache, queue, k);
+        }
+      });
+    });
+  }
+
+  // The queue stops while offline or paused (pausedUntil). flushPending runs only from the
+  // timer below, and a pause is lifted only through resumeQueue.
+  let flushTimer = null;
+  let flushRunning = false;
+  let pausedUntil = 0;
+  let failedBatches = 0;
+  const isOffline = () => navigator.onLine === false;
+
+  function scheduleFlush() {
+    // While offline the 'online' event wakes the queue.
+    if (flushTimer || flushRunning || isOffline()) {
+      return;
+    }
+    const wait = Math.max(FLUSH_DEBOUNCE_MS, pausedUntil - Date.now());
     flushTimer = setTimeout(async () => {
       flushTimer = null;
       flushRunning = true;
@@ -699,96 +843,277 @@
       } finally {
         flushRunning = false;
       }
+      // During a pause, wait above stretches to the end of the pause.
       if (pendingTweetIds.length || pendingHashes.length) {
         scheduleFlush();
       }
-    }, FLUSH_DEBOUNCE_MS);
+    }, wait);
   }
 
+  // Lifts a pause and runs the queue now (on 'online', on return to the tab).
+  function resumeQueue() {
+    pausedUntil = 0;
+    // A running flush schedules the next one when it ends.
+    if (flushRunning) {
+      return;
+    }
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    if (pendingTweetIds.length || pendingHashes.length) {
+      scheduleFlush();
+    }
+  }
+
+  // Takes up to queryBatch keys, newest first. A key whose tweet is no longer on screen is
+  // dropped from the queue and the cache, so it is looked up again if the tweet comes back.
+  function takeBatch(queue, cache, onScreen) {
+    const batch = [];
+    while (queue.length && batch.length < queryBatch) {
+      const k = queue.pop();
+      if (onScreen(k)) {
+        batch.push(k);
+      } else {
+        delete cache[k];
+      }
+    }
+    return batch;
+  }
+
+  // Tweet lookups go before hash lookups. The profile check never overlaps a lookup.
   async function flushPending() {
-    while (pendingTweetIds.length) {
-      const batch = pendingTweetIds.splice(0, QUERY_BATCH);
-      await runTweetIdBatch(batch);
-      imageRefs.filter((ref) => ref.bar.isConnected).forEach(ensureHashLookup);
-      applyColors();
-    }
-    while (pendingHashes.length) {
-      const hBatch = pendingHashes.splice(0, QUERY_BATCH);
-      await runHashBatch(hBatch);
+    for (;;) {
+      if (isOffline() || Date.now() < pausedUntil) {
+        return;
+      }
+      if (profileWanted) {
+        startProfileCheck();
+      }
+      if (profileCheck) {
+        await profileCheck;
+        continue;
+      }
+      const ids = takeBatch(pendingTweetIds, tweetCache,
+          (id) => imageRefs.some((ref) => ref.tweetId === id && ref.bar.isConnected));
+      if (ids.length) {
+        await runTweetIdBatch(ids);
+        imageRefs.filter((ref) => ref.bar.isConnected).forEach(ensureHashLookup);
+        applyColors();
+        continue;
+      }
+      const hashes = takeBatch(pendingHashes, hashCache,
+          (h) => imageRefs.some((ref) => ref.imageHash === h && ref.bar.isConnected));
+      if (!hashes.length) {
+        return;
+      }
+      await runHashBatch(hashes);
       applyColors();
     }
   }
 
+  // A TagLimitError splits the batch; the parts run in this flush unless the queue stopped.
   async function runTweetIdBatch(ids) {
     const tagStr = 'status:any '
         + ids.map((id) => `~source:*status/${id}*`).join(' ');
-    await runBatch(ids, tweetCache, tagStr, (info) => info.tweetId);
+    const parts = await runBatch(ids, tweetCache, pendingTweetIds, tagStr, (info) => info.tweetId);
+    for (const part of parts) {
+      if (isOffline() || Date.now() < pausedUntil) {
+        pendingTweetIds.unshift(...part);
+      } else {
+        await runTweetIdBatch(part);
+      }
+    }
   }
 
   async function runHashBatch(hashes) {
     const tagStr = 'status:any '
         + hashes.map((h) => `~source:*media/${h}*`).join(' ');
-    await runBatch(hashes, hashCache, tagStr, (info) => info.imageHash);
+    const parts = await runBatch(hashes, hashCache, pendingHashes, tagStr, (info) => info.imageHash);
+    for (const part of parts) {
+      if (isOffline() || Date.now() < pausedUntil) {
+        pendingHashes.unshift(...part);
+      } else {
+        await runHashBatch(part);
+      }
+    }
   }
 
-  async function runBatch(keys, cache, tagStr, keyOf) {
-    const url = `${DANBOORU_URL}posts.json?limit=100&tags=${encodeURIComponent(tagStr)}`;
-    // Results are only written into the entries that existed when the batch started.
-    const entries = keys.map((k) => cache[k]);
-    let resp = null;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        resp = await gmFetch(url);
-        if (resp && resp.status >= 200 && resp.status < 400) {
-          break;
-        }
-        resp = null;
-      } catch {
-        resp = null;
-      }
-      if (attempt < MAX_ATTEMPTS) {
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
-      }
+  const warnedStatus = new Set();
+
+  // Sorts a posts.json response (null after a network error or timeout) into {posts} or
+  // {reason, retry, message}. reason 'tagLimit' and 'rateLimited' are handled by runBatch.
+  function classifyResponse(resp) {
+    if (!resp || !resp.status) {
+      return {reason: 'network', retry: true};
     }
-    if (!resp) {
-      setKeysError(cache, keys, entries);
-      return;
-    }
-    let data;
+    let body;
     try {
-      data = JSON.parse(resp.responseText);
+      body = JSON.parse(resp.responseText);
     } catch {
-      data = null;
+      body = null;
     }
-    if (!Array.isArray(data)) {
-      setKeysError(cache, keys, entries);
+    const s = resp.status;
+    if (s >= 200 && s < 300) {
+      // e.g. a maintenance page served with 200.
+      return Array.isArray(body) ? {posts: body} : {reason: 'server'};
+    }
+    const error = body && body.error;
+    const message = body && body.message;
+    if (s === 422 && error === 'PostQuery::TagLimitError') {
+      return {reason: 'tagLimit', message};
+    }
+    // Danbooru itself does not send these for a search, so it is Cloudflare or a firewall.
+    if (s === 401 || s === 403) {
+      return {reason: 'blocked'};
+    }
+    if (s === 429) {
+      return {reason: 'rateLimited'};
+    }
+    if (s >= 400 && s < 500) {
+      if (!warnedStatus.has(s)) {
+        warnedStatus.add(s);
+        console.warn('[XDSU] lookup rejected', s, error, message);
+      }
+      return {reason: 'client'};
+    }
+    return {reason: 'server', retry: s >= 500};
+  }
+
+  // Runs one lookup and writes the result into the entries that existed when it started.
+  // Returns the key groups to run again, which is only non-empty after a TagLimitError.
+  async function runBatch(keys, cache, queue, tagStr, keyOf) {
+    const url = `${DANBOORU_URL}posts.json?limit=100&only=id,source,is_deleted,is_banned`
+      + `&tags=${encodeURIComponent(tagStr)}`;
+    const entries = keys.map((k) => cache[k]);
+    let res = classifyResponse(await gmFetch(url).catch(() => null));
+    if (res.retry) {
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      res = classifyResponse(await gmFetch(url).catch(() => null));
+    }
+    const now = Date.now();
+    if (res.posts) {
+      failedBatches = 0;
+      const bucket = Object.fromEntries(keys.map((k) => [k, []]));
+      for (const post of res.posts) {
+        const info = parseDanbooruSource(post.source);
+        const k = keyOf(info);
+        if (k && bucket[k]) {
+          bucket[k].push({
+            id: post.id,
+            source: post.source,
+            tweetId: info.tweetId,
+            photoIndex: info.photoIndex,
+            imageHash: info.imageHash,
+            isDeleted: !!post.is_deleted,
+            isBanned: !!post.is_banned,
+          });
+        }
+      }
+      keys.forEach((k, i) => {
+        if (entries[i] && cache[k] === entries[i]) {
+          entries[i].posts = bucket[k];
+          entries[i].state = 'done';
+        }
+      });
+      return [];
+    }
+    if (res.reason === 'tagLimit') {
+      requestProfileCheck();
+      if (keys.length === 1) {
+        setKeysError(cache, keys, entries, 'limit');
+        return [];
+      }
+      // "You cannot search for more than N tags at a time."
+      const m = /more than (\d+) tags/.exec(res.message || '');
+      const n = m ? parseInt(m[1], 10) : 0;
+      const size = n >= 1 && n < keys.length ? n : Math.ceil(keys.length / 2);
+      queryBatch = Math.min(queryBatch, size);
+      return Array.from({length: Math.ceil(keys.length / size)}, (_, i) => keys.slice(i * size, (i + 1) * size));
+    }
+    if (res.reason === 'rateLimited') {
+      queue.unshift(...keys.filter((k) => !queue.includes(k)));
+      pausedUntil = now + PAUSE_MS;
+      return [];
+    }
+    setKeysError(cache, keys, entries, res.reason);
+    if (res.reason === 'blocked') {
+      // Everything still queued would be refused too.
+      [[tweetCache, pendingTweetIds], [hashCache, pendingHashes]].forEach(([c, q]) => {
+        setKeysError(c, q, q.map((k) => c[k]), 'blocked');
+        q.length = 0;
+      });
+      pausedUntil = now + PAUSE_MS;
+      showToast('Danbooru blocked the request – open Danbooru once', {reason: 'blocked'});
+    } else if (res.reason !== 'client' && ++failedBatches >= 2) {
+      failedBatches = 0;
+      pausedUntil = now + PAUSE_MS;
+    }
+    return [];
+  }
+
+  // -------------- account check --------------
+
+  // The account's search term limit sets the batch size; /profile.json answers 200 logged out
+  // too. Without a usable answer the last detected size (or 2) stays in use.
+  const storedBatch = GM_getValue(BATCH_STORE_KEY, null);
+  let queryBatch = Number.isInteger(storedBatch) && storedBatch >= 1 && storedBatch <= MAX_QUERY_BATCH
+    ? storedBatch : 2;
+  let profileBatch = null;
+  let profileAnonymous = false;
+  let profileCheckedAt = 0;
+  let profileCheck = null;
+  let profileWanted = false;
+
+  const SAFE_MODE_TOAST = 'Danbooru safe mode is on – only rating:g posts are visible';
+
+  async function checkProfile() {
+    let p = null;
+    try {
+      const resp = await gmFetch(`${DANBOORU_URL}profile.json`, {timeout: PROFILE_TIMEOUT_MS});
+      p = resp.status >= 200 && resp.status < 300 ? JSON.parse(resp.responseText) : null;
+    } catch {
+      p = null;
+    }
+    if (!p || typeof p !== 'object' || !('tag_query_limit' in p)) {
       return;
     }
-    const bucket = Object.create(null);
-    for (const k of keys) {
-      bucket[k] = [];
+    // null means unlimited.
+    const limit = p.tag_query_limit ?? MAX_QUERY_BATCH;
+    if (!Number.isFinite(limit)) {
+      return;
     }
-    for (const post of data) {
-      const info = parseDanbooruSource(post.source);
-      const k = keyOf(info);
-      if (k && bucket[k]) {
-        bucket[k].push({
-          id: post.id,
-          source: post.source,
-          tweetId: info.tweetId,
-          photoIndex: info.photoIndex,
-          imageHash: info.imageHash,
-          rating: post.rating,
-          score: post.score,
-        });
-      }
+    profileCheckedAt = Date.now();
+    profileAnonymous = p.id === null || p.id === undefined;
+    const batch = Math.max(1, Math.min(Math.floor(limit), MAX_QUERY_BATCH));
+    if (batch !== profileBatch) {
+      profileBatch = batch;
+      queryBatch = batch;
+      GM_setValue(BATCH_STORE_KEY, batch);
+      retryFailed(['limit']);
     }
-    keys.forEach((k, i) => {
-      if (entries[i] && cache[k] === entries[i]) {
-        entries[i].posts = bucket[k];
-        entries[i].state = 'done';
-      }
+    if (profileAnonymous) {
+      showToast('Not logged in to Danbooru – lookups limited', {reason: 'anonymous', url: `${DANBOORU_URL}login`});
+    }
+    if (p.enable_safe_mode === true) {
+      showToast(SAFE_MODE_TOAST, {reason: 'safeMode'});
+    }
+  }
+
+  function startProfileCheck() {
+    if (profileCheck || isOffline()) {
+      return;
+    }
+    profileWanted = false;
+    profileCheck = checkProfile().finally(() => {
+      profileCheck = null;
     });
+  }
+
+  // Checks the account now, or between two lookups when a flush is running.
+  function requestProfileCheck() {
+    profileWanted = true;
+    if (!flushRunning) {
+      startProfileCheck();
+    }
   }
 
   // -------------- coloring + F2 link annotation --------------
@@ -806,19 +1131,20 @@
       }
       return COLORS.error;
     }
+    // No post for the tweet: red at once; the hash lookup turns it green later if it finds one.
     if (tc.posts.length === 0) {
-      if (!ref.imageHash) {
-        return COLORS.missing;
-      }
-      if (!hc || hc.state === 'pending') {
-        return COLORS.searching;
-      }
-      if (hc.state === 'error') {
-        return COLORS.error;
-      }
-      if (hc.state === 'done' && hc.posts.length) {
+      if (hc && hc.state === 'done' && hc.posts.length) {
         return COLORS.found;
       }
+      if (hc && hc.state === 'error') {
+        return COLORS.error;
+      }
+      // A re-check keeps the old colour until the hash lookup answers, so a post found only by
+      // its hash does not blink green -> red -> green.
+      if (ref.rechecking && ref.imageHash && (!hc || hc.state === 'pending')) {
+        return COLORS.searching;
+      }
+      // Before, during or after an empty hash lookup, and video tiles (no hash).
       return COLORS.missing;
     }
     const strict = tc.posts.some((p) => {
@@ -1090,6 +1416,13 @@
     }
     try {
       scanTweets();
+      // A lookup dropped while its tweet was off screen (see takeBatch) runs again if the same
+      // segment came back before a scan saw it leave.
+      imageRefs.filter((ref) => ref.bar.isConnected).forEach((ref) => {
+        enqueueTweetIdSearch(ref.tweetId);
+        ensureHashLookup(ref);
+      });
+      retryFailed(null);
       applyColors();
     } catch (e) {
       console.error('[XDSU] tick error', e);
@@ -1122,20 +1455,43 @@
 
   // Every visibility change cancels the pending re-check; becoming visible re-scans and
   // starts a new round of re-checks.
+  // A return to the tab also retries failed lookups at once and checks the account again when
+  // it was logged out, the last check is old, or lookups failed in a way that logging in or a
+  // Cloudflare check in another tab can fix.
   document.addEventListener('visibilitychange', () => {
     clearTimeout(recheckTimer);
     recheckTimer = null;
     if (!document.hidden) {
+      const recheckProfile = profileAnonymous || Date.now() - profileCheckedAt > PROFILE_MAX_AGE_MS
+        || [tweetCache, hashCache].some((cache) => Object.values(cache).some((e) => e.state === 'error'
+          && (e.reason === 'limit' || e.reason === 'blocked')));
+      retryFailed(['network', 'server', 'blocked']);
+      resumeQueue();
+      if (recheckProfile) {
+        requestProfileCheck();
+      }
       scheduleScan();
       onReturn();
     }
   });
   window.addEventListener('pageshow', (ev) => {
+    retryFailed(['blocked']);
     if (ev.persisted) {
       onReturn();
     }
   });
+  window.addEventListener('online', () => {
+    retryFailed(['network', 'server', 'blocked']);
+    resumeQueue();
+    if (profileWanted) {
+      requestProfileCheck();
+    }
+  });
 
+  requestProfileCheck();
+  if (new URL(DANBOORU_URL).hostname === 'safebooru.donmai.us') {
+    showToast(SAFE_MODE_TOAST, {reason: 'safeMode'});
+  }
   startObserver();
   scheduleScan(); // initial
 })();
