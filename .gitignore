@@ -30,3 +30,7 @@ TASK.md
 context.md
 checklist.md
 .archive/
+
+# XSearchAndUpload test harness: outputs and script copies used for comparisons
+XSearchAndUpload/test/out/
+XSearchAndUpload/test/*.user.js
