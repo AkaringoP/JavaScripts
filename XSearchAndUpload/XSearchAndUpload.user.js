@@ -11,7 +11,6 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
-// @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js
 // @connect      danbooru.donmai.us
 // @connect      donmai.us
 // @noframes
@@ -369,9 +368,6 @@
     delete article.dataset.xdsuTweetId;
     delete article.dataset.xdsuTweetUrl;
     delete article.dataset.xdsuDone;
-    article.querySelectorAll('[data-xdsu-btn]').forEach((el) => {
-      el.removeAttribute('data-xdsu-btn');
-    });
     article.querySelectorAll('.xdsu-upload-btn, .xdsu-bar').forEach((el) => {
       el.remove();
     });
@@ -531,8 +527,8 @@
 
   // -------------- state --------------
 
-  // tweetId -> { state: 'pending'|'done'|'error', posts: [{id, source, tweetId, photoIndex,
-  //              imageHash, isDeleted, isBanned}] }; an error entry also has
+  // tweetId -> { state: 'pending'|'done'|'error', posts: [{id, photoIndex, imageHash, isDeleted,
+  //              isBanned}] }; an error entry also has
   //              reason ('network'|'server'|'blocked'|'limit'|'client'), at (last failure) and tries.
   const tweetCache = Object.create(null);
   // imageHash -> same shape (fallback for tweets that returned no posts).
@@ -541,10 +537,10 @@
   const pendingTweetIds = [];
   const pendingHashes = [];
 
-  // [{tweetId, imageHash, kind, photoIndex, bar, btn, rechecking, applied, openedAt}] where bar
-  // is the segment element and btn the tile's upload button. Video/GIF tiles have kind 'video'
-  // and imageHash null. applied is the last state written to the DOM by applyColors; openedAt is
-  // when a tap on the segment last opened its post.
+  // [{tweetId, imageHash, photoIndex, bar, btn, rechecking, applied, openedAt}] where bar is the
+  // segment element and btn the tile's upload button. Video/GIF tiles have imageHash null.
+  // applied is the last state written to the DOM by applyColors; openedAt is when a tap on the
+  // segment last opened its post.
   const imageRefs = [];
 
   // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the upload was opened.
@@ -597,11 +593,16 @@
     if (!info) {
       return;
     }
-    // Short-circuit articles already fully processed for this tweet.
-    if (article.dataset.xdsuDone === info.tweetId) {
+    const photos = findPhotos(article);
+    // Short-circuit articles already fully processed for this tweet, as long as a re-render left
+    // the bar before the Like group, one segment per tile and every button in place.
+    const prevBar = article.querySelector('.xdsu-bar');
+    if (article.dataset.xdsuDone === info.tweetId && prevBar
+      && prevBar.children.length === photos.length && prevBar.nextElementSibling
+      && prevBar.nextElementSibling.querySelector('[data-testid="like"], [data-testid="unlike"]')
+      && photos.every((p) => p.querySelector(':scope > .xdsu-upload-btn'))) {
       return;
     }
-    const photos = findPhotos(article);
     if (photos.length === 0) {
       return;
     }
@@ -666,7 +667,7 @@
       }
     }
     // Strategy 2: first [role="group"] (covers the brief window before
-    // the Like button is rendered; identical to pre-v8 behavior).
+    // the Like button is rendered; the bar moves once it is).
     if (!actionGroup && groups.length > 0) {
       actionGroup = groups[0];
     }
@@ -700,6 +701,9 @@
       bar.className = 'xdsu-bar';
       bar.dataset.tweetId = tweetId;
       actionGroup.parentNode.insertBefore(bar, actionGroup);
+    } else if (bar.nextElementSibling !== actionGroup) {
+      // Placed before the Like group existed, or moved by a re-render.
+      actionGroup.parentNode.insertBefore(bar, actionGroup);
     }
     // A segment stays the same <a> for its whole life; applyColors only toggles its href, so
     // imageRefs keeps tracking it.
@@ -724,14 +728,15 @@
 
   // Returns true if the photo is fully tracked (won't need re-processing).
   function processPhoto(photoEl, info, photoIndex, bar) {
-    // Upload button: only needs tweet URL, attach immediately.
-    if (!photoEl.hasAttribute('data-xdsu-btn')) {
+    // Upload button: only needs tweet URL, attach immediately (again after a re-render removed it).
+    let btn = photoEl.querySelector(':scope > .xdsu-upload-btn');
+    const newBtn = !btn;
+    if (newBtn) {
       const cs = window.getComputedStyle(photoEl);
       if (!cs.position || cs.position === 'static') {
         photoEl.style.position = 'relative';
       }
-      attachUploadBtn(photoEl, info);
-      photoEl.setAttribute('data-xdsu-btn', '1');
+      btn = attachUploadBtn(photoEl, info);
     }
     if (!bar) {
       return false;
@@ -741,6 +746,12 @@
       return false;
     }
     if (segment.dataset.tracked) {
+      // A restored button takes the segment's state at the next applyColors.
+      const ref = newBtn && imageRefs.find((r) => r.bar === segment);
+      if (ref) {
+        ref.btn = btn;
+        ref.applied = null;
+      }
       return true;
     }
     const img = findTweetImage(photoEl);
@@ -754,14 +765,12 @@
     if (imageHash) {
       segment.dataset.imageHash = imageHash;
     }
-    segment.dataset.photoIndex = String(photoIndex);
     const ref = {
       tweetId: info.tweetId,
       imageHash,
-      kind: imageHash ? 'image' : 'video',
       photoIndex,
       bar: segment,
-      btn: photoEl.querySelector(':scope > .xdsu-upload-btn'),
+      btn,
       rechecking: false,
       applied: null,
       openedAt: 0,
@@ -858,6 +867,7 @@
     });
 
     photoEl.appendChild(btn);
+    return btn;
   }
 
   // -------------- search queue --------------
@@ -1122,8 +1132,6 @@
         if (k && bucket[k]) {
           bucket[k].push({
             id: post.id,
-            source: post.source,
-            tweetId: info.tweetId,
             photoIndex: info.photoIndex,
             imageHash: info.imageHash,
             isDeleted: !!post.is_deleted,
@@ -1175,8 +1183,8 @@
 
   // -------------- account check --------------
 
-  // The account's search term limit sets the batch size; /profile.json answers 200 logged out
-  // too. Without a usable answer the last detected size (or 2) stays in use.
+  // /profile.json answers 200 logged out too. Without a usable answer the last detected size
+  // (or 2) stays in use.
   const storedBatch = GM_getValue(BATCH_STORE_KEY, null);
   let queryBatch = Number.isInteger(storedBatch) && storedBatch >= 1 && storedBatch <= MAX_QUERY_BATCH
     ? storedBatch : 2;
@@ -1239,7 +1247,7 @@
     }
   }
 
-  // -------------- coloring + F2 link annotation --------------
+  // -------------- coloring --------------
 
   // Read at judgement time: a tile that arrives late adds a segment.
   function photoCountOf(ref) {
@@ -1578,8 +1586,6 @@
 
   // -------------- Like-button refresh trigger --------------
 
-  // Clicking Like (or Unlike) on a tweet re-queries it. On by default; the menu command
-  // "Like = re-check" turns it off.
   function handleLikeClick(ev) {
     if (!likeRecheck) {
       return;
@@ -1617,7 +1623,7 @@
   // post-like states since the testid toggles after the click.
   document.addEventListener('click', handleLikeClick, true);
 
-  // -------------- F6: MutationObserver + polling fallback --------------
+  // -------------- MutationObserver + polling fallback --------------
 
   let scanTimer = null;
   function scheduleScan() {
@@ -1672,12 +1678,13 @@
       setTimeout(startObserver, 50);
       return;
     }
+    // The script's own insertions, and text it writes into its elements, need no scan.
+    const OWN = '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast';
+    const own = (n) => n.nodeType === Node.ELEMENT_NODE && n.matches(OWN);
     const observer = new MutationObserver((mutations) => {
-      for (const mut of mutations) {
-        if (mut.addedNodes.length > 0) {
-          scheduleScan();
-          return;
-        }
+      if (mutations.some((mut) => mut.addedNodes.length > 0 && ![...mut.addedNodes].every(own)
+        && !mut.target.closest(OWN))) {
+        scheduleScan();
       }
     });
     observer.observe(document.body, {
