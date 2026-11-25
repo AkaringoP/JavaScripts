@@ -88,6 +88,8 @@
   const POLL_INTERVAL_MS = 2000;
   const SCAN_DEBOUNCE_MS = 100;
   const FLUSH_DEBOUNCE_MS = 250;
+  // How often a scroll checks whether queued lookups came into range.
+  const SCROLL_CHECK_MS = 200;
   // Each ~source:*...* in a lookup is one search term (status:any is free). The batch size is the
   // account's tag_query_limit from /profile.json (logged out 2, Member 3, Gold+ unlimited),
   // capped at MAX_QUERY_BATCH. The last detected value is stored for when the check fails.
@@ -843,8 +845,9 @@
       } finally {
         flushRunning = false;
       }
-      // During a pause, wait above stretches to the end of the pause.
-      if (pendingTweetIds.length || pendingHashes.length) {
+      // During a pause, wait above stretches to the end of the pause. Keys out of range wait
+      // for a scroll or a scan to bring them in.
+      if (Date.now() < pausedUntil ? pendingTweetIds.length || pendingHashes.length : hasDueKeys()) {
         scheduleFlush();
       }
     }, wait);
@@ -864,18 +867,32 @@
     }
   }
 
-  // Takes up to queryBatch keys, newest first. A key whose tweet is no longer on screen is
-  // dropped from the queue and the cache, so it is looked up again if the tweet comes back.
-  function takeBatch(queue, cache, onScreen) {
-    const batch = [];
-    while (queue.length && batch.length < queryBatch) {
-      const k = queue.pop();
-      if (onScreen(k)) {
-        batch.push(k);
-      } else {
-        delete cache[k];
-      }
-    }
+  const ownsTweet = (ref, k) => ref.tweetId === k;
+  const ownsHash = (ref, k) => ref.imageHash === k;
+
+  // Distance in px from the viewport to the nearest connected segment of a key (0 when one is
+  // on screen, Infinity when none is connected). A key is in range within one screen height.
+  function keyDistance(k, owns) {
+    return Math.min(...imageRefs.filter((ref) => owns(ref, k) && ref.bar.isConnected).map((ref) => {
+      const b = ref.bar.getBoundingClientRect();
+      return Math.max(0, -b.bottom, b.top - window.innerHeight);
+    }));
+  }
+
+  function hasDueKeys() {
+    return pendingTweetIds.some((k) => keyDistance(k, ownsTweet) <= window.innerHeight)
+      || pendingHashes.some((k) => keyDistance(k, ownsHash) <= window.innerHeight);
+  }
+
+  // Takes up to queryBatch keys in range, nearest to the viewport first (newest first among
+  // equals). Keys out of range stay queued. A key whose tweet is no longer on screen is dropped
+  // from the queue and the cache, so it is looked up again if the tweet comes back.
+  function takeBatch(queue, cache, owns) {
+    const dist = new Map(queue.map((k) => [k, keyDistance(k, owns)]));
+    queue.filter((k) => dist.get(k) === Infinity).forEach((k) => delete cache[k]);
+    const batch = queue.filter((k) => dist.get(k) <= window.innerHeight).reverse()
+        .sort((a, b) => dist.get(a) - dist.get(b)).slice(0, queryBatch);
+    queue.splice(0, queue.length, ...queue.filter((k) => dist.get(k) !== Infinity && !batch.includes(k)));
     return batch;
   }
 
@@ -892,16 +909,14 @@
         await profileCheck;
         continue;
       }
-      const ids = takeBatch(pendingTweetIds, tweetCache,
-          (id) => imageRefs.some((ref) => ref.tweetId === id && ref.bar.isConnected));
+      const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
       if (ids.length) {
         await runTweetIdBatch(ids);
         imageRefs.filter((ref) => ref.bar.isConnected).forEach(ensureHashLookup);
         applyColors();
         continue;
       }
-      const hashes = takeBatch(pendingHashes, hashCache,
-          (h) => imageRefs.some((ref) => ref.imageHash === h && ref.bar.isConnected));
+      const hashes = takeBatch(pendingHashes, hashCache, ownsHash);
       if (!hashes.length) {
         return;
       }
@@ -1423,11 +1438,29 @@
         ensureHashLookup(ref);
       });
       retryFailed(null);
+      // A queued key can come into range without a scroll (remount, layout change).
+      if (hasDueKeys()) {
+        scheduleFlush();
+      }
       applyColors();
     } catch (e) {
       console.error('[XDSU] tick error', e);
     }
   }
+
+  // Scrolling brings queued keys into range. Capture also sees an inner element scrolling.
+  let scrollTimer = null;
+  window.addEventListener('scroll', () => {
+    if (scrollTimer) {
+      return;
+    }
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      if (hasDueKeys()) {
+        scheduleFlush();
+      }
+    }, SCROLL_CHECK_MS);
+  }, {capture: true, passive: true});
 
   function startObserver() {
     if (!document.body) {
