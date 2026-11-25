@@ -65,6 +65,9 @@ Only what must not break. One subsection per script.
   and looks up the artist at the source site on every request. An asset is
   settled, and no longer polled, once its post was found or its form was
   submitted (the post that then appears is the user's own).
+- Every `fetch()` in this script takes an absolute URL. The script runs as a
+  content script (`@inject-into content`), and in Firefox a relative URL there
+  does not resolve against the page.
 - pixiv main image: its src flips from a placeholder to i.pximg.net after
   insertion, which element queries cannot see, so `scanMainArtwork()` polls
   every second on every page and attaches to the largest unmarked pximg

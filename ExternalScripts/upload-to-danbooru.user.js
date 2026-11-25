@@ -1059,7 +1059,10 @@ function initializeDanbooruUpload() {
     checking = true;
     try {
       // Not /uploads/<id>.json: that one looks up the artist at the source on every request.
-      const response = await fetch(`/media_assets/${assetId}.json?only=id,post[id]`);
+      // The URL must be absolute: in a Firefox content script a relative one does not resolve
+      // against the page.
+      const url = `${window.location.origin}/media_assets/${assetId}.json?only=id,post[id]`;
+      const response = await fetch(url);
       if (!response.ok) {
         return;
       }
@@ -1078,9 +1081,9 @@ function initializeDanbooruUpload() {
   };
 
   // After the form is submitted the post that appears is the user's own.
-  document.addEventListener('submit', () => {
+  document.addEventListener('submit', (event) => {
     const assetId = currentAssetId();
-    if (assetId) {
+    if (assetId && $(event.target).is('.upload-form')) {
       settled.add(assetId);
     }
   }, true);
