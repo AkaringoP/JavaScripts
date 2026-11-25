@@ -58,6 +58,13 @@ Only what must not break. One subsection per script.
 - Fantia post and image lookups go through `memoizeAsync()`, which forgets a
   rejected result; keep that, or one failed request blocks every click until
   reload.
+- `initializeDanbooruUpload()` runs on `*.donmai.us/uploads/*` and polls
+  `/media_assets/<id>.json?only=id,post[id]` every 2 s, with the ID read from
+  `.upload-container[data-media-asset-id]`. Do not poll `/uploads/<id>.json`
+  or `/upload_media_assets/<id>.json`: Danbooru builds the post form for those
+  and looks up the artist at the source site on every request. An asset is
+  settled, and no longer polled, once its post was found or its form was
+  submitted (the post that then appears is the user's own).
 - pixiv main image: its src flips from a placeholder to i.pximg.net after
   insertion, which element queries cannot see, so `scanMainArtwork()` polls
   every second on every page and attaches to the largest unmarked pximg

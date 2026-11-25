@@ -60,11 +60,13 @@ Full history: `git log -- ExternalScripts/Pixiv_Image_Searches_and_Stuff.user.js
 Adds an "Upload to Danbooru" button next to images and posts on pixiv,
 Twitter/X, fanbox, Fantia, Bluesky, Mastodon instances and other supported
 sites. The button opens `/uploads/new` on the configured Danbooru with the
-source URL filled in.
+source URL filled in. On Danbooru's upload form it also warns when the file
+has been posted by someone else in the meantime.
 
 - **Runs on:** fantia.jp, misskey.io, www.pixiv.net, `*.fanbox.cc`, nijie.info,
   twitter.com, x.com, ci-en.net, ci-en.dlsite.com, seiga.nicovideo.jp,
-  pawoo.net, baraag.net, inkbunny.net, xfolio.jp, bsky.app, gall.dcinside.com
+  pawoo.net, baraag.net, inkbunny.net, xfolio.jp, bsky.app, gall.dcinside.com,
+  and `*.donmai.us/uploads/*`
 - **Install notes:** Disable the original "Upload To Danbooru". Updates are
   manual; the upstream repository (hdk5/danbooru.user.js) is no longer
   available. The archived baseline is not the pristine upstream build: pixiv
@@ -75,11 +77,11 @@ Changes from the original:
 - Header: `(Mod)` name, `@downloadURL none`, `@updateURL none`.
 - pixiv mobile: upload buttons on thumbnails and on the main artwork image (added locally before the baseline was archived).
 - Cleanup with no behavior change: shared button helper, one code style, dead code and shadowed names removed, attach failures logged, Fantia redirect lookups no longer download the file.
-- pixiv: moving between artworks in-page no longer removes the thumbnail buttons.
-- pixiv: the main-artwork button skips other artworks' thumbnails and profile images, and also appears after in-page navigation to an artwork.
+- pixiv: thumbnail buttons survive in-page navigation between artworks; the main-artwork button skips other artworks' thumbnails and profile images and also appears after such navigation.
 - No button, and a console warning, when no source URL can be determined (was a link with `url=undefined`).
 - Fantia: a failed post API request is retried on the next click instead of failing until reload.
 - Buttons recompute their link on hover, press, or touch, so reused list elements (pixiv) no longer open the previous item.
+- Danbooru upload form: checks every 2 s whether the file has become a post and shows one toast linking to it (new `@match *://*.donmai.us/uploads/*`).
 
 Full history: `git log -- ExternalScripts/upload-to-danbooru.user.js`
 
