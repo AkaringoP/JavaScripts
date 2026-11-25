@@ -2,9 +2,14 @@
 // @name         X (Twitter) Danbooru Search and Upload
 // @namespace    https://github.com/AkaringoP
 // @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. Mobile-friendly (Firefox + Tampermonkey).
+// @author       AkaringoP
+// @license      MIT
 // @match        *://x.com/*
 // @match        *://twitter.com/*
 // @match        *://mobile.twitter.com/*
+// @icon         https://danbooru.donmai.us/favicon.ico
+// @updateURL    https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/XSearchAndUpload/XSearchAndUpload.user.js
+// @downloadURL  https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/XSearchAndUpload/XSearchAndUpload.user.js
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_openInTab
@@ -138,6 +143,16 @@
   // Bottom offset of the toast, above X's bottom navigation. Raise it while another fixed
   // control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
+  // The photo viewer's pill sits in the same corner; while it is shown the toast moves up to
+  // toastBottom (pill bottom + 44px pill + 8px gap).
+  const PILL_POS = {
+    left: '12px',
+    bottom: 'calc(64px + env(safe-area-inset-bottom))',
+    toastBottom: 'calc(116px + env(safe-area-inset-bottom))',
+  };
+  // Swiping in the viewer changes only the URL; it is checked this often while the pill is shown.
+  const PILL_URL_CHECK_MS = 150;
+  const VIEWER_PATH_RE = /\/status(?:es)?\/\d+\/photo\/(\d+)\/?$/;
 
   // -------------- styles --------------
 
@@ -295,6 +310,42 @@
       cursor: pointer;
       text-decoration: underline !important;
     }
+    .xdsu-toast.xdsu-above-pill { bottom: ${PILL_POS.toastBottom}; }
+    /* Photo viewer: border style and colour follow the bar (solid found, dashed partly posted,
+       red missing, blue dashes failed, grey dots checking); the text names the state. */
+    .xdsu-pill {
+      position: fixed;
+      left: ${PILL_POS.left};
+      bottom: ${PILL_POS.bottom};
+      height: 44px;
+      min-width: 44px;
+      max-width: calc(100vw - 24px);
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 16px;
+      border: 2px dotted var(--xdsu-searching);
+      border-radius: 22px;
+      background: rgba(15, 20, 25, 0.85);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      color: white !important;
+      font: 600 15px/1 system-ui, sans-serif;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-decoration: none !important;
+      z-index: 2147483000;
+      cursor: pointer;
+      touch-action: manipulation;
+      user-select: none;
+    }
+    .xdsu-pill[data-state="found"] { border: 2px solid var(--xdsu-found); }
+    .xdsu-pill[data-state="foundWeak"] { border: 2px dashed var(--xdsu-found); }
+    .xdsu-pill[data-state="missing"] { border: 2px solid var(--xdsu-missing); }
+    .xdsu-pill[data-state="error"] { border: 2px dashed var(--xdsu-error); }
+    .xdsu-pill[data-state="searching"] { cursor: default; }
+    .xdsu-pill.xdsu-rechecking { opacity: 0.7; }
   `);
 
   // -------------- helpers --------------
@@ -517,6 +568,7 @@
       toastEl.removeAttribute('href');
     }
     toastEl.classList.toggle('xdsu-action', !!t.url);
+    toastEl.classList.toggle('xdsu-above-pill', !!pillEl);
     toastEl.classList.add('xdsu-show');
     setTimeout(() => {
       toastEl.classList.remove('xdsu-show');
@@ -808,23 +860,6 @@
     icon.src = DANBOORU_ICON_URL;
     btn.appendChild(icon);
 
-    // A tap uploads only this image when its original jpg/png can be named exactly; otherwise
-    // the whole tweet. Read at tap time because the image src can arrive after the button.
-    const uploadUrl = () => {
-      const img = findTweetImage(photoEl);
-      const hash = img ? parseTwitterImageHash(img.src) : null;
-      if (!hash || !UPLOAD_REF_RE.test(info.tweetUrl)) {
-        return tweetUploadUrl;
-      }
-      const src = new URL(img.src);
-      const ext = src.pathname.match(/\.([^./]+)$/);
-      const fmt = src.searchParams.get('format') || (ext && ext[1]);
-      if (fmt !== 'jpg' && fmt !== 'png') {
-        return tweetUploadUrl;
-      }
-      return buildUploadUrl(`https://pbs.twimg.com/media/${hash}?format=${fmt}&name=orig`, info.tweetUrl);
-    };
-
     let lastOpenAt = 0;
     const onClick = (ev) => {
       if (ev.button !== undefined && ev.button > 1) {
@@ -839,22 +874,8 @@
       }
       lastOpenAt = now;
       btn.classList.add('xdsu-sent');
-      watchTweet(info.tweetId);
-      const url = uploadUrl();
-      let tab = null;
-      try {
-        tab = GM_openInTab(url, {
-          active: ev.button === 0 && !ev.ctrlKey,
-          setParent: true,
-        });
-      } catch (e) {
-        console.error('[XDSU] open tab failed', e);
-        window.open(url, '_blank', 'noopener');
-      }
-      // Extra re-check trigger; the return to this tab (visibilitychange) is the main one.
-      if (tab) {
-        tab.onclose = () => refreshTweetStatus(info.tweetId);
-      }
+      // Read at tap time because the image src can arrive after the button.
+      openUpload(ev, info.tweetId, imageUploadUrl(findTweetImage(photoEl), info.tweetUrl));
     };
     btn.addEventListener('click', onClick);
     btn.addEventListener('auxclick', onClick);
@@ -868,6 +889,41 @@
 
     photoEl.appendChild(btn);
     return btn;
+  }
+
+  // Upload URL for a tap: only this image (img may be null) when its original jpg/png can be
+  // named exactly and the tweet URL names the user; otherwise the whole tweet.
+  function imageUploadUrl(img, tweetUrl) {
+    const hash = img ? parseTwitterImageHash(img.src) : null;
+    if (!hash || !UPLOAD_REF_RE.test(tweetUrl)) {
+      return buildUploadUrl(tweetUrl);
+    }
+    const src = new URL(img.src);
+    const ext = src.pathname.match(/\.([^./]+)$/);
+    const fmt = src.searchParams.get('format') || (ext && ext[1]);
+    if (fmt !== 'jpg' && fmt !== 'png') {
+      return buildUploadUrl(tweetUrl);
+    }
+    return buildUploadUrl(`https://pbs.twimg.com/media/${hash}?format=${fmt}&name=orig`, tweetUrl);
+  }
+
+  // Opens an upload tab and watches the tweet, so it is checked again on the return to this tab.
+  function openUpload(ev, tweetId, url) {
+    watchTweet(tweetId);
+    let tab = null;
+    try {
+      tab = GM_openInTab(url, {
+        active: ev.button === 0 && !ev.ctrlKey,
+        setParent: true,
+      });
+    } catch (e) {
+      console.error('[XDSU] open tab failed', e);
+      window.open(url, '_blank', 'noopener');
+    }
+    // Extra re-check trigger; the return to this tab (visibilitychange) is the main one.
+    if (tab) {
+      tab.onclose = () => refreshTweetStatus(tweetId);
+    }
   }
 
   // -------------- search queue --------------
@@ -1249,8 +1305,12 @@
 
   // -------------- coloring --------------
 
-  // Read at judgement time: a tile that arrives late adds a segment.
+  // Read at judgement time: a tile that arrives late adds a segment. The pill's own ref carries
+  // its count (see syncPill).
   function photoCountOf(ref) {
+    if (ref === pillRef) {
+      return ref.photoCount;
+    }
     return ref.bar.parentElement ? ref.bar.parentElement.children.length : 1;
   }
 
@@ -1391,6 +1451,10 @@
       if (!hold) {
         ref.rechecking = false;
       }
+      // The pill is not a segment; renderPill draws it below.
+      if (ref === pillRef) {
+        continue;
+      }
       const matchUrl = state === 'found' || state === 'foundWeak' ? resolveMatchUrl(ref) : null;
       const label = resolveLabel(ref, state);
       const key = `${state}|${matchUrl || ''}|${label}|${hold ? 1 : 0}`;
@@ -1425,6 +1489,9 @@
         ref.btn.setAttribute('aria-label', label);
       }
     }
+    if (pillEl) {
+      renderPill();
+    }
   }
 
   // -------------- bar segment taps --------------
@@ -1454,37 +1521,282 @@
     }
     const state = seg.dataset.state;
     if (state === 'found' || state === 'foundWeak') {
-      const url = seg.getAttribute('href');
-      const now = Date.now();
-      if (!url || now - ref.openedAt < UPLOAD_LOCK_MS) {
-        return;
-      }
-      ref.openedAt = now;
-      try {
-        GM_openInTab(url, {
-          active: ev.button === 0 && !ev.ctrlKey,
-          setParent: true,
-        });
-      } catch (e) {
-        console.error('[XDSU] open post failed', e);
-        window.open(url, '_blank', 'noopener');
-      }
+      openPost(ev, ref, seg.getAttribute('href'));
     } else if (state === 'missing') {
       refreshTweetStatus(ref.tweetId);
     } else if (state === 'error') {
-      const tc = tweetCache[ref.tweetId];
-      const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
-      const failed = [tc, hc].find((e) => e && e.state === 'error');
-      // Already being checked again.
-      if (!failed) {
+      retryLookup(ref);
+    }
+  }
+
+  // Opens a ref's post link, at most once per UPLOAD_LOCK_MS.
+  function openPost(ev, ref, url) {
+    const now = Date.now();
+    if (!url || now - ref.openedAt < UPLOAD_LOCK_MS) {
+      return;
+    }
+    ref.openedAt = now;
+    try {
+      GM_openInTab(url, {
+        active: ev.button === 0 && !ev.ctrlKey,
+        setParent: true,
+      });
+    } catch (e) {
+      console.error('[XDSU] open post failed', e);
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+
+  // Runs the failed lookups of a ref's tweet and images again now and says why they failed.
+  function retryLookup(ref) {
+    const tc = tweetCache[ref.tweetId];
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
+    const failed = [tc, hc].find((e) => e && e.state === 'error');
+    // Already being checked again.
+    if (!failed) {
+      return;
+    }
+    retryEntry(tweetCache, pendingTweetIds, ref.tweetId);
+    imageRefs.filter((r) => r.tweetId === ref.tweetId && r.imageHash)
+        .forEach((r) => retryEntry(hashCache, pendingHashes, r.imageHash));
+    resumeQueue();
+    applyColors();
+    showToast(`${ERROR_TEXT[failed.reason] || 'The lookup failed.'} Trying again.`);
+  }
+
+  // -------------- photo viewer pill --------------
+
+  // On /<user>/status/<id>/photo/<n> one fixed pill shows photo n of that tweet. It mirrors the
+  // tracked segment of that photo when its article is still mounted under the viewer; otherwise
+  // it owns a ref in imageRefs (bar = the pill, so the queue sees it on screen) and is looked up
+  // by itself. Everything is driven by the URL; the viewer's markup is not relied on.
+  let pillEl = null;
+  // The pill's own ref, or null while it mirrors a segment.
+  let pillRef = null;
+  // {ref, tweetUrl}: the ref the pill shows and the tweet URL for uploads.
+  let pillSrc = null;
+  // [ref, key] of the last render.
+  let pillShown = [null, ''];
+  let pillPath = '';
+  let pillTimer = null;
+  let pillUploadAt = 0;
+
+  // The viewer's image n: the n-th media image outside any tweet and outside links to a tweet
+  // (profile media tiles). Null unless that image is on screen, i.e. the pick is plausible.
+  function viewerImages() {
+    return [...document.querySelectorAll('img[src*="pbs.twimg.com/media/"]')]
+        .filter((img) => !img.closest('article') && !img.closest('a[href*="/status/"]'));
+  }
+
+  function viewerImage(imgs, n) {
+    const img = imgs[n - 1];
+    if (!img) {
+      return null;
+    }
+    const r = img.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    return r.width > 0 && cx >= 0 && cx <= window.innerWidth && cy >= 0 && cy <= window.innerHeight
+      ? img : null;
+  }
+
+  // The image an upload tap names: the mirrored segment's tile, else the viewer's image n.
+  function pillImage() {
+    if (pillSrc.ref !== pillRef) {
+      const tile = pillSrc.ref.btn && pillSrc.ref.btn.parentElement;
+      return tile ? findTweetImage(tile) : null;
+    }
+    return viewerImage(viewerImages(), pillRef.photoIndex);
+  }
+
+  function dropPillRef() {
+    const i = imageRefs.indexOf(pillRef);
+    if (i >= 0) {
+      imageRefs.splice(i, 1);
+    }
+    pillRef = null;
+  }
+
+  function closePill() {
+    if (!pillEl) {
+      return;
+    }
+    clearInterval(pillTimer);
+    pillTimer = null;
+    dropPillRef();
+    pillEl.remove();
+    pillEl = null;
+    pillSrc = null;
+    pillShown = [null, ''];
+    pillPath = '';
+    if (toastEl) {
+      toastEl.classList.remove('xdsu-above-pill');
+    }
+    // A lookup only the pill wanted is dropped by the next flush (see takeBatch).
+    if (pendingTweetIds.length || pendingHashes.length) {
+      scheduleFlush();
+    }
+  }
+
+  // Shows, updates or removes the pill for the current URL.
+  function syncPill() {
+    const m = location.pathname.match(VIEWER_PATH_RE);
+    const info = m && parseStatusPath(location.pathname);
+    const n = m ? parseInt(m[1], 10) : 0;
+    if (!info || n < 1) {
+      closePill();
+      return;
+    }
+    pillPath = location.pathname;
+    if (!pillEl) {
+      pillEl = document.createElement('a');
+      pillEl.className = 'xdsu-pill';
+      pillEl.addEventListener('click', onPillClick);
+      pillEl.addEventListener('auxclick', onPillClick);
+      pillEl.addEventListener('contextmenu', () => {
+        if (pillEl.dataset.action === 'upload') {
+          watchTweet(pillSrc.ref.tweetId);
+        }
+      });
+      pillEl.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      // The viewer may react to a press on its own (swipe, hide its controls).
+      ['touchstart', 'pointerdown'].forEach((type) => {
+        pillEl.addEventListener(type, (e) => e.stopPropagation(), {passive: true});
+      });
+      pillTimer = setInterval(() => {
+        if (location.pathname !== pillPath) {
+          syncPill();
+        }
+      }, PILL_URL_CHECK_MS);
+      if (toastEl) {
+        toastEl.classList.add('xdsu-above-pill');
+      }
+    }
+    if (!pillEl.isConnected) {
+      (document.body || document.documentElement).appendChild(pillEl);
+    }
+    const seg = imageRefs.find((r) => r !== pillRef && r.tweetId === info.tweetId && r.photoIndex === n
+      && r.bar.isConnected);
+    if (seg) {
+      dropPillRef();
+      const art = seg.bar.closest('article');
+      pillSrc = {ref: seg, tweetUrl: (art && art.dataset.xdsuTweetUrl) || info.tweetUrl};
+    } else {
+      const imgs = viewerImages();
+      const img = viewerImage(imgs, n);
+      const hash = img ? parseTwitterImageHash(img.src) : null;
+      if (!pillRef || !imageRefs.includes(pillRef) || pillRef.tweetId !== info.tweetId
+        || pillRef.photoIndex !== n || (hash && hash !== pillRef.imageHash)) {
+        dropPillRef();
+        pillRef = {
+          tweetId: info.tweetId,
+          imageHash: hash,
+          photoIndex: n,
+          bar: pillEl,
+          btn: null,
+          rechecking: false,
+          applied: null,
+          openedAt: 0,
+          photoCount: n,
+        };
+        imageRefs.push(pillRef);
+      }
+      // Photo count: the bar of a mounted article of the tweet, else the viewer's images when
+      // image n was found among them, else n. Never less than n.
+      const bar = [...document.querySelectorAll('.xdsu-bar')].find((b) => b.dataset.tweetId === info.tweetId);
+      pillRef.photoCount = Math.max(n, bar ? bar.children.length : img ? imgs.length : 0);
+      pillSrc = {ref: pillRef, tweetUrl: info.tweetUrl};
+      enqueueTweetIdSearch(info.tweetId);
+      ensureHashLookup(pillRef);
+    }
+    renderPill();
+  }
+
+  // Draws the pill from its ref. While the ref is re-checked the pill keeps what it showed.
+  function renderPill() {
+    if (!pillSrc.ref.bar.isConnected) {
+      syncPill();
+      return;
+    }
+    const ref = pillSrc.ref;
+    const state = resolveState(ref);
+    const hold = ref.rechecking && state === 'searching';
+    if (hold && pillShown[0] === ref) {
+      pillEl.classList.add('xdsu-rechecking');
+      return;
+    }
+    let text = '… Checking';
+    let href = null;
+    let action = null;
+    if (state === 'found') {
+      text = '✓ On Danbooru';
+      href = resolveMatchUrl(ref);
+      action = 'open';
+    } else if (state === 'foundWeak') {
+      text = `↑ Upload · ${countPosts(matchedPosts(ref))} of ${photoCountOf(ref)} posted`;
+      href = buildUploadUrl(pillSrc.tweetUrl);
+      action = 'upload';
+    } else if (state === 'missing') {
+      text = '↑ Upload';
+      href = buildUploadUrl(pillSrc.tweetUrl);
+      action = 'upload';
+    } else if (state === 'error') {
+      text = '! Retry';
+      action = 'retry';
+    }
+    const key = `${state}|${href || ''}|${text}`;
+    pillEl.classList.remove('xdsu-rechecking');
+    if (pillShown[0] === ref && pillShown[1] === key) {
+      return;
+    }
+    pillShown = [ref, key];
+    pillEl.dataset.state = state;
+    pillEl.textContent = text;
+    if (action) {
+      pillEl.dataset.action = action;
+    } else {
+      delete pillEl.dataset.action;
+    }
+    if (href) {
+      pillEl.href = href;
+      pillEl.target = '_blank';
+      pillEl.rel = 'noopener';
+    } else {
+      pillEl.removeAttribute('href');
+    }
+    if (action === 'retry') {
+      pillEl.setAttribute('role', 'button');
+    } else {
+      pillEl.removeAttribute('role');
+    }
+  }
+
+  // Every tap on the pill stops here, so none reaches the viewer or x.com's handlers.
+  function onPillClick(ev) {
+    if (ev.button !== undefined && ev.button > 1) {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    const ref = pillShown[0];
+    const action = pillEl.dataset.action;
+    if (!ref) {
+      return;
+    }
+    if (action === 'open') {
+      openPost(ev, ref, pillEl.getAttribute('href'));
+    } else if (action === 'upload') {
+      const now = Date.now();
+      if (now - pillUploadAt < UPLOAD_LOCK_MS) {
         return;
       }
-      retryEntry(tweetCache, pendingTweetIds, ref.tweetId);
-      imageRefs.filter((r) => r.tweetId === ref.tweetId && r.imageHash)
-          .forEach((r) => retryEntry(hashCache, pendingHashes, r.imageHash));
-      resumeQueue();
-      applyColors();
-      showToast(`${ERROR_TEXT[failed.reason] || 'The lookup failed.'} Trying again.`);
+      pillUploadAt = now;
+      openUpload(ev, ref.tweetId, imageUploadUrl(pillImage(), pillSrc.tweetUrl));
+    } else if (action === 'retry') {
+      retryLookup(ref);
     }
   }
 
@@ -1642,6 +1954,7 @@
     }
     try {
       scanTweets();
+      syncPill();
       // A lookup dropped while its tweet was off screen (see takeBatch) runs again if the same
       // segment came back before a scan saw it leave.
       imageRefs.filter((ref) => ref.bar.isConnected).forEach((ref) => {
@@ -1679,7 +1992,7 @@
       return;
     }
     // The script's own insertions, and text it writes into its elements, need no scan.
-    const OWN = '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast';
+    const OWN = '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
     const own = (n) => n.nodeType === Node.ELEMENT_NODE && n.matches(OWN);
     const observer = new MutationObserver((mutations) => {
       if (mutations.some((mut) => mut.addedNodes.length > 0 && ![...mut.addedNodes].every(own)
