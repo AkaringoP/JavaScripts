@@ -311,35 +311,41 @@
       text-decoration: underline !important;
     }
     .xdsu-toast.xdsu-above-pill { bottom: ${PILL_POS.toastBottom}; }
-    /* Photo viewer: border style and colour follow the bar (solid found, dashed partly posted,
-       red missing, blue dashes failed, grey dots checking); the text names the state. */
+    /* Photo viewer: an icon button like the tile's. Border style and colour follow the bar
+       (solid found, dashed partly posted, red missing, blue dashes failed, grey dots checking);
+       title and aria-label name the state. The background stops inside the border, so the gaps
+       of a dashed or dotted border show the photo; the light ring separates it from dark photos. */
     .xdsu-pill {
       position: fixed;
       left: ${PILL_POS.left};
       bottom: ${PILL_POS.bottom};
+      display: grid;
+      place-items: center;
+      width: 44px;
       height: 44px;
-      min-width: 44px;
-      max-width: calc(100vw - 24px);
+      padding: 0;
       box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 16px;
       border: 2px dotted var(--xdsu-searching);
-      border-radius: 22px;
-      background: rgba(15, 20, 25, 0.85);
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      border-radius: 4px;
+      background: rgba(0,0,0,0.55);
+      background-clip: padding-box;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
       color: white !important;
-      font: 600 15px/1 system-ui, sans-serif;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      font-size: 22px;
+      line-height: 1;
       text-decoration: none !important;
       z-index: 2147483000;
       cursor: pointer;
       touch-action: manipulation;
       user-select: none;
     }
+    .xdsu-pill img {
+      width: 24px;
+      height: 24px;
+      display: block;
+      border: none;
+    }
+    .xdsu-pill:active { transform: scale(0.92); }
     .xdsu-pill[data-state="found"] { border: 2px solid var(--xdsu-found); }
     .xdsu-pill[data-state="foundWeak"] { border: 2px dashed var(--xdsu-found); }
     .xdsu-pill[data-state="missing"] { border: 2px solid var(--xdsu-missing); }
@@ -1651,6 +1657,14 @@
     if (!pillEl) {
       pillEl = document.createElement('a');
       pillEl.className = 'xdsu-pill';
+      pillEl.setAttribute('aria-label', 'Checking');
+      const icon = document.createElement('img');
+      icon.alt = '';
+      icon.onerror = () => {
+        pillEl.textContent = '↑';
+      };
+      icon.src = DANBOORU_ICON_URL;
+      pillEl.appendChild(icon);
       pillEl.addEventListener('click', onPillClick);
       pillEl.addEventListener('auxclick', onPillClick);
       pillEl.addEventListener('contextmenu', () => {
@@ -1728,33 +1742,34 @@
       pillEl.classList.add('xdsu-rechecking');
       return;
     }
-    let text = '… Checking';
+    let label = 'Checking';
     let href = null;
     let action = null;
     if (state === 'found') {
-      text = '✓ On Danbooru';
+      label = 'On Danbooru';
       href = resolveMatchUrl(ref);
       action = 'open';
     } else if (state === 'foundWeak') {
-      text = `↑ Upload · ${countPosts(matchedPosts(ref))} of ${photoCountOf(ref)} posted`;
+      label = `Upload to Danbooru · ${countPosts(matchedPosts(ref))} of ${photoCountOf(ref)} posted`;
       href = buildUploadUrl(pillSrc.tweetUrl);
       action = 'upload';
     } else if (state === 'missing') {
-      text = '↑ Upload';
+      label = 'Upload to Danbooru';
       href = buildUploadUrl(pillSrc.tweetUrl);
       action = 'upload';
     } else if (state === 'error') {
-      text = '! Retry';
+      label = 'Lookup failed – tap to retry';
       action = 'retry';
     }
-    const key = `${state}|${href || ''}|${text}`;
+    const key = `${state}|${href || ''}|${label}`;
     pillEl.classList.remove('xdsu-rechecking');
     if (pillShown[0] === ref && pillShown[1] === key) {
       return;
     }
     pillShown = [ref, key];
     pillEl.dataset.state = state;
-    pillEl.textContent = text;
+    pillEl.title = label;
+    pillEl.setAttribute('aria-label', label);
     if (action) {
       pillEl.dataset.action = action;
     } else {
@@ -1767,10 +1782,16 @@
     } else {
       pillEl.removeAttribute('href');
     }
-    if (action === 'retry') {
-      pillEl.setAttribute('role', 'button');
-    } else {
+    // Without an href the <a> has no role of its own, so its label would not be its name.
+    if (href) {
       pillEl.removeAttribute('role');
+    } else {
+      pillEl.setAttribute('role', 'button');
+    }
+    if (action) {
+      pillEl.removeAttribute('aria-disabled');
+    } else {
+      pillEl.setAttribute('aria-disabled', 'true');
     }
   }
 
