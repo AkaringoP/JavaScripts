@@ -537,9 +537,10 @@
       return;
     }
     const bar = ensureTweetBar(article, info.tweetId, photos.length);
+    const numbers = photoNumbers(photos);
     let allTracked = true;
     photos.forEach((photoEl, idx) => {
-      const tracked = processPhoto(photoEl, info, idx + 1, bar);
+      const tracked = processPhoto(photoEl, info, numbers[idx], bar);
       if (!tracked) {
         allTracked = false;
       }
@@ -547,6 +548,35 @@
     if (allTracked) {
       article.dataset.xdsuDone = info.tweetId;
     }
+  }
+
+  // Photo numbers (1-based) of a tweet's tiles, read from their /photo/N links because a 4-image
+  // grid may be laid out column by column. Tiles without a link take the lowest free numbers.
+  // Duplicate numbers fall back to DOM order for the whole tweet.
+  function photoNumbers(photos) {
+    const n = photos.length;
+    const nums = photos.map((el) => {
+      const a = el.closest('a[href*="/photo/"]');
+      const m = a && a.getAttribute('href').match(/\/photo\/(\d+)/);
+      const v = m ? parseInt(m[1], 10) : 0;
+      return v >= 1 && v <= n ? v : 0;
+    });
+    const linked = nums.filter(Boolean);
+    const used = new Set(linked);
+    if (used.size !== linked.length) {
+      return photos.map((_, i) => i + 1);
+    }
+    let next = 1;
+    return nums.map((v) => {
+      if (v) {
+        return v;
+      }
+      while (used.has(next)) {
+        next++;
+      }
+      used.add(next);
+      return next;
+    });
   }
 
   // The tweet bar sits as a flex row right above the action group
@@ -1133,6 +1163,37 @@
 
   // -------------- coloring + F2 link annotation --------------
 
+  // Read at judgement time: a tile that arrives late adds a segment.
+  function photoCountOf(ref) {
+    return ref.bar.parentElement ? ref.bar.parentElement.children.length : 1;
+  }
+
+  // Number of posts a tweet has on Danbooru: the live ones, or all when every one is deleted.
+  // Children are counted: a child with the same tweet source is another image of the tweet (a
+  // deleted lower-quality duplicate is not live).
+  function countPosts(posts) {
+    const live = posts.filter((p) => !p.isDeleted);
+    return live.length || posts.length;
+  }
+
+  // A post whose source names this very image (media hash or /photo/N).
+  function strictMatch(ref, posts) {
+    return posts.find((p) => (p.imageHash && p.imageHash === ref.imageHash)
+      || (p.photoIndex && p.photoIndex === ref.photoIndex));
+  }
+
+  // The post a segment links to directly: its strict match, else the tweet's only post, picking
+  // a normal post before a deleted one before a banned one (a banned post page is HTTP 451 below
+  // Approver). Null when the tweet has several posts.
+  function directPost(ref, posts) {
+    const exact = strictMatch(ref, posts);
+    if (exact || countPosts(posts) !== 1) {
+      return exact || null;
+    }
+    const rank = (p) => (p.isBanned ? 2 : p.isDeleted ? 1 : 0);
+    return posts.reduce((best, p) => (rank(p) < rank(best) ? p : best));
+  }
+
   function resolveColor(ref) {
     const tc = tweetCache[ref.tweetId];
     if (!tc || tc.state === 'pending') {
@@ -1162,40 +1223,73 @@
       // Before, during or after an empty hash lookup, and video tiles (no hash).
       return COLORS.missing;
     }
-    const strict = tc.posts.some((p) => {
-      if (p.imageHash && p.imageHash === ref.imageHash) {
-        return true;
-      }
-      if (p.photoIndex && p.photoIndex === ref.photoIndex) {
-        return true;
-      }
-      return false;
-    });
-    return strict ? COLORS.found : COLORS.foundWeak;
+    if (strictMatch(ref, tc.posts)) {
+      return COLORS.found;
+    }
+    // Posts saved from a tweet name only the tweet, so the number of posts decides: a one-image
+    // tweet with any post, or as many posts as images, is fully posted.
+    const photoCount = photoCountOf(ref);
+    const k = countPosts(tc.posts);
+    if ((photoCount === 1 && k >= 1) || k >= photoCount) {
+      return COLORS.found;
+    }
+    return COLORS.foundWeak;
+  }
+
+  // Posts the segment is judged on: the tweet's, else those found by the image's media hash.
+  function matchedPosts(ref) {
+    const tc = tweetCache[ref.tweetId];
+    if (tc && tc.state === 'done' && tc.posts.length) {
+      return tc.posts;
+    }
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
+    if (hc && hc.state === 'done' && hc.posts.length) {
+      return hc.posts.filter((p) => p.imageHash === ref.imageHash);
+    }
+    return [];
   }
 
   // Returns a Danbooru URL to navigate to when the segment is clicked, or null.
   function resolveMatchUrl(ref) {
-    const tc = tweetCache[ref.tweetId];
-    if (tc && tc.state === 'done' && tc.posts.length) {
-      const exact = tc.posts.find((p) =>
-        (p.imageHash && p.imageHash === ref.imageHash)
-        || (p.photoIndex && p.photoIndex === ref.photoIndex));
-      if (exact) {
-        return `${DANBOORU_URL}posts/${exact.id}`;
-      }
-      // No exact image match: link to the tweet's search results on Danbooru.
-      const tags = `status:any source:*status/${ref.tweetId}*`;
-      return `${DANBOORU_URL}posts?tags=${encodeURIComponent(tags)}`;
+    const posts = matchedPosts(ref);
+    if (!posts.length) {
+      return null;
     }
-    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
-    if (hc && hc.state === 'done' && hc.posts.length) {
-      const exact = hc.posts.find((p) => p.imageHash === ref.imageHash);
-      if (exact) {
-        return `${DANBOORU_URL}posts/${exact.id}`;
-      }
+    const post = directPost(ref, posts);
+    if (post) {
+      return `${DANBOORU_URL}posts/${post.id}`;
     }
-    return null;
+    // Several posts of the tweet: link to its search results on Danbooru.
+    const tags = `status:any source:*status/${ref.tweetId}*`;
+    return `${DANBOORU_URL}posts?tags=${encodeURIComponent(tags)}`;
+  }
+
+  // Text for the segment's title and aria-label.
+  function resolveLabel(ref, color) {
+    if (color === COLORS.searching) {
+      return 'Checking';
+    }
+    if (color === COLORS.missing) {
+      return 'Not on Danbooru';
+    }
+    if (color === COLORS.error) {
+      return 'Lookup failed';
+    }
+    const posts = matchedPosts(ref);
+    if (color === COLORS.foundWeak) {
+      return `${countPosts(posts)} of ${photoCountOf(ref)} images posted`;
+    }
+    const post = directPost(ref, posts);
+    if (!post) {
+      return `On Danbooru: ${countPosts(posts)} posts`;
+    }
+    if (post.isBanned) {
+      return `post #${post.id} (banned)`;
+    }
+    if (post.isDeleted) {
+      return `post #${post.id} (deleted)`;
+    }
+    return `On Danbooru: post #${post.id}`;
   }
 
   // The only writer of segment state. A segment being re-checked keeps its previous colour,
@@ -1211,7 +1305,8 @@
         ref.rechecking = false;
       }
       const matchUrl = resolveMatchUrl(ref);
-      const key = `${color}|${matchUrl || ''}|${hold ? 1 : 0}`;
+      const label = resolveLabel(ref, color);
+      const key = `${color}|${matchUrl || ''}|${label}|${hold ? 1 : 0}`;
       if (ref.applied === key) {
         continue;
       }
@@ -1221,14 +1316,14 @@
         continue;
       }
       ref.bar.style.backgroundColor = color;
+      ref.bar.title = label;
+      ref.bar.setAttribute('aria-label', label);
       if (matchUrl) {
         ref.bar.dataset.matchUrl = matchUrl;
         ref.bar.classList.add('xdsu-clickable');
-        ref.bar.title = matchUrl.replace(/^https?:\/\//, '');
       } else {
         delete ref.bar.dataset.matchUrl;
         ref.bar.classList.remove('xdsu-clickable');
-        ref.bar.removeAttribute('title');
       }
       if (ref.btn) {
         const found = color === COLORS.found;
