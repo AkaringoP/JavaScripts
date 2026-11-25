@@ -2,7 +2,7 @@
 
 A userscript for x.com that tells you, for every image in a tweet, whether it is already on [Danbooru](https://danbooru.donmai.us), and lets you start an upload of that image with one tap. It is built for one-handed use on the mobile web version of X (Firefox for Android + Tampermonkey) and works on desktop too.
 
-[**Click here to install**](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/XSearchAndUpload/XSearchAndUpload.user.js) — requires [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
+[**Click here to install (v2.0.0)**](https://github.com/AkaringoP/JavaScripts/raw/refs/heads/main/XSearchAndUpload/XSearchAndUpload.user.js) — requires [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
 
 ## Quick start
 
@@ -172,6 +172,9 @@ The November 2026 audit rewrote most of the script in steps:
 | `3387c1e` | Cleanup, restore of bars and buttons after re-renders |
 | `e56e78d`, `0cbf6cb` | Photo viewer button, header fields |
 | `3897d86` | Scenario harness under `test/` |
+| `c701738` | Google JavaScript Style: 80 columns, JSDoc, operator placement |
+
+All of the above was released together as **2.0.0**. `@version` in the header and the `VERSION` constant must be changed together.
 
 ### Open items
 
