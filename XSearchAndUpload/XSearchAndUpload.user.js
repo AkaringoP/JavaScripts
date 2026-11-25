@@ -1,19 +1,17 @@
 // ==UserScript==
 // @name         X (Twitter) Danbooru Search and Upload
-// @namespace    https://github.com/akaringop/uploading
+// @namespace    https://github.com/AkaringoP
 // @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. Mobile-friendly (Firefox + Tampermonkey).
 // @match        *://x.com/*
 // @match        *://twitter.com/*
 // @match        *://mobile.twitter.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
-// @grant        GM_getResourceURL
 // @grant        GM_openInTab
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @require      https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js
-// @resource     danbooru_icon https://github.com/danbooru/danbooru/raw/master/public/images/danbooru-logo.png
 // @connect      danbooru.donmai.us
 // @noframes
 // @version      1.0.0
@@ -30,17 +28,52 @@
 
   // -------------- config --------------
 
-  const rawBooru = GM_getValue('booru', 'https://danbooru.donmai.us') || '';
-  const DANBOORU_URL = rawBooru.replace(/\/+$/, '') + '/';
-  const DANBOORU_ICON_URL = GM_getResourceURL('danbooru_icon');
+  const DEFAULT_BOORU_URL = 'https://danbooru.donmai.us';
+
+  // Returns "https://host[/path]" without a trailing slash, or null if the value is not a usable URL.
+  function normalizeBooruUrl(v) {
+    if (typeof v !== 'string') {
+      return null;
+    }
+    let s = v.trim();
+    if (!s) {
+      return null;
+    }
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) {
+      s = 'https://' + s;
+    }
+    let u;
+    try {
+      u = new URL(s);
+    } catch {
+      return null;
+    }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+      return null;
+    }
+    if (u.hostname !== 'localhost' && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(u.hostname)) {
+      return null;
+    }
+    return (u.origin + u.pathname).replace(/\/+$/, '');
+  }
+
+  const DANBOORU_URL = (normalizeBooruUrl(GM_getValue('booru', DEFAULT_BOORU_URL)) || DEFAULT_BOORU_URL) + '/';
+  // danbooru/public/logos/danbooru-logo.png (128x128).
+  const DANBOORU_ICON_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAsTAAALEwEAmpwYAAAFCklEQVR4nO2cP27UQBTGvyCkKKJAdJSU9BTcAOqcgxR0HCFAhYS4ANBygUQcgDOgKBKKUqBEAgnCnyJDgTaJ1zP2s+fNvOfM9ytQdu0dO/5+73lm2Q1ACCGEEEIIIYSQVtgwPv4DAPsA7hifx3VmMOMbtc4iAsN3gJUADN8JFgIwfEfUFoDhO6OmAAzfIbUEeAjgIxi+O2osA1n5tgxmfLPwwcXh39raxO7ONu7fu1v4lJbH5y9f8ez1B/w4+6M+dslbAMNXoGT4QDkBGL4CpcMHygjA8BWoET6gLwDDV6BW+ICuAAxfgSnh39razD6elgAMX4Gp4e/ubGcfU0MAhq/AnPA1rmOuAAxfAavwgTwBGL4CluED8wVg+ApYhw/ME4DhK+AhfGC6AAxfAS/hA9MEYPgKeAofkAvA8BXwFj4gE4DhK+AxfED2gZBvAG6XPhHyn6nhP3ryamyX7O8FMPxKWHRQyy+GkCtY3T4pgAMs504UwBjriTMFMMZ61UQBjLFeMlOAxsn+XsDem6ca53FtEazTTWEHaBwK0DgUoHEoQONQgMahAI1DARqHAjQOBWgcCtA4FKBxKEDjUIDGoQCNU/rPxJFMQvcfdSiAMSGkg+3nri8BBVAizKzSmACh90N0q4oOFCCBtPXmVulVcXqvTAwVFDtBUwJIqjRefQNVGt0sD2jVAXqhRoYYOYtZLFoA7Sqd1XqTVTp+XgBw3rkFhOSYZaaADgWQ3ksloY4Hldl6B8OX0Z8DhM4Ag2MpWFFcgElVGv9hZL/o1vlVOlp96XTm5NET4KIJCEbzIIDGMkYSatkqndF6Q0K2iXSuX+80Bq6t0j2hiADSCZJ08jx9gjSjSkNyhIGD5c/Hr16/eKiR66s4IVAQAFBZxkhDLVWlIXlm0YOJRpZ08RAEd8i16+tLAPkypv90PNTBm8rkCZIsVGn9a1fpeegdPDF6ugByyBYgexkzufUK227nug5X6cjM5PKZAlUaRgTo3yZ1DSgwByhXpd3xFKp0eBh0QhVPyscruvOac6l+mG6XAH0BLoKSXTHpXVqn9U6rUmnrzanS9fc90p1y/aGOBLoCTJwgJWqy/0yJUEX7rR6Uq9LOKkA2cRIXjQRVAfQmSPLWO6tKB06iv198i+RXlVTpxSogPcjwMTNREeA6VGl2603nNsh59Ly7qZcIfoXOKkB0u69Rpd0HsoY0UKfJ6ou8YvzXix8i2Q5D8fABrVuAwgRJ0nrLVWk60PRxdap06K30GuQLkLmM8VWlU0OtU6UlUX0r+OK56I7rD2VtI2+C1N9BEqpxUVZFdxWg2HpZpXXQWwVcPhPZKbkFrFJblP8vYMWcCRJDtaDgB0LYepdA0U8EEf/wu4GNQwEahwI0DgVoHArQOBSgcShA41CAxqEAjUMBGocCLJiDo5PsMSjAQjk8PsXL9/vZ41CABXJ4fIrnb/fw89ff7LHc/YUQMszB0QlevNvH2W9R+N/HdmAHWBCrtj8h/MdjO1GAhTCx7a/C/zS2IwVYAKXCByiAe0qGD1AA15QOH6AAbqkRPkABXFIrfIACuKNm+AAFcEXt8AEK4AaL8AEK4AKr8AEKYI5l+AAFMMcyfIACmGMZPkABlkCx8AEK4J2i4QPAhmAffv/bhuLhA+wAXqkSPkABPFItfIACeKNq+AAF8ET18AEK4AWT8AEK4AGz8AEKYI1p+IQQQgghhBBCCGmLfxrmmkuV3GutAAAAAElFTkSuQmCC';
 
   GM_registerMenuCommand('Set Danbooru domain', () => {
-    const cur = GM_getValue('booru', 'https://danbooru.donmai.us');
-    const input = prompt('Danbooru domain:', cur);
-    if (input && input.trim()) {
-      GM_setValue('booru', input.trim().replace(/\/+$/, ''));
-      location.reload();
+    const cur = GM_getValue('booru', DEFAULT_BOORU_URL);
+    const input = prompt('Danbooru URL (including https://)', cur);
+    if (input === null) {
+      return;
     }
+    const url = normalizeBooruUrl(input);
+    if (!url) {
+      alert('Enter a full URL such as https://danbooru.donmai.us');
+      return;
+    }
+    GM_setValue('booru', url);
+    location.reload();
   });
 
   GM_registerMenuCommand('Set query batch size', () => {
@@ -70,11 +103,12 @@
   // Each batched ~source:*foo* uses 2 wildcards. Danbooru limits:
   //   Member: 6 wildcards (batch up to 3), Gold: 12 (up to 5+), Platinum: more.
   // Default 3 is Member-safe; users on higher tiers can raise via menu.
-  const QUERY_BATCH = Math.max(1, Math.min(5, GM_getValue('queryBatch', 3)));
+  const storedBatch = GM_getValue('queryBatch', 3);
+  const QUERY_BATCH = Math.max(1, Math.min(5, Number.isInteger(storedBatch) ? storedBatch : 3));
   const FETCH_TIMEOUT_MS = 20000;
   const MAX_ATTEMPTS = 5;
   const ARTICLE_SELECTOR = 'article[data-testid="tweet"], article[tabindex="-1"]';
-  const STATUS_RE = /\/status(?:es)?\/(\d+)/;
+  const TWEET_PATH_RE = /^\/(?:i\/web|([^/]+))\/status(?:es)?\/(\d+)/;
 
   // -------------- styles --------------
 
@@ -102,13 +136,17 @@
       cursor: pointer;
     }
     .xdsu-upload-btn {
-      display: inline-flex;
-      align-items: center;
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      box-sizing: border-box;
+      font-size: 18px;
       position: absolute;
       bottom: 6px;
       left: 6px;
       z-index: 5;
-      padding: 5px;
       background: rgba(0,0,0,0.55);
       border-radius: 4px;
       cursor: pointer;
@@ -118,8 +156,8 @@
     }
     .xdsu-upload-btn:hover { background: rgba(0,0,0,0.78); }
     .xdsu-upload-btn img {
-      height: 1.4em;
-      vertical-align: middle;
+      width: 20px;
+      height: 20px;
       display: block;
       border: none;
     }
@@ -176,10 +214,14 @@
     return u.href;
   }
 
-  function setKeysError(cache, keys) {
-    for (const k of keys) {
-      cache[k].state = 'error';
-    }
+  // entries[i] is cache[keys[i]] as it was when the batch started; skip keys whose
+  // entry was dropped or replaced (e.g. by a like refresh) while the request ran.
+  function setKeysError(cache, keys, entries) {
+    keys.forEach((k, i) => {
+      if (entries[i] && cache[k] === entries[i]) {
+        entries[i].state = 'error';
+      }
+    });
   }
 
   function clearArticleMarkers(article) {
@@ -189,70 +231,71 @@
     article.querySelectorAll('[data-xdsu-btn]').forEach((el) => {
       el.removeAttribute('data-xdsu-btn');
     });
-    article.querySelectorAll('.xdsu-upload-btn').forEach((el) => {
+    article.querySelectorAll('.xdsu-upload-btn, .xdsu-bar').forEach((el) => {
       el.remove();
     });
   }
 
+  // Builds {tweetId, tweetUrl} from a URL path; the URL drops suffixes like /photo/1.
+  function parseStatusPath(pathname) {
+    const m = (pathname || '').match(TWEET_PATH_RE);
+    if (!m) {
+      return null;
+    }
+    return {tweetId: m[2], tweetUrl: `https://x.com/${m[1] || 'i/web'}/status/${m[2]}`};
+  }
+
+  // Reads the tweet's own permalink, never the one of a quoted tweet (div[role="link"]).
+  // Only the focal tweet of a detail page (article[tabindex="-1"]) falls back to the page URL.
+  function extractTweetInfo(article) {
+    const time = [...article.querySelectorAll('time')].find((t) => !t.closest('div[role="link"]'));
+    const link = (time && time.closest('a[href*="/status/"]'))
+      || [...article.querySelectorAll('a[href*="/status/"]')].find((a) => !a.closest('div[role="link"]'));
+    if (link) {
+      return parseStatusPath(link.pathname);
+    }
+    if (article.matches('article[tabindex="-1"]')) {
+      return parseStatusPath(location.pathname);
+    }
+    return null;
+  }
+
+  // True when the image hash of a tracked segment no longer matches any image in the
+  // article, i.e. the article now shows different content.
+  function mediaChanged(article) {
+    const seg = article.querySelector('.xdsu-bar-seg[data-image-hash]');
+    if (!seg) {
+      return false;
+    }
+    const now = findPhotos(article).map((p) => {
+      const img = findTweetImage(p);
+      return img ? parseTwitterImageHash(img.src) : null;
+    }).filter(Boolean);
+    return now.length > 0 && !now.includes(seg.dataset.imageHash);
+  }
+
   // Combined tweetId + tweetUrl extraction with per-article caching.
-  // Validates cache by checking the live <time> anchor href against the cached id;
-  // clears all related markers if the article was recycled to a different tweet.
+  // Keeps the cache while the live permalink still names the cached tweet (or, without a
+  // permalink, while the media is unchanged); otherwise the article was recycled, so all
+  // related markers are cleared.
   function getTweetInfo(article) {
     const cached = article.dataset.xdsuTweetId;
-    let liveHref = null;
-    const time = article.querySelector('time');
-    if (time) {
-      const a = time.closest('a');
-      if (a) {
-        liveHref = a.getAttribute('href');
-      }
-    }
+    const fresh = extractTweetInfo(article);
     if (cached) {
-      if (liveHref && new RegExp(`/status(?:es)?/${cached}(?:[/?#]|$)`).test(liveHref)) {
+      if (fresh ? fresh.tweetId === cached : !mediaChanged(article)) {
         return {
           tweetId: cached,
           tweetUrl: article.dataset.xdsuTweetUrl || `https://x.com/i/web/status/${cached}`,
         };
       }
-      // Stale cache: article was recycled. Wipe markers and re-extract.
       clearArticleMarkers(article);
     }
-
-    let href = liveHref;
-    if (!href) {
-      const anyA = article.querySelector('a[href*="/status/"]');
-      if (anyA) {
-        href = anyA.getAttribute('href');
-      }
-    }
-    let tweetId = null;
-    let tweetUrl = null;
-    if (href) {
-      const m = href.match(STATUS_RE);
-      if (m) {
-        tweetId = m[1];
-      }
-      try {
-        tweetUrl = new URL(href, 'https://x.com').href;
-      } catch {
-        // ignore
-      }
-    }
-    if (!tweetId) {
-      const pm = location.pathname.match(STATUS_RE);
-      if (pm) {
-        tweetId = pm[1];
-      }
-    }
-    if (!tweetId) {
+    if (!fresh) {
       return null;
     }
-    if (!tweetUrl) {
-      tweetUrl = `https://x.com/i/web/status/${tweetId}`;
-    }
-    article.dataset.xdsuTweetId = tweetId;
-    article.dataset.xdsuTweetUrl = tweetUrl;
-    return {tweetId, tweetUrl};
+    article.dataset.xdsuTweetId = fresh.tweetId;
+    article.dataset.xdsuTweetUrl = fresh.tweetUrl;
+    return fresh;
   }
 
   function findPhotos(article) {
@@ -291,7 +334,8 @@
   const pendingTweetIds = [];
   const pendingHashes = [];
 
-  // [{tweetId, imageHash, photoIndex, bar}] where bar is the segment element.
+  // [{tweetId, imageHash, kind, photoIndex, bar}] where bar is the segment element.
+  // Video/GIF tiles have kind 'video' and imageHash null.
   const imageRefs = [];
 
   // -------------- DOM scan --------------
@@ -299,11 +343,23 @@
   function scanTweets() {
     const articles = document.querySelectorAll(ARTICLE_SELECTOR);
     for (const article of articles) {
-      processArticle(article);
+      try {
+        processArticle(article);
+      } catch (e) {
+        console.error('[XDSU] article scan failed', e);
+      }
     }
-    // Prune disconnected segment refs.
+    // Prune disconnected segment refs. Clear their markers too, so the same element
+    // is tracked again if it is re-attached later.
     for (let i = imageRefs.length - 1; i >= 0; i--) {
-      if (!imageRefs[i].bar.isConnected) {
+      const seg = imageRefs[i].bar;
+      if (!seg.isConnected) {
+        delete seg.dataset.tracked;
+        delete seg.dataset.imageHash;
+        const art = seg.closest('article');
+        if (art) {
+          delete art.dataset.xdsuDone;
+        }
         imageRefs.splice(i, 1);
       }
     }
@@ -405,12 +461,12 @@
   function processPhoto(photoEl, info, photoIndex, bar) {
     // Upload button: only needs tweet URL, attach immediately.
     if (!photoEl.hasAttribute('data-xdsu-btn')) {
-      photoEl.setAttribute('data-xdsu-btn', '1');
       const cs = window.getComputedStyle(photoEl);
       if (!cs.position || cs.position === 'static') {
         photoEl.style.position = 'relative';
       }
       attachUploadBtn(photoEl, info);
+      photoEl.setAttribute('data-xdsu-btn', '1');
     }
     if (!bar) {
       return false;
@@ -419,27 +475,36 @@
     if (!segment) {
       return false;
     }
-    if (segment.dataset.imageHash) {
-      return true; // already tracked
+    if (segment.dataset.tracked) {
+      return true;
     }
     const img = findTweetImage(photoEl);
-    if (!img) {
+    const imageHash = img ? parseTwitterImageHash(img.src) : null;
+    // Video/GIF tiles have no media hash; they are looked up by tweet id only.
+    // A tile that is neither is an image that has not loaded yet.
+    if (!imageHash && !isVideoTile(photoEl)) {
       return false;
     }
-    const imageHash = parseTwitterImageHash(img.src);
-    if (!imageHash) {
-      return false;
+    segment.dataset.tracked = '1';
+    if (imageHash) {
+      segment.dataset.imageHash = imageHash;
     }
-    segment.dataset.imageHash = imageHash;
     segment.dataset.photoIndex = String(photoIndex);
-    imageRefs.push({
+    const ref = {
       tweetId: info.tweetId,
       imageHash,
+      kind: imageHash ? 'image' : 'video',
       photoIndex,
       bar: segment,
-    });
+    };
+    imageRefs.push(ref);
+    ensureHashLookup(ref);
     enqueueTweetIdSearch(info.tweetId);
     return true;
+  }
+
+  function isVideoTile(photoEl) {
+    return !!photoEl.querySelector('video, [data-testid="videoPlayer"], img[src*="_video_thumb/"]');
   }
 
   function attachUploadBtn(photoEl, info) {
@@ -453,6 +518,9 @@
     const icon = document.createElement('img');
     icon.title = 'Upload to Danbooru';
     icon.alt = '';
+    icon.onerror = () => {
+      btn.textContent = '↑';
+    };
     icon.src = DANBOORU_ICON_URL;
     btn.appendChild(icon);
 
@@ -497,7 +565,25 @@
       return;
     }
     tweetCache[tweetId] = {state: 'pending', posts: []};
-    pendingTweetIds.push(tweetId);
+    if (!pendingTweetIds.includes(tweetId)) {
+      pendingTweetIds.push(tweetId);
+    }
+    scheduleFlush();
+  }
+
+  // Falls back to a media-hash lookup for an image whose tweet has no posts.
+  function ensureHashLookup(ref) {
+    if (!ref.imageHash || hashCache[ref.imageHash]) {
+      return;
+    }
+    const tc = tweetCache[ref.tweetId];
+    if (!tc || tc.state !== 'done' || tc.posts.length) {
+      return;
+    }
+    hashCache[ref.imageHash] = {state: 'pending', posts: []};
+    if (!pendingHashes.includes(ref.imageHash)) {
+      pendingHashes.push(ref.imageHash);
+    }
     scheduleFlush();
   }
 
@@ -512,6 +598,8 @@
       flushRunning = true;
       try {
         await flushPending();
+      } catch (e) {
+        console.error('[XDSU] flush failed', e);
       } finally {
         flushRunning = false;
       }
@@ -525,18 +613,8 @@
     while (pendingTweetIds.length) {
       const batch = pendingTweetIds.splice(0, QUERY_BATCH);
       await runTweetIdBatch(batch);
+      imageRefs.filter((ref) => ref.bar.isConnected).forEach(ensureHashLookup);
       applyColors();
-    }
-    // Second pass: tweets with no posts -> retry via image hash.
-    for (const ref of imageRefs) {
-      const tc = tweetCache[ref.tweetId];
-      if (!tc || tc.state !== 'done' || tc.posts.length > 0) {
-        continue;
-      }
-      if (!hashCache[ref.imageHash]) {
-        hashCache[ref.imageHash] = {state: 'pending', posts: []};
-        pendingHashes.push(ref.imageHash);
-      }
     }
     while (pendingHashes.length) {
       const hBatch = pendingHashes.splice(0, QUERY_BATCH);
@@ -559,6 +637,8 @@
 
   async function runBatch(keys, cache, tagStr, keyOf) {
     const url = `${DANBOORU_URL}posts.json?limit=100&tags=${encodeURIComponent(tagStr)}`;
+    // Results are only written into the entries that existed when the batch started.
+    const entries = keys.map((k) => cache[k]);
     let resp = null;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
@@ -575,7 +655,7 @@
       }
     }
     if (!resp) {
-      setKeysError(cache, keys);
+      setKeysError(cache, keys, entries);
       return;
     }
     let data;
@@ -585,7 +665,7 @@
       data = null;
     }
     if (!Array.isArray(data)) {
-      setKeysError(cache, keys);
+      setKeysError(cache, keys, entries);
       return;
     }
     const bucket = Object.create(null);
@@ -607,10 +687,12 @@
         });
       }
     }
-    for (const k of keys) {
-      cache[k].posts = bucket[k];
-      cache[k].state = 'done';
-    }
+    keys.forEach((k, i) => {
+      if (entries[i] && cache[k] === entries[i]) {
+        entries[i].posts = bucket[k];
+        entries[i].state = 'done';
+      }
+    });
   }
 
   // -------------- coloring + F2 link annotation --------------
@@ -620,17 +702,23 @@
     if (!tc || tc.state === 'pending') {
       return COLORS.searching;
     }
+    // Video/GIF refs have no hash and are judged on the tweet result alone.
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
     if (tc.state === 'error') {
-      const hc = hashCache[ref.imageHash];
       if (hc && hc.state === 'done' && hc.posts.length) {
         return COLORS.found;
       }
       return COLORS.error;
     }
     if (tc.posts.length === 0) {
-      const hc = hashCache[ref.imageHash];
+      if (!ref.imageHash) {
+        return COLORS.missing;
+      }
       if (!hc || hc.state === 'pending') {
         return COLORS.searching;
+      }
+      if (hc.state === 'error') {
+        return COLORS.error;
       }
       if (hc.state === 'done' && hc.posts.length) {
         return COLORS.found;
@@ -663,7 +751,7 @@
       const tags = `status:any source:*status/${ref.tweetId}*`;
       return `${DANBOORU_URL}posts?tags=${encodeURIComponent(tags)}`;
     }
-    const hc = hashCache[ref.imageHash];
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
     if (hc && hc.state === 'done' && hc.posts.length) {
       const exact = hc.posts.find((p) => p.imageHash === ref.imageHash);
       if (exact) {
@@ -741,12 +829,13 @@
   const REFRESH_QUERY_DELAY_MS = 1000;
 
   function refreshTweetStatus(tweetId) {
-    if (!tweetId) {
+    // Nothing on screen to update (e.g. a text-only tweet).
+    if (!tweetId || !imageRefs.some((ref) => ref.tweetId === tweetId && ref.bar.isConnected)) {
       return;
     }
     const hashes = new Set();
     for (const ref of imageRefs) {
-      if (ref.tweetId === tweetId) {
+      if (ref.tweetId === tweetId && ref.imageHash) {
         hashes.add(ref.imageHash);
       }
     }
