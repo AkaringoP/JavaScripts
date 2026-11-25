@@ -1044,15 +1044,14 @@ function initializeDanbooruUpload() {
     }
   `);
 
-  // sniped: someone posted the file after this page had seen it unposted.
-  const showToast = (postId, sniped) => {
+  const showToast = (postId) => {
     const $toast = $('<div class="ex-utb-posted-toast" role="alert">');
     const $link = $('<a target="_blank" rel="noopener">')
       .attr('href', `/posts/${postId}`)
       .text(`post #${postId}`);
     const $close = $('<button type="button" aria-label="Close">').text('×');
     $close.on('click', () => $toast.remove());
-    $toast.append($('<span>').append(sniped ? 'Sniped just now: ' : 'Already posted: ', $link), $close);
+    $toast.append($('<span>').append('Sniped just now: ', $link), $close);
     $toast.appendTo(document.body);
   };
 
@@ -1080,7 +1079,11 @@ function initializeDanbooruUpload() {
       }
       else if (!settled.has(assetId)) {
         settled.add(assetId);
-        showToast(postId, seenUnposted.has(assetId));
+        // A post found by the first answer was not made while this page was open (e.g. the
+        // form came back from the browser cache after the user posted it): nothing to report.
+        if (seenUnposted.has(assetId)) {
+          showToast(postId);
+        }
       }
     }
     catch (error) {
