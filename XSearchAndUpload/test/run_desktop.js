@@ -9,17 +9,15 @@ const SCROLL = require('./run_scroll.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 const LOGIN_TEXT = 'Not logged in to Danbooru – lookups limited';
+const SAFE_TEXT = 'Danbooru safe mode is on – only rating:g posts are visible';
 
-// Scenario name -> the task that closes the gap.
-const KNOWN_GAPS = {
-  d4_focus_return: 'T2',
-  d5_hidden_toast: 'T2',
-};
+// Scenario name -> the task that closes the gap. Empty since T2 closed d4 and d5.
+const KNOWN_GAPS = {};
 
 // ---------- synthetic page (h.js) ----------
 
-async function setup(browser, {ctxOpts = DESKTOP, profile = null} = {}) {
-  const r = await newPage(browser, {ctxOpts});
+async function setup(browser, {ctxOpts = DESKTOP, profile = null, store = {}} = {}) {
+  const r = await newPage(browser, {ctxOpts, store});
   r.popups = [];
   r.ctx.on('page', (p) => r.popups.push(p.url()));
   r.navs = [];
@@ -122,6 +120,32 @@ async function setup(browser, {ctxOpts = DESKTOP, profile = null} = {}) {
       }
       last = now;
     }, 20);
+    // Re-check helpers (T2). tNow: ms since injection, the clock of __reqLog's t.
+    window.tNow = () => Math.round(performance.now() - (window.__t0 || 0));
+    // Nothing in flight and no segment held for a re-check (a re-check holds its segment until the
+    // tweet lookup, and the hash lookup that may follow, have answered).
+    window.settled = () => window.__inflight === 0 && !document.querySelector('.xdsu-rechecking');
+    // A tweet's first lookups are over and it is red: tweet lookup answered, hash lookup answered.
+    window.redIdle = (id, hash) => !!window.seg(id) && window.seg(id).dataset.state === 'missing'
+      && window.lookups('media/' + hash).length > 0 && window.__inflight === 0;
+    // Synthetic return signals: the window gets the focus, the pointer enters the page.
+    window.focusWin = () => window.dispatchEvent(new Event('focus'));
+    window.enter = (pointerType) => document.documentElement.dispatchEvent(new PointerEvent('pointerenter', {pointerType}));
+    // Visibility changed without a visibilitychange event (which re-checks by itself).
+    window.setHiddenQuiet = (hidden) => {
+      Object.defineProperty(document, 'hidden', {configurable: true, get: () => hidden});
+      Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => (hidden ? 'hidden' : 'visible')});
+    };
+    // The stored watch list (null if it is not JSON), and its tweet ids.
+    window.storedWatch = () => {
+      try {
+        return JSON.parse(window.__store.watch);
+      } catch {
+        return null;
+      }
+    };
+    window.storedIds = () => (window.storedWatch() || []).map((e) => e[0]);
+    window.upload = (id) => document.querySelector(`#t${id} .xdsu-upload-btn`).click();
   }, profile);
   return r;
 }
@@ -381,8 +405,8 @@ const S = {
     return {pass: ok, detail: rows.join(' | ')};
   },
 
-  // Known gap (T2). The tab stays visible: the user uploads in a window beside X and clicks back
-  // into X. A focus on the window should re-check the watched tweet.
+  // T2 (was a known gap). The tab stays visible: the user uploads in a window beside X and clicks
+  // back into X. A focus on the window should re-check the watched tweet.
   async d4_focus_return(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => window.addBig('7101', 'FR1'));
@@ -422,8 +446,8 @@ const S = {
         + ` window focus events=${JSON.stringify(s.focus)} | lookups of 7101=${JSON.stringify(s.log)}`});
   },
 
-  // Known gap (T2). A tab opened behind (middle click) starts hidden and is logged out of Danbooru.
-  // The login toast should be on screen when the tab is first looked at.
+  // T2 (was a known gap). A tab opened behind (middle click) starts hidden and is logged out of
+  // Danbooru. The login toast should be on screen when the tab is first looked at.
   async d5_hidden_toast(browser, v) {
     const r = await setup(browser, {profile: SCROLL.ANON});
     await r.page.evaluate(() => {
@@ -456,6 +480,580 @@ const S = {
       detail: `while hidden (9 s): profile checks at ${JSON.stringify(hid.profile)} ms, lookups=${hid.lookups}, toasts=${fmt(hid.toasts)}`
         + ` | visible at ${s.tVisible} ms: login toast ${shown ? 'on screen after ' + ms + ' ms' : 'NOT on screen within 3 s'}`
         + ` | all profile checks=${JSON.stringify(s.profile)} lookups=${s.lookups} toasts=${fmt(s.toasts)}`});
+  },
+
+  // T2, D1 as it happens on a desktop. The upload tab opens in front (X hidden); the user drags it
+  // out to a window of its own, so X is visible again and a ladder of re-checks starts (0, 5, 20
+  // and 60 s); the ladder runs to its end while the user is still tagging; then the post is made
+  // and the user clicks back into the X window. The entry must outlive the ladder, with no timer
+  // left running, and the focus must re-check the tweet. v2.0.0 dropped the entry at the ladder's
+  // last step.
+  async d6_ladder_then_focus(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => window.addBig('7301', 'LF1'));
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('7301', 'LF1'), null, 5000);
+    const p = await centre(r.page, '#t7301 .xdsu-upload-btn');
+    await r.page.mouse.click(p.x, p.y);
+    // The upload tab opens in front.
+    await r.page.evaluate(() => window.setHidden(true));
+    await sleep(500);
+    const n0 = await r.page.evaluate(() => window.lookups('status/7301').length);
+    // Dragged out to a window of its own: X is visible again.
+    await r.page.evaluate(() => {
+      window.__tVisible = window.tNow();
+      window.setHidden(false);
+    });
+    // Fixed: the ladder runs in real time, its last step 60 s after the return; that time passing
+    // is the point. Then 5 s more, in which nothing may be sent (no timer left behind).
+    const ladder = await waitUntil(r.page, (n) => window.lookups('status/7301').length >= n + 4 && window.settled(), n0, 70000);
+    await sleep(5000);
+    const mid = await r.page.evaluate((n0) => ({stored: window.storedIds(), state: window.seg('7301').dataset.state,
+      times: window.lookups('status/7301').slice(n0).map((x) => x.t - window.__tVisible)}), n0);
+    // The user posts more than 15 s after the last step. The script measures RETURN_GAP_MS with
+    // Date.now, so that time is stepped over (__dnOff) rather than waited.
+    await r.page.evaluate(() => {
+      window.__dnOff += 20000;
+      window.__db.push(window.post(611, 'https://x.com/u/status/7301/photo/1'));
+    });
+    const n1 = n0 + mid.times.length;
+    const t0 = Date.now();
+    await r.page.evaluate(() => window.focusWin());
+    const sent = await waitUntil(r.page, (n) => window.lookups('status/7301').length > n, n1, 3000);
+    const msSent = Date.now() - t0;
+    const green = sent && await waitUntil(r.page, () => window.seg('7301').dataset.state === 'found' && window.settled(), null, 3000);
+    // A later return finds the post count risen: the entry goes, without a lookup.
+    await r.page.evaluate(() => {
+      window.__dnOff += 16000;
+      window.focusWin();
+    });
+    // Fixed: 1 s for a lookup that must not come.
+    await sleep(1000);
+    const end = await r.page.evaluate(() => ({n: window.lookups('status/7301').length, stored: window.storedIds()}));
+    const ladderOk = ladder && mid.times.length === 4 && mid.times[3] >= 59000 && mid.times[3] <= 62000;
+    const pass = red && ladderOk && mid.stored.includes('7301') && mid.state === 'missing' && sent && green
+      && end.n === n1 + 1 && !end.stored.includes('7301');
+    return fin(r, {pass, detail: `red before=${red} | ladder: lookups at ${JSON.stringify(mid.times)} ms after the return,`
+      + ` none in the 5 s after (${ladderOk ? 'ok' : 'WRONG'}) state=${mid.state} stored watch=${JSON.stringify(mid.stored)}`
+      + ` | focus after the post: lookup ${sent ? 'after ' + msSent + ' ms' : 'NOT sent within 3 s'}, ${green ? 'green' : 'not green'}`
+      + ` | next focus (16 s on): lookups ${n1 + 1}->${end.n} stored watch=${JSON.stringify(end.stored)}`});
+  },
+
+  // T2: the mouse coming back over the page (an upload posted in a window on another screen) is a
+  // return: a mouse pointerenter on the root element re-checks the watched tweet. Touch and pen do
+  // not, nor a mouse while nothing is watched or the tab is hidden. The events are synthetic and no
+  // real pointer moves here: whether a browser sends pointerenter to <html> when the pointer comes
+  // in from outside the window cannot be shown in this harness.
+  async d7_pointer_return(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => window.addBig('7401', 'PR1'));
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('7401', 'PR1'), null, 5000);
+    const count = () => r.page.evaluate(() => window.lookups('status/7401').length);
+    const rows = [];
+    let quiet = true;
+    // Each must send nothing; fixed 1 s windows.
+    const none = async (label, kind) => {
+      const n = await count();
+      await r.page.evaluate((kind) => {
+        if (kind === 'hidden') {
+          window.setHiddenQuiet(true);
+          window.enter('mouse');
+          window.setHiddenQuiet(false);
+        } else {
+          window.enter(kind);
+        }
+      }, kind);
+      await sleep(1000);
+      const d = (await count()) - n;
+      quiet = quiet && d === 0;
+      rows.push(`${label}: ${d}${d ? ' <-- want 0' : ''}`);
+    };
+    await none('mouse, nothing watched', 'mouse');
+    await r.page.evaluate(() => {
+      window.upload('7401');
+      window.__db.push(window.post(621, 'https://x.com/u/status/7401/photo/1'));
+    });
+    await none('touch', 'touch');
+    await none('pen', 'pen');
+    await none('mouse, tab hidden', 'hidden');
+    const n = await count();
+    const t0 = Date.now();
+    await r.page.evaluate(() => window.enter('mouse'));
+    const sent = await waitUntil(r.page, (n) => window.lookups('status/7401').length > n, n, 3000);
+    const msSent = Date.now() - t0;
+    const green = sent && await waitUntil(r.page, () => window.seg('7401').dataset.state === 'found', null, 3000);
+    const s = await r.page.evaluate(() => ({vis: window.__visEvents, focus: window.__focusEvents.length}));
+    return fin(r, {pass: red && quiet && sent && green && s.vis === 0 && s.focus === 0,
+      detail: `red before=${red} | lookups per pointerenter: ${rows.join(', ')}`
+        + ` | mouse, watched and visible: lookup ${sent ? 'after ' + msSent + ' ms' : 'NOT sent within 3 s'},`
+        + ` ${green ? 'green' : 'not green'} | visibilitychange=${s.vis} focus=${s.focus}`});
+  },
+
+  // T2: returns noticed while the tab stayed visible (focus, mouse) re-check at most once per
+  // RETURN_GAP_MS (15 s), counted from the last pass of any kind, a ladder step included. The script
+  // measures the gap with Date.now, so the scenario steps Date.now forward (__dnOff) instead of
+  // waiting. Every step is past the 1.5 s refresh debounce, so only the gap can hold a signal back.
+  // Then, in real time: such a pass leaves a running ladder alone, and starts none of its own.
+  async d8_return_gap(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => window.addBig('7501', 'GP1'));
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('7501', 'GP1'), null, 5000);
+    await r.page.evaluate(() => window.upload('7501'));
+    // [Date.now step in ms, signal, lookups it should send]
+    const plan = [
+      [0, 'focus', 1],
+      [2000, 'mouse', 0],
+      [2000, 'focus', 0],
+      [12000, 'mouse', 1], // 16 s after the first pass
+      [2000, 'focus', 0],
+      [16000, 'tab', 1], // a return to the tab: a pass at once, and a ladder
+      [2000, 'focus', 0], // 2 s after the ladder's first pass
+    ];
+    const rows = [];
+    let ok = red;
+    let at = 0;
+    let tabAt = null;
+    for (const [dn, kind, want] of plan) {
+      at += dn;
+      const n = await r.page.evaluate(() => window.lookups('status/7501').length);
+      await r.page.evaluate(([dn, kind]) => {
+        window.__dnOff += dn;
+        if (kind === 'focus') {
+          window.focusWin();
+        } else if (kind === 'mouse') {
+          window.enter('mouse');
+        } else {
+          window.setHidden(true);
+          window.setHidden(false);
+        }
+      }, [dn, kind]);
+      if (want) {
+        await waitUntil(r.page, (n) => window.lookups('status/7501').length > n && window.settled(), n, 3000);
+      } else {
+        // Fixed: 1 s for a lookup that must not come. After the 'tab' step this ends about 2 s into
+        // the ladder, well before its 5 s step.
+        await sleep(1000);
+      }
+      const got = (await r.page.evaluate(() => window.lookups('status/7501').length)) - n;
+      ok = ok && got === want;
+      rows.push(`+${at / 1000} s ${kind}: ${got}${got === want ? '' : ' <-- want ' + want}`);
+      if (kind === 'tab') {
+        tabAt = await r.page.evaluate((n) => window.lookups('status/7501')[n].t, n);
+      }
+    }
+    // The ladder the 'tab' step started runs on untouched by a focus pass in between: its next step
+    // still comes 5 s after its first (not cancelled, not restarted from the focus).
+    const n8 = await r.page.evaluate(() => window.lookups('status/7501').length);
+    await r.page.evaluate(() => {
+      window.__dnOff += 16000;
+      window.focusWin();
+    });
+    const focus8 = await waitUntil(r.page, (n) => window.lookups('status/7501').length > n && window.settled(), n8, 3000);
+    const step1 = await waitUntil(r.page, (n) => window.lookups('status/7501').length > n + 1 && window.settled(), n8, 8000);
+    const t8 = await r.page.evaluate((n) => window.lookups('status/7501').slice(n).map((x) => x.t), n8);
+    const ladderOk = focus8 && step1 && t8.length === 2 && t8[1] - tabAt >= 4500 && t8[1] - tabAt <= 6000;
+    rows.push(`a focus 16 s on, while the ladder runs: lookup at ${t8[0] - tabAt} ms after the ladder's first,`
+      + ` the ladder's next at ${t8[1] - tabAt} ms${ladderOk ? '' : ' <-- want one focus lookup, then the ladder at ~5 s'}`);
+    // Ends the ladder.
+    await r.page.evaluate(() => window.setHidden(true));
+    // Neither signal starts a ladder: after its pass, nothing for 6 s (a ladder re-checks at 5 s).
+    // The tab is made visible without a visibilitychange, which would start one itself.
+    for (const kind of ['focus', 'mouse']) {
+      const n = await r.page.evaluate(() => window.lookups('status/7501').length);
+      await r.page.evaluate((kind) => {
+        window.__dnOff += 16000;
+        window.setHiddenQuiet(false);
+        if (kind === 'focus') {
+          window.focusWin();
+        } else {
+          window.enter('mouse');
+        }
+      }, kind);
+      const one = await waitUntil(r.page, (n) => window.lookups('status/7501').length > n && window.settled(), n, 3000);
+      // Fixed: 6 s in which a ladder's 5 s step would show.
+      await sleep(6000);
+      const got = (await r.page.evaluate(() => window.lookups('status/7501').length)) - n;
+      const good = one && got === 1;
+      ok = ok && good;
+      rows.push(`${kind} alone: ${got} lookup(s) in 6 s${good ? '' : ' <-- want 1'}`);
+    }
+    return fin(r, {pass: ok && ladderOk, detail: `red before=${red} | lookups per signal, at Date.now offsets: ${rows.join(', ')}`});
+  },
+
+  // T2: a tab switch fires visibilitychange and focus, in either order. Together they cost one
+  // lookup per watched tweet and use one of its WATCH_MAX_CHECKS (12) checks. To show the count,
+  // single returns follow the two switches until the entries leave the store, which must happen
+  // right at the 12th lookup of each tweet. "focus first" is sent with the tab already visible
+  // (the order in which focus could run a pass of its own), then visibilitychange. Date.now is
+  // stepped (__dnOff) past the 1.5 s refresh debounce and the 15 s gap instead of waiting.
+  async d9_tab_switch(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.addBig('7601', 'TS1');
+      window.addBig('7602', 'TS2');
+    });
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('7601', 'TS1') && window.redIdle('7602', 'TS2'), null, 5000);
+    await r.page.evaluate(() => {
+      window.upload('7601');
+      window.upload('7602');
+      // The upload tab opens in front.
+      window.setHidden(true);
+    });
+    const IDS = ['7601', '7602'];
+    const count = () => r.page.evaluate((ids) => ids.map((id) => window.lookups(`status/${id}`).length), IDS);
+    // Every tweet has a lookup more than in b, and all of them have answered.
+    const grew = ([ids, b]) => ids.every((id, i) => window.lookups(`status/${id}`).length > b[i]) && window.settled();
+    const n0 = await count();
+    const rows = [];
+    let ok = red;
+    for (const order of ['visibilitychange, focus', 'focus, visibilitychange']) {
+      const b = await count();
+      await r.page.evaluate((order) => {
+        window.__dnOff += 16000;
+        if (order === 'visibilitychange, focus') {
+          window.setHidden(false);
+          window.focusWin();
+        } else {
+          window.setHiddenQuiet(false);
+          window.focusWin();
+          document.dispatchEvent(new Event('visibilitychange'));
+        }
+      }, order);
+      await waitUntil(r.page, grew, [IDS, b], 3000);
+      // Fixed: 1 s in which no second lookup may follow (the ladder's next step is 5 s away).
+      await sleep(1000);
+      const d = (await count()).map((x, i) => x - b[i]);
+      const good = d.every((x) => x === 1);
+      ok = ok && good;
+      rows.push(`${order}: lookups ${JSON.stringify(d)}${good ? '' : ' <-- want [1,1]'}`);
+      // Back to the upload tab; this also ends the ladder the switch started.
+      await r.page.evaluate(() => window.setHidden(true));
+    }
+    // Single returns (visibilitychange) until both entries have left the store. Each ends long
+    // before the ladder's 5 s step; were one to come, it would be a counted lookup too.
+    const singles = [];
+    const left = {};
+    for (let i = 0; i < 14 && Object.keys(left).length < IDS.length; i++) {
+      const b = await count();
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+        window.setHidden(false);
+      });
+      await waitUntil(r.page, grew, [IDS, b], 3000);
+      const stored = await r.page.evaluate(() => window.storedIds());
+      const c = (await count()).map((x, k) => x - n0[k]);
+      IDS.forEach((id, k) => {
+        if (!(id in left) && !stored.includes(id)) {
+          left[id] = c[k];
+        }
+      });
+      singles.push(c.join('/'));
+      await r.page.evaluate(() => window.setHidden(true));
+    }
+    // A switch after that sends nothing. Fixed: 1.5 s for lookups that must not come.
+    const b = await count();
+    await r.page.evaluate(() => {
+      window.__dnOff += 16000;
+      window.setHidden(false);
+      window.focusWin();
+    });
+    await sleep(1500);
+    const extra = (await count()).map((x, i) => x - b[i]);
+    const capOk = IDS.every((id) => left[id] === 12) && extra.every((x) => x === 0);
+    return fin(r, {pass: ok && capOk,
+      detail: `red before=${red} | ${rows.join(' | ')} | lookups of each tweet after each single return: ${singles.join(', ')}`
+        + ` | left the store at lookup ${JSON.stringify(left)} (want 12 each) | a switch after that: lookups ${JSON.stringify(extra)}`});
+  },
+
+  // T2, D4: every X tab stores its watch entries under one key. A tab adds and removes its own
+  // entries by reading the stored list, changing that entry and writing it back, so an entry
+  // another tab stored after this one loaded survives both. Start-up prunes expired (and
+  // malformed) entries, whoever wrote them. An entry another tab stored since for the same tweet
+  // (another t0) is that tab's, so this tab's removal leaves it.
+  async d10_watch_store(browser, v) {
+    const now = Date.now();
+    const seeded = [['8801', {t0: now - 60000, n0: 0}], ['8802', {t0: now - 31 * 60 * 1000, n0: 0}], ['8803'],
+      ['8804', {t0: 'x', n0: 0}]];
+    const r1 = await setup(browser, {store: {watch: JSON.stringify(seeded)}});
+    await inject(r1.page, v);
+    await sleep(300);
+    const atStart = await r1.page.evaluate(() => window.__store.watch);
+    const res1 = await fin(r1, {pass: true, detail: ''});
+    const startOk = atStart === JSON.stringify([seeded[0]]);
+
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.addBig('7701', 'WS1');
+      window.addBig('7702', 'WS2');
+    });
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('7701', 'WS1') && window.redIdle('7702', 'WS2'), null, 5000);
+    const steps = [];
+    const ids = async (label) => {
+      const s = await r.page.evaluate(() => window.storedIds());
+      steps.push(`${label}: ${JSON.stringify(s)}`);
+      return s;
+    };
+    // Another tab, after this one loaded, stores a tweet of its own.
+    await r.page.evaluate(() => {
+      window.__store.watch = JSON.stringify((window.storedWatch() || []).concat([['8811', {t0: Date.now(), n0: 0}]]));
+    });
+    await ids('another tab stores 8811');
+    await r.page.evaluate(() => window.upload('7701'));
+    const add1 = await ids('this tab watches 7701');
+    await r.page.evaluate(() => window.upload('7702'));
+    const add2 = await ids('and 7702');
+    // The other tab watches 7702 too, later (a newer t0).
+    const t0b = await r.page.evaluate(() => {
+      const t0 = Date.now() + 5;
+      window.__store.watch = JSON.stringify((window.storedWatch() || []).map((e) => (e[0] === '7702' ? ['7702', {t0, n0: 0}] : e)));
+      return t0;
+    });
+    await ids('another tab watches 7702 anew');
+    // Both get a post; a focus re-checks them; the next pass (16 s on) drops both here.
+    await r.page.evaluate(() => {
+      window.__db.push(window.post(631, 'https://x.com/u/status/7701/photo/1'));
+      window.__db.push(window.post(632, 'https://x.com/u/status/7702/photo/1'));
+      window.__dnOff += 16000;
+      window.focusWin();
+    });
+    const green = await waitUntil(r.page, () => window.seg('7701').dataset.state === 'found' && window.seg('7702').dataset.state === 'found'
+      && window.settled(), null, 3000);
+    const n = await r.page.evaluate(() => window.lookups('status/77').length);
+    await r.page.evaluate(() => {
+      window.__dnOff += 16000;
+      window.focusWin();
+    });
+    // Fixed: 1 s for lookups that must not come (the post counts rose).
+    await sleep(1000);
+    const end = await ids('this tab drops 7701 and 7702');
+    const last = await r.page.evaluate(() => ({n: window.lookups('status/77').length, foreign: window.lookups('status/88').length,
+      e7702: ((window.storedWatch() || []).find((e) => e[0] === '7702') || [])[1] || null}));
+    const pass = startOk && res1.pass && red && JSON.stringify(add1) === '["8811","7701"]'
+      && JSON.stringify(add2) === '["8811","7701","7702"]' && green && JSON.stringify(end) === '["8811","7702"]'
+      && last.e7702 && last.e7702.t0 === t0b && last.n === n && last.foreign === 0;
+    return fin(r, {pass, detail: `start-up: seeded ${JSON.stringify(seeded.map((e) => e[0]))} (8802 expired, 8803/8804 malformed)`
+      + ` -> stored ${atStart}${startOk ? '' : ' <-- want only 8801'}${res1.detail} | red before=${red} | ${steps.join(' | ')}`
+      + ` | stored 7702 is the other tab's (t0 kept)=${!!last.e7702 && last.e7702.t0 === t0b} | green after the focus=${green}`
+      + ` | lookups at the dropping pass=${last.n - n} | lookups of the other tab's tweets=${last.foreign}`});
+  },
+
+  // T2, D2: toasts that come while the tab is hidden wait; once it is visible they show one after
+  // another, each for its full time (8 s with a link, 4 s without). A toast raised while visible
+  // shows at once as before, and one on screen when the tab is hidden keeps its timer.
+  async d11_hidden_toasts(browser, v) {
+    const r = await setup(browser, {profile: Object.assign({}, SCROLL.ANON, {enable_safe_mode: true})});
+    await r.page.evaluate(() => {
+      // Menu commands by label: the Like toggle confirms with a toast, raised on demand below.
+      window.__menu = {};
+      window.GM_registerMenuCommand = (label, fn) => {
+        window.__menu[label] = fn;
+      };
+      // Every stretch a toast is on screen: text, from and to (ms since injection), hidden then.
+      window.__shown = [];
+      let cur = null;
+      setInterval(() => {
+        const t = document.querySelector('.xdsu-toast');
+        const text = t && t.classList.contains('xdsu-show') && getComputedStyle(t).display !== 'none' ? t.textContent : '';
+        const at = window.tNow();
+        if (cur && cur.text !== text) {
+          cur.to = at;
+          cur.hiddenAtEnd = document.hidden;
+          cur = null;
+        }
+        if (text && !cur) {
+          cur = {text, from: at, to: null, hidden: document.hidden};
+          window.__shown.push(cur);
+        }
+      }, 20);
+      window.setHidden(true);
+    });
+    await inject(r.page, v);
+    // Fixed: 3 s hidden; the account check answers after 50 ms, so both of its toasts are due long
+    // before the end.
+    await sleep(3000);
+    const tVis = await r.page.evaluate(() => {
+      window.setHidden(false);
+      return window.tNow();
+    });
+    // The k-th toast has come and gone.
+    const ended = (k) => window.__shown.length > k && window.__shown[k].to !== null;
+    const drained = await waitUntil(r.page, ended, 1, 15000);
+    const tLike = await r.page.evaluate(() => {
+      window.__menu['Like = re-check: on']();
+      return window.tNow();
+    });
+    const likeDone = await waitUntil(r.page, ended, 2, 6000);
+    const tLike2 = await r.page.evaluate(() => {
+      window.__menu['Like = re-check: on']();
+      return window.tNow();
+    });
+    await sleep(500);
+    await r.page.evaluate(() => window.setHidden(true));
+    const hiddenDone = await waitUntil(r.page, ended, 3, 6000);
+    // Fixed: 1 s in which no further toast may appear.
+    await sleep(1000);
+    const s = await r.page.evaluate(() => window.__shown);
+    const len = (x) => (x && x.to !== null ? x.to - x.from : null);
+    const near = (x, want) => x !== null && Math.abs(x - want) <= 400;
+    const want = [
+      [LOGIN_TEXT, tVis, 8000],
+      [SAFE_TEXT, s[0] ? s[0].to : null, 4000],
+      ['Like no longer re-checks the tweet', tLike, 4000],
+      ['Like now re-checks the tweet', tLike2, 4000],
+    ];
+    const rows = s.map((x) => `${x.from}-${x.to}${x.hidden ? ' (hidden)' : ''}${x.hiddenAtEnd ? ' (ended hidden)' : ''}: ${x.text}`);
+    const good = drained && likeDone && hiddenDone && s.length === 4 && want.every(([text, start, ms], i) => s[i].text === text
+      && !s[i].hidden && start !== null && s[i].from - start >= 0 && s[i].from - start <= 200 && near(len(s[i]), ms))
+      && s[3].hiddenAtEnd;
+    return fin(r, {pass: good, detail: `hidden until ${tVis} ms; Like toggled at ${tLike} and ${tLike2} ms, hidden again 0.5 s`
+      + ` after the second | toasts on screen: ${JSON.stringify(rows)} | lengths ${JSON.stringify(s.map(len))}`});
+  },
+
+  // T2: a focus retries lookups that failed with a network error and are waiting out their
+  // back-off (30 s), with the tab visible throughout: a browser check may have been passed in the
+  // other window. The mouse coming back does not retry. Nothing is watched, so neither signal has a
+  // re-check to run.
+  async d12_focus_retry(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      const answer = window.__responder;
+      window.__responder = (u) => (!window.__healthy && u.includes('status/7801') ? {error: true} : answer(u));
+      window.addBig('7801', 'FT1');
+    });
+    await inject(r.page, v);
+    // The lookup fails, is retried once 1.5 s later, fails again and waits out its back-off.
+    const blue = await waitUntil(r.page, () => window.seg('7801') && window.seg('7801').dataset.state === 'error'
+      && window.__inflight === 0, null, 6000);
+    const count = () => r.page.evaluate(() => window.lookups('status/7801').length);
+    const n0 = await count();
+    await r.page.evaluate(() => {
+      window.__healthy = true;
+      window.enter('mouse');
+    });
+    // Fixed: 1.5 s in which the pointer must not retry.
+    await sleep(1500);
+    const n1 = await count();
+    const t0 = Date.now();
+    await r.page.evaluate(() => window.focusWin());
+    const sent = await waitUntil(r.page, (n) => window.lookups('status/7801').length > n, n1, 2000);
+    const msSent = Date.now() - t0;
+    const red = sent && await waitUntil(r.page, () => window.seg('7801').dataset.state === 'missing', null, 3000);
+    const s = await r.page.evaluate(() => ({vis: window.__visEvents, hidden: window.__reqLog.some((x) => x.hidden)}));
+    return fin(r, {pass: blue && n0 === 2 && n1 === n0 && sent && red && s.vis === 0 && !s.hidden,
+      detail: `failed (blue) after ${n0} lookups=${blue} | mouse enter: lookups ${n0}->${n1}`
+        + ` | focus: retry ${sent ? 'after ' + msSent + ' ms' : 'NOT sent within 2 s'}, ${red ? 'red' : 'not red'}`
+        + ` | visibilitychange=${s.vis} sent while hidden=${s.hidden}`});
+  },
+
+  // T2: a focus retries failed lookups and lifts a queue pause at most once per RETURN_GAP_MS
+  // (15 s); a visibilitychange always does, and counts as the last retry. Otherwise, while Danbooru
+  // refuses, every focus change would send a request that fails again and cancel the pause meant
+  // to back off. The script measures the gap with Date.now, so the scenario steps Date.now forward
+  // (__dnOff) instead of waiting. Nothing is watched, so no focus has a re-check pass to run.
+  // A: network errors. One retry is one batch, which runBatch repeats once 1.5 s later for a
+  // network error, so 2 requests. B: 429, which pauses the queue for 60 s with the key still
+  // queued; lifting the pause sends it once more. C: a tab switch with a lookup that is refused
+  // (403): visibilitychange and focus together, and focus after the visibilitychange's retry has
+  // been answered. In the first, focus finds the retried lookup already queued, so even a focus
+  // without the gap sends nothing more there; the second tells the two apart.
+  async d13_focus_retry_gap(browser, v) {
+    // A focus, Date.now stepped by dn first; returns the Date.now offset from the page's first focus.
+    const focusAt = (page, dn) => page.evaluate((dn) => {
+      window.__dnOff += dn;
+      const t = Date.now();
+      if (window.__f0 === undefined) {
+        window.__f0 = t;
+      }
+      window.focusWin();
+      return t - window.__f0;
+    }, dn);
+    const count = (page, id) => page.evaluate((id) => window.lookups(`status/${id}`).length, id);
+    const failing = (id, answer) => (page) => page.evaluate(([id, answer]) => {
+      const db = window.__responder;
+      window.__responder = (u) => (u.includes(`status/${id}`) ? answer : db(u));
+      window.addBig(id, 'RG' + id);
+    }, [id, answer]);
+    let ok = true;
+    const rows = [];
+    const errs = [];
+    // Runs a list of [Date.now step, requests wanted] focuses; done(id) says a round has answered.
+    const focuses = async (page, id, plan, settle) => {
+      const out = [];
+      for (const [dn, want] of plan) {
+        const b = await count(page, id);
+        const at = await focusAt(page, dn);
+        if (want) {
+          await waitUntil(page, settle, [id, b + want], 5000);
+          // Fixed: 0.3 s in which no further request may follow.
+          await sleep(300);
+        } else {
+          // Fixed: long enough for a retry (0.25 s flush, 1.5 s repeat of a network error).
+          await sleep(2500);
+        }
+        const got = (await count(page, id)) - b;
+        ok = ok && got === want;
+        out.push(`focus at +${(at / 1000).toFixed(1)} s: ${got}${got === want ? '' : ' <-- want ' + want}`);
+      }
+      return out.join(', ');
+    };
+
+    const a = await setup(browser);
+    await failing('7901', {error: true})(a.page);
+    await inject(a.page, v);
+    const errIdle = (id) => window.seg(id) && window.seg(id).dataset.state === 'error' && window.__inflight === 0;
+    const aBlue = await waitUntil(a.page, errIdle, '7901', 6000);
+    const aRows = await focuses(a.page, '7901', [[0, 2], [0, 0], [16000, 2]], ([id, n]) => window.lookups(`status/${id}`).length >= n
+      && window.__inflight === 0 && window.seg(id).dataset.state === 'error');
+    ok = ok && aBlue;
+    rows.push(`A network error (failed=${aBlue}): ${aRows}`);
+    errs.push((await fin(a, {pass: true, detail: ''})).detail);
+
+    const b = await setup(browser);
+    await failing('7911', {status: 429, body: ''})(b.page);
+    await inject(b.page, v);
+    const paused = await waitUntil(b.page, (id) => window.lookups(`status/${id}`).length === 1 && window.__inflight === 0, '7911', 4000);
+    const bRows = await focuses(b.page, '7911', [[0, 1], [2000, 0], [16000, 1]], ([id, n]) => window.lookups(`status/${id}`).length >= n
+      && window.__inflight === 0);
+    ok = ok && paused;
+    rows.push(`B 429 (paused=${paused}): ${bRows}`);
+    errs.push((await fin(b, {pass: true, detail: ''})).detail);
+
+    const c = await setup(browser);
+    await failing('7921', {status: 403, body: ''})(c.page);
+    await inject(c.page, v);
+    const cBlue = await waitUntil(c.page, errIdle, '7921', 4000);
+    const answered = ([id, n]) => window.lookups(`status/${id}`).length >= n && window.__inflight === 0
+      && window.seg(id).dataset.state === 'error';
+    let n = await count(c.page, '7921');
+    await c.page.evaluate(() => {
+      window.setHidden(true);
+      window.__dnOff += 16000;
+      window.setHidden(false);
+      window.focusWin();
+    });
+    await waitUntil(c.page, answered, ['7921', n + 1], 3000);
+    // Fixed: 1.5 s in which no second request may follow.
+    await sleep(1500);
+    const together = (await count(c.page, '7921')) - n;
+    n = await count(c.page, '7921');
+    await c.page.evaluate(() => {
+      window.setHidden(true);
+      window.__dnOff += 16000;
+      window.setHidden(false);
+    });
+    await waitUntil(c.page, answered, ['7921', n + 1], 3000);
+    await c.page.evaluate(() => window.focusWin());
+    // Fixed: 1.5 s for a request the focus must not send.
+    await sleep(1500);
+    const after = (await count(c.page, '7921')) - n;
+    ok = ok && cBlue && together === 1 && after === 1;
+    rows.push(`C 403 tab switch (failed=${cBlue}): visibilitychange + focus together: ${together}${together === 1 ? '' : ' <-- want 1'},`
+      + ` focus after the visibilitychange's retry was answered: ${after}${after === 1 ? '' : ' <-- want 1'}`);
+    return fin(c, {pass: ok && errs.every((e) => !e), detail: `requests per focus: ${rows.join(' | ')}${errs.join('')}`});
   },
 };
 

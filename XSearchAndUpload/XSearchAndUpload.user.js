@@ -163,9 +163,19 @@
   // Tiles lower than this keep the small button so it does not cover the photo
   // link.
   const SMALL_TILE_PX = 120;
+  // A tweet opened for upload is watched until its post count rises, for at
+  // most WATCH_MAX_AGE_MS, and for at most WATCH_MAX_CHECKS lookups started by
+  // the re-checks.
   const WATCH_MAX_AGE_MS = 30 * 60 * 1000;
+  const WATCH_MAX_CHECKS = 12;
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
+  // A return noticed while the tab stayed visible (window focus, the mouse
+  // entering the page) re-checks only if no re-check ran for this long. A focus
+  // likewise retries failed lookups and lifts a queue pause only if no return
+  // did so for this long. Focus changes and the mouse crossing the window edge
+  // are frequent on a desktop.
+  const RETURN_GAP_MS = 15000;
   // Bottom offset of the toast, above X's bottom navigation. Raise it while
   // another fixed control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
@@ -618,11 +628,15 @@
   const toastQueue = [];
   const toastReasons = new Set();
   let toastEl = null;
+  // Whether toastQueue[0] is on screen. A toast stays queued, unshown, while
+  // the tab is hidden.
+  let toastShown = false;
 
   /**
    * Shows a short message in the bottom-left corner. A toast with a url opens
    * it when tapped and stays 8 s; any other toast lets taps through to the page
-   * and stays 4 s.
+   * and stays 4 s. Toasts show one after another, and only while the tab is
+   * visible: one that comes while it is hidden waits for the return.
    * @param {string} text
    * @param {{reason: (?string|undefined), url: (?string|undefined)}=} options
    *     A toast with a reason (an automatic one) shows at most once per
@@ -636,15 +650,17 @@
       toastReasons.add(reason);
     }
     toastQueue.push({text, url});
-    if (toastQueue.length === 1) {
-      showNextToast();
-    }
+    showNextToast();
   }
 
-  /** Shows the first queued toast, then the next one when it ends. */
+  /**
+   * Shows the first queued toast, then the next one when it ends. Does nothing
+   * while a toast is on screen or the tab is hidden; becoming visible calls it
+   * again.
+   */
   function showNextToast() {
     const t = toastQueue[0];
-    if (!t) {
+    if (!t || toastShown || document.hidden) {
       return;
     }
     if (!toastEl) {
@@ -678,9 +694,12 @@
     toastEl.classList.toggle('xdsu-action', !!t.url);
     toastEl.classList.toggle('xdsu-above-pill', !!pillEl);
     toastEl.classList.add('xdsu-show');
+    toastShown = true;
+    // Runs on even if the tab is hidden meanwhile.
     setTimeout(() => {
       toastEl.classList.remove('xdsu-show');
       toastQueue.shift();
+      toastShown = false;
       showNextToast();
     }, t.url ? 8000 : 4000);
   }
@@ -748,10 +767,12 @@
   /** @const {!Array<!ImageRef>} Every tracked tile. */
   const imageRefs = [];
 
-  // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the
-  // upload was opened. Stored so that it survives Firefox discarding and
-  // reloading the X tab.
-  const watch = new Map((() => {
+  /**
+   * Reads the stored watch list, which every X tab shares.
+   * @return {!Array<!Array<?>>} The [tweetId, {t0, n0}] pairs that are well
+   *     formed and not older than WATCH_MAX_AGE_MS.
+   */
+  function readStoredWatch() {
     try {
       const saved = JSON.parse(GM_getValue('watch', '[]'));
       return (Array.isArray(saved) ? saved : []).filter(
@@ -761,13 +782,31 @@
     } catch {
       return [];
     }
-  })());
-
-  /** Stores the watch list. */
-  function saveWatch() {
-    GM_setValue('watch', JSON.stringify([...watch]));
   }
-  saveWatch();
+
+  /**
+   * Reads the stored watch list, applies one change and writes it back, so the
+   * entries other tabs stored meanwhile are kept. Expired and malformed entries
+   * are dropped on the way.
+   * @param {function(!Map<string, {t0: number, n0: number}>)} change Changes
+   *     the stored entries in place.
+   */
+  function updateStoredWatch(change) {
+    const stored = new Map(readStoredWatch());
+    change(stored);
+    GM_setValue('watch', JSON.stringify([...stored]));
+  }
+
+  // Tweets opened for upload: tweetId -> {t0, n0, checks}, n0 = posts known
+  // when the upload was opened, checks = lookups the re-checks started for it.
+  // {t0, n0} is stored too, so that the list survives the browser discarding
+  // and reloading the X tab; checks is kept in this tab only. This map is this
+  // tab's own view: it starts from the stored list and changes only through
+  // this tab, which writes each change to the store entry by entry.
+  const watch = new Map(readStoredWatch().map(
+      ([id, w]) => [id, {t0: w.t0, n0: w.n0, checks: 0}]));
+  // Prunes the expired entries from the store, whichever tab wrote them.
+  updateStoredWatch(() => {});
 
   // -------------- DOM scan --------------
 
@@ -1132,10 +1171,12 @@
       console.error('[XDSU] open tab failed', e);
       window.open(url, '_blank', 'noopener');
     }
-    // Extra re-check trigger; the return to this tab (visibilitychange) is the
-    // main one.
+    // Extra re-check trigger; the return to this tab (visibilitychange, window
+    // focus, the mouse coming back) is the main one.
     if (tab) {
-      tab.onclose = () => refreshTweetStatus(tweetId);
+      tab.onclose = () => {
+        refreshTweetStatus(tweetId);
+      };
     }
   }
 
@@ -1266,7 +1307,8 @@
   }
 
   /**
-   * Lifts a pause and runs the queue now (on 'online', on return to the tab).
+   * Lifts a pause and runs the queue now (on 'online', on return to the tab or
+   * window).
    */
   function resumeQueue() {
     pausedUntil = 0;
@@ -2244,6 +2286,9 @@
    * Drops the cached result of a tweet and queries it again. The segments keep
    * showing the old result while the query runs (see applyColors).
    * @param {string} tweetId
+   * @return {boolean} Whether a lookup was queued: false when the tweet has no
+   *     segment in the page, a lookup of it is pending, or it was refreshed
+   *     less than REFRESH_DEBOUNCE_MS ago.
    */
   function refreshTweetStatus(tweetId) {
     const refs = imageRefs.filter(
@@ -2251,11 +2296,11 @@
     // Nothing on screen to update (e.g. a text-only tweet), or a lookup is
     // already running.
     if (!refs.length || isLookupPending(tweetId)) {
-      return;
+      return false;
     }
     const now = Date.now();
     if ((lastRefresh[tweetId] || 0) > now - REFRESH_DEBOUNCE_MS) {
-      return;
+      return false;
     }
     lastRefresh[tweetId] = now;
     delete tweetCache[tweetId];
@@ -2270,6 +2315,7 @@
     // New posts are searchable at once, so there is no delay before the query.
     enqueueTweetIdSearch(tweetId);
     applyColors();
+    return true;
   }
 
   /**
@@ -2288,20 +2334,67 @@
   }
 
   /**
-   * Remembers a tweet opened for upload, so it is re-checked on return.
+   * Remembers a tweet opened for upload, so it is re-checked on return. A tweet
+   * already watched starts afresh.
    * @param {string} tweetId
    */
   function watchTweet(tweetId) {
-    watch.set(tweetId, {t0: Date.now(), n0: knownPostCount(tweetId)});
-    saveWatch();
+    const t0 = Date.now();
+    const n0 = knownPostCount(tweetId);
+    watch.set(tweetId, {t0, n0, checks: 0});
+    updateStoredWatch((stored) => stored.set(tweetId, {t0, n0}));
   }
 
-  // One round of re-checks for the watched tweets. Step 0 runs when the tab
-  // becomes visible, the next steps follow on a single timer; an entry is
-  // dropped once its post count rose, after 30 minutes, or after the last step.
+  // Re-checks of the watched tweets come in passes. A return to the tab
+  // (visibilitychange, pageshow) starts a ladder: a pass at once, then one
+  // after each of RECHECK_DELAYS_MS on a single timer while the tab stays
+  // visible. A return noticed while the tab stayed visible runs a single pass
+  // (onVisibleReturn). An entry is dropped once its post count rose, after
+  // WATCH_MAX_AGE_MS, or once the passes queued WATCH_MAX_CHECKS lookups for
+  // it. The end of a ladder does not drop it, so a later return checks it
+  // again.
   let recheckTimer = null;
+  let lastPassAt = 0;
+
   /**
-   * Runs one round of re-checks for the watched tweets.
+   * Re-checks every watched tweet once and drops the entries that are done,
+   * here and in the store.
+   */
+  function recheckPass() {
+    if (!watch.size) {
+      return;
+    }
+    const now = Date.now();
+    lastPassAt = now;
+    const dropped = [];
+    for (const [id, w] of watch) {
+      let done = now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0;
+      // Only a queued lookup counts. None is queued while the tweet is not
+      // mounted, while it is being looked up, or right after a refresh.
+      if (!done && refreshTweetStatus(id)) {
+        w.checks++;
+        done = w.checks >= WATCH_MAX_CHECKS;
+      }
+      if (done) {
+        watch.delete(id);
+        dropped.push([id, w.t0]);
+      }
+    }
+    if (dropped.length) {
+      // An entry another tab stored for the same tweet since (another t0)
+      // stays.
+      updateStoredWatch((stored) => dropped.forEach(([id, t0]) => {
+        const s = stored.get(id);
+        if (s && s.t0 === t0) {
+          stored.delete(id);
+        }
+      }));
+    }
+  }
+
+  /**
+   * One step of the ladder: a pass, then the timer for the next step unless
+   * this was the last step or nothing is left to watch.
    * @param {number} step 0 when the tab becomes visible; later steps follow on
    *     the timer.
    */
@@ -2310,29 +2403,29 @@
     if (document.hidden) {
       return;
     }
-    const now = Date.now();
-    const sizeBefore = watch.size;
-    for (const [id, w] of watch) {
-      if (now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0) {
-        watch.delete(id);
-        continue;
-      }
-      refreshTweetStatus(id);
-      if (step >= RECHECK_DELAYS_MS.length) {
-        watch.delete(id);
-      }
-    }
-    if (watch.size !== sizeBefore) {
-      saveWatch();
-    }
-    if (watch.size) {
+    recheckPass();
+    if (watch.size && step < RECHECK_DELAYS_MS.length) {
       recheckTimer = setTimeout(
           () => recheckWatched(step + 1), RECHECK_DELAYS_MS[step]);
     }
   }
 
+  /**
+   * Runs one pass when the user comes back to a tab that stayed visible: the
+   * window gets the focus back, or the mouse comes back over the page. Skipped
+   * within RETURN_GAP_MS of the last pass of any kind; a running ladder goes on
+   * unchanged.
+   */
+  function onVisibleReturn() {
+    if (document.hidden || !watch.size ||
+        Date.now() - lastPassAt < RETURN_GAP_MS) {
+      return;
+    }
+    recheckPass();
+  }
+
   let lastReturnAt = 0;
-  /** Starts a round of re-checks when the user comes back to the tab. */
+  /** Starts a ladder of re-checks when the tab becomes visible again. */
   function onReturn() {
     const now = Date.now();
     // A bfcache restore fires both pageshow and visibilitychange.
@@ -2473,11 +2566,16 @@
   // that doesn't manifest as a DOM addition.
   setInterval(scheduleScan, POLL_INTERVAL_MS);
 
+  // When a return last retried failed lookups and lifted a queue pause
+  // (visibilitychange, focus).
+  let lastRetryAt = 0;
+
   // Every visibility change cancels the pending re-check; becoming visible
-  // re-scans and starts a new round of re-checks. A return to the tab also
-  // retries failed lookups at once and checks the account again when it was
-  // logged out, the last check is old, or lookups failed in a way that logging
-  // in or a Cloudflare check in another tab can fix.
+  // re-scans, starts a new ladder of re-checks and shows the toasts that waited
+  // while the tab was hidden. A return to the tab also retries failed lookups
+  // at once (always, whatever lastRetryAt says) and checks the account again
+  // when it was logged out, the last check is old, or lookups failed in a way
+  // that logging in or a Cloudflare check in another tab can fix.
   document.addEventListener('visibilitychange', () => {
     clearTimeout(recheckTimer);
     recheckTimer = null;
@@ -2490,11 +2588,39 @@
               (cache) => Object.values(cache).some(needsAccount));
       retryFailed(['network', 'server', 'blocked']);
       resumeQueue();
+      lastRetryAt = Date.now();
       if (recheckProfile) {
         requestProfileCheck();
       }
       scheduleScan();
       onReturn();
+      showNextToast();
+    }
+  });
+  // Returns that leave the tab visible: the window gets the focus back (a click
+  // into it, Alt+Tab), or the mouse comes back over the page (an upload posted
+  // in a window on another screen). Each runs one re-check pass, not a ladder.
+  // The focus also retries failed lookups and lifts a queue pause, as a return
+  // to the tab does (a browser check may have been passed in the other
+  // window), but at most once per RETURN_GAP_MS: focus changes are frequent,
+  // and while Danbooru refuses, each retry fails again and pauses anew. A tab
+  // switch fires both visibilitychange and focus; when the focus comes second,
+  // its retry and its pass fall within RETURN_GAP_MS, so it sends nothing.
+  window.addEventListener('focus', () => {
+    if (document.hidden) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastRetryAt >= RETURN_GAP_MS) {
+      lastRetryAt = now;
+      retryFailed(['network', 'server', 'blocked']);
+      resumeQueue();
+    }
+    onVisibleReturn();
+  });
+  document.documentElement.addEventListener('pointerenter', (ev) => {
+    if (ev.pointerType === 'mouse') {
+      onVisibleReturn();
     }
   });
   window.addEventListener('pageshow', (ev) => {
