@@ -32,8 +32,8 @@ async function inject(page, v, {expose = false} = {}) {
   await page.addScriptTag({content: src});
 }
 
-async function setup(browser, {store = {}, profile = MEMBER, urlPath = '/home', online = true} = {}) {
-  const r = await newPage(browser, {store, urlPath});
+async function setup(browser, {store = {}, profile = MEMBER, urlPath = '/home', online = true, ctxOpts = {}} = {}) {
+  const r = await newPage(browser, {store, urlPath, ctxOpts});
   r.popups = [];
   r.ctx.on('page', (p) => r.popups.push(p.url()));
   await r.page.evaluate(([profile, online]) => {
@@ -139,9 +139,10 @@ const TWEET_H = 300;
 const AHEAD = 1600;
 
 // Builds the feed page: tweets ~300 px high, pre-rendered until AHEAD px below the viewport,
-// never unmounted. Helpers: visIds(), unresolvedVisible(), tweetTop(i), reqIds(rec), timers.
-async function feed(browser, {delay = 800, inner = false} = {}) {
-  const r = await setup(browser);
+// never unmounted. Helpers: visIds(), unresolvedVisible(), tweetTop(i), reqIds(rec), timers,
+// waitIdle(). ctxOpts and profile go to setup (run_desktop.js uses them).
+async function feed(browser, {delay = 800, inner = false, ctxOpts = {}, profile = MEMBER} = {}) {
+  const r = await setup(browser, {ctxOpts, profile});
   await r.page.evaluate(([N, H, AHEAD, delay, inner]) => {
     window.__responder = () => ({body: '[]', delay});
     document.body.style.margin = '0';
@@ -220,6 +221,21 @@ async function feed(browser, {delay = 800, inner = false} = {}) {
         }
       }, 20);
     });
+    // Waits until nothing is in flight and nothing was sent or answered for quietMs (longer than the
+    // 200 ms scroll check + 250 ms flush debounce, so a flush about to start is not missed), at most
+    // maxMs. Returns ok, ms waited and t (ms since injection).
+    window.waitIdle = (quietMs, maxMs) => new Promise((res) => {
+      const t0 = performance.now();
+      const iv = setInterval(() => {
+        const now = Math.round(performance.now() - (window.__t0 || 0));
+        const last = Math.max(0, ...window.__log.map((x) => (x.done === null ? now : Math.max(x.t, x.done))));
+        const ok = window.__inflight === 0 && now - last >= quietMs;
+        if (ok || performance.now() - t0 > maxMs) {
+          clearInterval(iv);
+          res({ok, ms: Math.round(performance.now() - t0), t: now});
+        }
+      }, 20);
+    });
   }, [FEED_N, TWEET_H, AHEAD, delay, inner]);
   return r;
 }
@@ -227,9 +243,13 @@ async function feed(browser, {delay = 800, inner = false} = {}) {
 const tweetLog = (page) => page.evaluate(() => window.reqs('tweet').map((x) => `${x.t}:[${window.reqIds(x).join(',')}]`));
 const idsRequested = (page) => page.evaluate(() => [...new Set(window.reqs('tweet').flatMap((x) => window.reqIds(x)))].sort((a, b) => a - b));
 
-// Scroll fast from the top to tweet 30 in 1.5 s, stop, measure.
-async function fastStop(browser, v, inner = false) {
-  const r = await feed(browser, {inner});
+// Scroll fast from the top to tweet 30 in 1.5 s, stop, measure. opts: ctxOpts and profile for the
+// feed, beforeInject(page) to instrument it (run_desktop.js).
+async function fastStop(browser, v, inner = false, {ctxOpts = {}, profile = MEMBER, beforeInject = null} = {}) {
+  const r = await feed(browser, {inner, ctxOpts, profile});
+  if (beforeInject) {
+    await beforeInject(r.page);
+  }
   await inject(r.page, v);
   await sleep(1000);
   const before = await r.page.evaluate(() => window.__log.length);
@@ -282,9 +302,13 @@ const SC = {
       + ` resolved in ${m.ms} ms with ${m.sent} requests ${JSON.stringify(m.reqs)}`);
   },
   // With only out-of-range keys queued: no repeating 250 ms timer and no requests for 6 s.
+  // The window opens once the lookups in range of the stop are done (nothing in flight, nothing sent
+  // for 600 ms); a queue still sending 15 s after the stop fails. The 6 s are a fixed observation
+  // window: nothing may happen in it. Grey segments (keys queued out of range) must exist throughout,
+  // or "no requests" would prove nothing.
   async f3_no_spin(browser, v) {
     const {r} = await fastStop(browser, v);
-    await sleep(4000);
+    const idle = await r.page.evaluate(() => window.waitIdle(600, 15000));
     const s0 = await r.page.evaluate(() => ({n: window.__log.length, t: window.__timers.length, inflight: window.__inflight,
       grey: [...document.querySelectorAll('.xdsu-bar-seg')].filter((s) => window.segColor(s) === 'rgb(154, 154, 154)').length}));
     await sleep(6000);
@@ -292,8 +316,10 @@ const SC = {
       timers: window.__timers.slice(t), grey: [...document.querySelectorAll('.xdsu-bar-seg')]
         .filter((s) => window.segColor(s) === 'rgb(154, 154, 154)').length}), [s0.n, s0.t]);
     const t250 = s1.timers.filter((x) => x[1] === 250).length;
-    const pass = s0.inflight === 0 && s1.n === 0 && t250 === 0;
-    return fin(r, pass, `grey (queued, out of range)=${s0.grey}; over 6 s: requests=${s1.n} 250 ms timers=${t250}`
+    const pass = idle.ok && s0.inflight === 0 && s0.grey > 0 && s1.grey > 0 && s1.n === 0 && t250 === 0;
+    return fin(r, pass, `queue idle ${idle.ok ? '' : 'NOT '}reached ${idle.ms} ms after the visible tweets resolved`
+      + ` (window opens at ${idle.t} ms); grey (queued, out of range) at start=${s0.grey} end=${s1.grey};`
+      + ` over 6 s: requests=${s1.n} 250 ms timers=${t250}`
       + ` all timers=${JSON.stringify(s1.timers.map((x) => x[1]).reduce((o, ms) => Object.assign(o, {[ms]: (o[ms] || 0) + 1}), {}))}`);
   },
   // Slow continuous scroll (one tweet per second) for 25 s: bars resolve as they come into view.
@@ -381,22 +407,27 @@ const SC = {
   },
 };
 
-(async () => {
-  const browser = await chromium.launch();
-  for (const v of variants) {
-    console.log(`\n===== ${v} =====`);
-    for (const [name, fn] of Object.entries(SC)) {
-      if (only && !only.includes(name)) {
-        continue;
-      }
-      const t0 = Date.now();
-      try {
-        const r = await fn(browser, v);
-        console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
-      } catch (e) {
-        console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);
+// For run_desktop.js. Requiring this file does not run its scenarios.
+module.exports = {setup, feed, fastStop, ANON, MEMBER, GOLD};
+
+if (require.main === module) {
+  (async () => {
+    const browser = await chromium.launch();
+    for (const v of variants) {
+      console.log(`\n===== ${v} =====`);
+      for (const [name, fn] of Object.entries(SC)) {
+        if (only && !only.includes(name)) {
+          continue;
+        }
+        const t0 = Date.now();
+        try {
+          const r = await fn(browser, v);
+          console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
+        } catch (e) {
+          console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);
+        }
       }
     }
-  }
-  await browser.close();
-})();
+    await browser.close();
+  })();
+}

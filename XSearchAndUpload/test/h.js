@@ -1,5 +1,6 @@
 // Shared harness: Playwright Chromium with a phone viewport and touch, stub GM_* functions
 // (the request stub answers with whatever window.__responder returns), synthetic tweets.
+// newPage(browser, {ctxOpts: DESKTOP}) gives a desktop browser instead (mouse, no touch).
 const {chromium} = require('playwright');
 const fs = require('fs');
 const path = require('path');
@@ -20,8 +21,14 @@ function loadScript(variant) {
   return readScript(variant);
 }
 
+// Context profiles for newPage's ctxOpts. PHONE is the default. The desktop ones have no touch,
+// so (pointer: fine) and (hover: hover) match.
+const PHONE = {viewport: {width: 360, height: 800}, hasTouch: true, isMobile: true};
+const DESKTOP = {viewport: {width: 1280, height: 800}, hasTouch: false, isMobile: false};
+const DESKTOP_WIDE = {viewport: {width: 1920, height: 1080}, hasTouch: false, isMobile: false};
+
 async function newPage(browser, {urlPath = '/home', store = {}, ctxOpts = {}} = {}) {
-  const ctx = await browser.newContext(Object.assign({viewport: {width: 360, height: 800}, hasTouch: true, isMobile: true}, ctxOpts));
+  const ctx = await browser.newContext(Object.assign({}, PHONE, ctxOpts));
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
@@ -56,9 +63,12 @@ async function newPage(browser, {urlPath = '/home', store = {}, ctxOpts = {}} = 
       document.head.appendChild(s);
     };
     window.GM_getResourceURL = () => 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    // __opened: the URLs. __openedOpts: {url, opts} per call in the same order, opts copied.
     window.__opened = [];
+    window.__openedOpts = [];
     window.GM_openInTab = (u, o) => {
       window.__opened.push(u);
+      window.__openedOpts.push({url: u, opts: o ? Object.assign({}, o) : null});
     };
     window.__responder = null;
     // /profile.json answers a logged-in Member by default. __profile may be an object,
@@ -170,4 +180,4 @@ async function colors(page) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = {chromium, newPage, inject, state, colors, sleep, NAMES};
+module.exports = {chromium, newPage, inject, state, colors, sleep, NAMES, PHONE, DESKTOP, DESKTOP_WIDE};
