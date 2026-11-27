@@ -219,6 +219,7 @@
       --xdsu-missing: #e53935;
       --xdsu-error: #5b6cff;
       --xdsu-searching: #767676;
+      --xdsu-focus: #5b6cff;
     }
     .xdsu-bar {
       display: flex;
@@ -411,6 +412,25 @@
     .xdsu-pill[data-state="error"] { border: 2px dashed var(--xdsu-error); }
     .xdsu-pill[data-state="searching"] { cursor: default; }
     .xdsu-pill.xdsu-rechecking { opacity: 0.7; }
+    /* A checking segment does nothing when tapped. */
+    .xdsu-bar-seg[data-state="searching"] { cursor: default; }
+    /* Mouse: the segment under the pointer lights up (a filter, so nothing
+       moves and the tap area stays as it is); the viewer button darkens like
+       the tile's. */
+    @media (hover: hover) and (pointer: fine) {
+      .xdsu-bar-seg:not([data-state="searching"]):hover {
+        filter: brightness(1.35);
+      }
+      .xdsu-pill:hover { background-color: rgba(0,0,0,0.78); }
+    }
+    /* Keyboard: a focus ring on the controls that take the focus (segments
+       that link to a post, the upload buttons, the viewer button). */
+    .xdsu-bar-seg:focus-visible,
+    .xdsu-upload-btn:focus-visible,
+    .xdsu-pill:focus-visible {
+      outline: 2px solid var(--xdsu-focus);
+      outline-offset: 2px;
+    }
   `);
 
   // -------------- helpers --------------
@@ -1006,7 +1026,14 @@
       seg.addEventListener('click', onSegmentClick);
       seg.addEventListener('auxclick', onSegmentClick);
       // Keeps x.com's tweet link from reacting to the press.
-      seg.addEventListener('mousedown', (ev) => ev.stopPropagation());
+      // A middle press is cancelled too: on a segment without a link (not
+      // posted, failed) it would start the browser's autoscroll.
+      seg.addEventListener('mousedown', (ev) => {
+        ev.stopPropagation();
+        if (ev.button === 1) {
+          ev.preventDefault();
+        }
+      });
       bar.appendChild(seg);
     }
     // Trim excess (e.g. if the tweet was edited to fewer images).
@@ -1178,6 +1205,16 @@
   }
 
   /**
+   * @param {!MouseEvent} ev The tap or click that opens a tab.
+   * @return {boolean} Whether the tab opens in front: a tap or a plain left
+   *     click. A middle click, or a click with Ctrl or Command held, opens it
+   *     behind, as for a link.
+   */
+  function opensInFront(ev) {
+    return ev.button === 0 && !ev.ctrlKey && !ev.metaKey;
+  }
+
+  /**
    * Opens an upload tab and watches the tweet, so it is checked again on the
    * return to this tab.
    * @param {!Event} ev The tap.
@@ -1189,7 +1226,7 @@
     let tab = null;
     try {
       tab = GM_openInTab(url, {
-        active: ev.button === 0 && !ev.ctrlKey,
+        active: opensInFront(ev),
         setParent: true,
       });
     } catch (e) {
@@ -2046,7 +2083,7 @@
     ref.openedAt = now;
     try {
       GM_openInTab(url, {
-        active: ev.button === 0 && !ev.ctrlKey,
+        active: opensInFront(ev),
         setParent: true,
       });
     } catch (e) {

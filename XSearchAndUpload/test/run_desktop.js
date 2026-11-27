@@ -3,7 +3,7 @@
 // A scenario in KNOWN_GAPS documents behaviour that a later task adds. While the behaviour is
 // missing it prints GAP (run_all.js counts it apart from PASS and FAIL); once it is there it prints
 // FAIL until the entry is removed, so the scenario becomes an ordinary one with that task.
-const {chromium, newPage, inject, sleep, DESKTOP, DESKTOP_WIDE} = require('./h.js');
+const {chromium, newPage, inject, sleep, PHONE, DESKTOP, DESKTOP_WIDE} = require('./h.js');
 const SCROLL = require('./run_scroll.js');
 const {readScript} = require('./script.js');
 
@@ -177,10 +177,11 @@ async function centre(page, sel) {
 
 // One real mouse click of a kind: left, ctrl (Ctrl + left), middle, right.
 async function mouseClick(page, p, kind) {
-  if (kind === 'ctrl') {
-    await page.keyboard.down('Control');
+  if (kind === 'ctrl' || kind === 'meta') {
+    const key = kind === 'ctrl' ? 'Control' : 'Meta';
+    await page.keyboard.down(key);
     await page.mouse.click(p.x, p.y);
-    await page.keyboard.up('Control');
+    await page.keyboard.up(key);
   } else {
     await page.mouse.click(p.x, p.y, {button: kind === 'left' ? 'left' : kind});
   }
@@ -1212,6 +1213,173 @@ const S = {
       + ` hashes ${kept.hashes} (want CT2: CT3's tile is gone), h800/h801 ${JSON.stringify(kept.hashEdge)},`
       + ` stale debounce stamp kept=${kept.oldStamp}, 8103 still watched=${kept.watched}, states ${kept.states}`
       + ` | 1000 more within the minute: ${within[0]}, a minute on: ${later[0]} (want 3400, then 2400)`});
+  },
+
+  // T4: with a mouse, the segment under the pointer lights up (filter: brightness) when tapping it
+  // does something (posted, partly posted, not posted, failed), and a checking segment keeps the
+  // default cursor; the viewer button darkens under the pointer like the tile's button. With the
+  // keyboard, the controls that take the focus show a focus ring. On a phone none of the hover
+  // rules apply.
+  async d16_hover_focus(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.__db.push(window.post(831, 'https://x.com/u/status/8201/photo/1'));
+      const answer = window.__responder;
+      window.__responder = (u) => {
+        if (u.includes('status/8203')) {
+          return {error: true};
+        }
+        if (u.includes('status/8204')) {
+          return {body: '[]', delay: 30000};
+        }
+        return answer(u);
+      };
+      window.addBig('8201', 'HF1');
+      window.addBig('8202', 'HF2');
+    });
+    await inject(r.page, v);
+    const state = (id) => r.page.evaluate((id) => window.seg(id) && window.seg(id).dataset.state, id);
+    // One at a time, so that the failing and the slow lookup hold up nothing else.
+    let ready = await waitUntil(r.page, () => !!window.seg('8201') && window.seg('8201').dataset.state === 'found'
+      && window.redIdle('8202', 'HF2'), null, 6000);
+    await r.page.evaluate(() => window.addBig('8203', 'HF3'));
+    ready = ready && await waitUntil(r.page, () => !!window.seg('8203') && window.seg('8203').dataset.state === 'error'
+      && window.__inflight === 0, null, 6000);
+    await r.page.evaluate(() => window.addBig('8204', 'HF4'));
+    ready = ready && await waitUntil(r.page, () => window.lookups('status/8204').length === 1, null, 3000);
+    if (!ready || await state('8204') !== 'searching') {
+      return fin(r, {pass: false, detail: `set-up: states ${JSON.stringify(await Promise.all(['8201', '8202', '8203', '8204'].map(state)))}`});
+    }
+    const look = (sel) => r.page.evaluate((sel) => {
+      const cs = getComputedStyle(document.querySelector(sel));
+      return {filter: cs.filter, cursor: cs.cursor, bg: cs.backgroundColor, outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`};
+    }, sel);
+    const hover = async (sel) => {
+      await r.page.mouse.move(5, 5);
+      const p = await centre(r.page, sel);
+      await r.page.mouse.move(p.x, p.y);
+      const on = await look(sel);
+      await r.page.mouse.move(5, 5);
+      const off = await look(sel);
+      return {on, off};
+    };
+    const rows = [];
+    let ok = true;
+    const want = {'8201': true, '8202': true, '8203': true, '8204': false};
+    for (const [id, lit] of Object.entries(want)) {
+      const h = await hover(`#t${id} .xdsu-bar-seg`);
+      const good = (lit ? h.on.filter === 'brightness(1.35)' && h.on.cursor === 'pointer'
+        : h.on.filter === 'none' && h.on.cursor === 'default') && h.off.filter === 'none';
+      ok = ok && good;
+      rows.push(`${id} ${await state(id)}: hovered filter=${h.on.filter} cursor=${h.on.cursor}, after=${h.off.filter}${good ? '' : ' <-- wrong'}`);
+    }
+    // Keyboard: Tab until the control has the focus (at most 40 presses), then read its outline.
+    const ring = async (sel) => {
+      for (let i = 0; i < 40; i++) {
+        if (await r.page.evaluate((sel) => document.activeElement && document.activeElement.matches(sel), sel)) {
+          return (await look(sel)).outline;
+        }
+        await r.page.keyboard.press('Tab');
+      }
+      return 'never focused';
+    };
+    const RING = 'solid 2px rgb(91, 108, 255)';
+    const segRing = await ring('#t8201 .xdsu-bar-seg');
+    const btnRing = await ring('#t8202 .xdsu-upload-btn');
+    // The viewer over the timeline, on the missing tweet's photo.
+    await r.page.evaluate(() => {
+      history.pushState({}, '', '/u/status/8202/photo/1');
+      const layer = document.createElement('div');
+      layer.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000';
+      layer.innerHTML = '<img src="https://pbs.twimg.com/media/HF2?format=jpg&name=large" style="width:100%;height:100%">';
+      document.body.appendChild(layer);
+    });
+    const pillReady = await waitUntil(r.page, () => !!document.querySelector('.xdsu-pill[data-action="upload"]'), null, 3000);
+    const pill = pillReady ? await hover('.xdsu-pill') : null;
+    const pillRing = pillReady ? await ring('.xdsu-pill') : 'no viewer button';
+    const pillOk = !!pill && pill.on.bg === 'rgba(0, 0, 0, 0.78)' && pill.off.bg === 'rgba(0, 0, 0, 0.55)';
+    const ringsOk = [segRing, btnRing, pillRing].every((x) => x === RING);
+    const res = await fin(r, {pass: true, detail: ''});
+    // A phone: the same posted segment, touched and hovered, does not light up.
+    const p = await setup(browser, {ctxOpts: PHONE});
+    await p.page.evaluate(() => {
+      window.__db.push(window.post(832, 'https://x.com/u/status/8211/photo/1'));
+      window.addBig('8211', 'HF5');
+    });
+    await inject(p.page, v);
+    const phoneReady = await waitUntil(p.page, () => !!window.seg('8211') && window.seg('8211').dataset.state === 'found', null, 6000);
+    const pos = await centre(p.page, '#t8211 .xdsu-bar-seg');
+    await p.page.mouse.move(pos.x, pos.y);
+    const phone = await p.page.evaluate(() => ({mq: matchMedia('(hover: hover) and (pointer: fine)').matches,
+      filter: getComputedStyle(window.seg('8211')).filter}));
+    const res2 = await fin(p, {pass: true, detail: ''});
+    const phoneOk = phoneReady && !phone.mq && phone.filter === 'none';
+    return {pass: ok && ringsOk && pillOk && phoneOk && res.pass && res2.pass,
+      detail: `segments: ${rows.join(' | ')} | viewer button hovered bg=${pill && pill.on.bg}, after=${pill && pill.off.bg}${pillOk ? '' : ' <-- wrong'}`
+        + ` | focus rings: posted segment=${segRing}, upload button=${btnRing}, viewer button=${pillRing}${ringsOk ? '' : ' <-- want ' + RING}`
+        + ` | phone: hover media query=${phone.mq}, hovered filter=${phone.filter}${phoneOk ? '' : ' <-- wrong'}${res.detail}${res2.detail}`};
+  },
+
+  // T4: Command+click (macOS) opens the tab behind, as Ctrl+click and a middle click do, on a posted
+  // segment and an upload button; a plain click still opens it in front. A middle press on a
+  // segment is cancelled, so that one without a link (not posted) does not start the browser's
+  // autoscroll; read from the mousedown event once its dispatch is over.
+  async d17_meta_middle(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.__db.push(window.post(841, 'https://x.com/u/status/8301/photo/1'));
+      window.addBig('8301', 'MM1');
+      window.addBig('8302', 'MM2');
+      window.__downs = [];
+      window.addEventListener('mousedown', (e) => {
+        if (e.target.closest && e.target.closest('.xdsu-bar-seg')) {
+          setTimeout(() => window.__downs.push(`${e.button}:${e.defaultPrevented}`), 0);
+        }
+      }, true);
+    });
+    await inject(r.page, v);
+    const ready = await waitUntil(r.page, () => !!window.seg('8301') && window.seg('8301').dataset.state === 'found'
+      && window.redIdle('8302', 'MM2'), null, 6000);
+    if (!ready) {
+      return fin(r, {pass: false, detail: 'set-up: segments never reached found / missing'});
+    }
+    const opened = async (sel, kind) => {
+      const p = await centre(r.page, sel);
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+        window.__openedOpts.length = 0;
+      });
+      await mouseClick(r.page, p, kind);
+      await waitUntil(r.page, () => window.__openedOpts.length > 0, null, 1000);
+      return r.page.evaluate(() => window.__openedOpts.map((o) => o.opts && o.opts.active));
+    };
+    const rows = [];
+    let ok = true;
+    for (const [label, sel] of [['posted segment', '#t8301 .xdsu-bar-seg'], ['upload button', '#t8302 .xdsu-upload-btn']]) {
+      for (const [kind, front] of [['left', true], ['meta', false]]) {
+        const a = await opened(sel, kind);
+        const good = a.length === 1 && a[0] === front;
+        ok = ok && good;
+        rows.push(`${label} ${kind}: active=${JSON.stringify(a)}${good ? '' : ' <-- want [' + front + ']'}`);
+      }
+    }
+    // Middle presses: the posted segment, then the one that is not posted (no link).
+    const downs = [];
+    for (const sel of ['#t8301 .xdsu-bar-seg', '#t8302 .xdsu-bar-seg']) {
+      const p = await centre(r.page, sel);
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+        window.__downs.length = 0;
+      });
+      await r.page.mouse.move(p.x, p.y);
+      await r.page.mouse.down({button: 'middle'});
+      await r.page.mouse.up({button: 'middle'});
+      await waitUntil(r.page, () => window.__downs.length > 0, null, 1000);
+      downs.push((await r.page.evaluate(() => window.__downs.slice())).join());
+    }
+    const midOk = downs.every((d) => d === '1:true');
+    return fin(r, {pass: ok && midOk, detail: `${rows.join(' | ')} | middle press [button:cancelled] on posted, not posted:`
+      + ` ${JSON.stringify(downs)}${midOk ? '' : ' <-- want both cancelled'}`});
   },
 };
 
