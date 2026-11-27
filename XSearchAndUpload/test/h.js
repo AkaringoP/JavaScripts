@@ -180,4 +180,15 @@ async function colors(page) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = {chromium, newPage, inject, state, colors, sleep, NAMES, PHONE, DESKTOP, DESKTOP_WIDE};
+// A scenario's result, or a TIMEOUT failure after ms. The timer is cleared once the scenario
+// settles; a plain race against sleep(ms) leaves it pending and keeps the process alive that long
+// after the last scenario.
+function withTimeout(p, ms) {
+  let timer = null;
+  const timeout = new Promise((res) => {
+    timer = setTimeout(() => res({pass: false, detail: 'TIMEOUT'}), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+module.exports = {chromium, newPage, inject, state, colors, sleep, withTimeout, NAMES, PHONE, DESKTOP, DESKTOP_WIDE};

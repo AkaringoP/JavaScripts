@@ -2,7 +2,7 @@
 // node run_viewer.js [variant_probe,..] [scenario,..]
 // A *_probe variant is the script with imageRefs exposed as window.__imageRefs (see script.js);
 // nothing else differs.
-const {chromium, inject, sleep} = require('./h.js');
+const {chromium, inject, sleep, withTimeout} = require('./h.js');
 const F = require('./run_markers.js');
 const fs = require('fs');
 const path = require('path');
@@ -708,7 +708,7 @@ if (require.main === module) {
         }
         const t0 = Date.now();
         try {
-          const res = await Promise.race([fn(browser, v), sleep(120000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+          const res = await withTimeout(fn(browser, v), 120000);
           console.log(`${res.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${res.detail}`);
         } catch (e) {
           console.log(`HARNESS-ERROR ${name}: ${e.stack.split('\n').slice(0, 3).join(' / ')}`);

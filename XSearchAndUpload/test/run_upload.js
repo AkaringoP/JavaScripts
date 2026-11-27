@@ -1,6 +1,6 @@
 // Re-check after an upload, the Like trigger, the upload button, per-image upload URLs.
 // node run_upload.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, colors, sleep} = require('./h.js');
+const {chromium, newPage, inject, colors, sleep, withTimeout} = require('./h.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 
@@ -699,7 +699,7 @@ const S = {
         continue;
       }
       try {
-        const r = await Promise.race([fn(browser, v), sleep(90000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 90000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name}\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);

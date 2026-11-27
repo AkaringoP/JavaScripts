@@ -1,6 +1,6 @@
 // The observer ignoring the script's own nodes; bars and buttons restored after re-renders.
 // node run_markers.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, sleep} = require('./h.js');
+const {chromium, newPage, inject, sleep, withTimeout} = require('./h.js');
 
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
@@ -348,7 +348,7 @@ if (require.main === module) (async () => {
       }
       const t0 = Date.now();
       try {
-        const r = await Promise.race([fn(browser, v), sleep(60000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 60000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.stack}`);

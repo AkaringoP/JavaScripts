@@ -1,6 +1,6 @@
 // Bar tap targets and tap actions, state shapes and contrast, menu commands.
 // node run_bar.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, sleep} = require('./h.js');
+const {chromium, newPage, inject, sleep, withTimeout} = require('./h.js');
 const L = require('./lib.js');
 const fs = require('fs');
 const path = require('path');
@@ -788,7 +788,7 @@ async function bandScenario(browser, v, pageCss) {
       }
       const t0 = Date.now();
       try {
-        const r = await Promise.race([fn(browser, v), sleep(240000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 240000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.stack}`);

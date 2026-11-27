@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const {readScript} = require('./script.js');
-const {chromium, newPage, colors, sleep} = require('./h.js');
+const {chromium, newPage, colors, sleep, withTimeout} = require('./h.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 
@@ -1268,7 +1268,7 @@ const S = {
       }
       const t0 = Date.now();
       try {
-        const r = await Promise.race([fn(browser, v), sleep(120000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 120000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);

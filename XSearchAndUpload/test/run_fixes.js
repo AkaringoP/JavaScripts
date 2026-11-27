@@ -1,6 +1,6 @@
 // Icon fallback, video/GIF tiles, the Danbooru URL setting, failed hash lookups.
 // node run_fixes.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, state, colors, sleep} = require('./h.js');
+const {chromium, newPage, inject, state, colors, sleep, withTimeout} = require('./h.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 
@@ -295,7 +295,7 @@ const S = {
         continue;
       }
       try {
-        const r = await Promise.race([fn(browser, v), sleep(30000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 30000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name}\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);
