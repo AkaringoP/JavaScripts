@@ -1167,7 +1167,8 @@ const S = {
       window.__hc.CT3.checkedAt = 2;
       window.__tc.p1 = {state: 'pending', posts: []};
       window.__lr.old = now - 60 * 1000;
-      window.poke = () => document.body.appendChild(document.createElement('div'));
+      // A scan at once: an element added inside a tweet (since T7 the observer ignores the rest).
+      window.poke = () => document.getElementById('t8101').appendChild(document.createElement('div'));
     });
     const sizes = () => r.page.evaluate(() => [Object.keys(window.__tc).length, Object.keys(window.__hc).length]);
     // Fixed waits of 0.5 s below: a scan runs 0.1 s after the page changes (poke).

@@ -2746,23 +2746,37 @@
     }, SCROLL_CHECK_MS);
   }, {capture: true, passive: true});
 
-  /** Watches the page for added nodes that are not the script's own. */
+  /**
+   * Watches the page for added elements that can change a tweet's tiles or the
+   * photo viewer.
+   */
   function startObserver() {
     if (!document.body) {
       setTimeout(startObserver, 50);
       return;
     }
     // The script's own insertions, and text it writes into its elements, need
-    // no scan.
+    // no scan. Of the rest only elements count that are added inside a tweet
+    // (a re-render, a tile that arrives late) or that are or hold a tweet or a
+    // media image (a new tweet, the viewer). Typing in a reply box, profile
+    // cards, the side columns, and counts or times rewritten as text are left
+    // to the poll below.
     const ownSelector =
         '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
-    const own = (n) =>
-      n.nodeType === Node.ELEMENT_NODE && n.matches(ownSelector);
+    const own = (n) => n.matches(ownSelector);
+    const tweetOrMedia = 'article, img[src*="pbs.twimg.com/media/"]';
+    const holds = (n) =>
+      n.matches(tweetOrMedia) || !!n.querySelector(tweetOrMedia);
+    const relevant = (mut) => {
+      const added = [...mut.addedNodes].filter(
+          (n) => n.nodeType === Node.ELEMENT_NODE && !own(n));
+      if (!added.length || mut.target.closest(ownSelector)) {
+        return false;
+      }
+      return !!mut.target.closest('article') || added.some(holds);
+    };
     const observer = new MutationObserver((mutations) => {
-      const foreign = (mut) => mut.addedNodes.length > 0 &&
-          ![...mut.addedNodes].every(own) &&
-          !mut.target.closest(ownSelector);
-      if (mutations.some(foreign)) {
+      if (mutations.some(relevant)) {
         scheduleScan();
       }
     });
