@@ -163,26 +163,30 @@
       "post_count_at_build": 15,
       "post_count_30d_delta": 0
     },
-    "ahad": {
+    "aizawa_sachi": {
       "post_ids": [
-        393615
+        462239,
+        464155
       ],
       "approvers": [
-        "VeryActiveDuringTheNight"
+        "Haruuspex"
       ],
       "aliased_from": [],
-      "pixiv_user_ids": [],
-      "x_handles": [
-        "wiresandtrees"
+      "pixiv_user_ids": [
+        "3884576"
       ],
-      "registered_at_utc": "2025-10-17T14:22:39.616Z",
-      "completed": false,
-      "post_count_at_build": 15,
-      "post_count_30d_delta": 0
+      "x_handles": [
+        "sachichy"
+      ],
+      "registered_at_utc": "2026-08-21T00:40:40.192Z",
+      "completed": true,
+      "post_count_at_build": 430,
+      "post_count_30d_delta": 22
     }
   },
   "by_pixiv": {
     "2915498": "21_ke",
+    "3884576": "aizawa_sachi",
     "19325383": "024_(1a41a4)",
     "37564109": "0_ebj",
     "54950669": "510_gotoudayo",
@@ -204,10 +208,10 @@
     "987654321qaqaqa": "789illust",
     "gecl4_": "024_(1a41a4)",
     "hhhooke": "21_ke",
+    "sachichy": "aizawa_sachi",
     "uku3h": "0_ebj",
     "ukumxd": "0_ebj",
     "ver2268581": "789illust",
-    "wiresandtrees": "ahad",
     "z_we3n": "0_ebj",
     "z_we6n": "0_ebj"
   }
