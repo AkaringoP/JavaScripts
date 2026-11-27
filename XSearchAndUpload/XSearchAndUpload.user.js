@@ -140,7 +140,12 @@
   // value is stored for when the check fails.
   const MAX_QUERY_BATCH = 6;
   const BATCH_STORE_KEY = 'detectedBatch';
+  // The result of the last successful account check, shared by every X tab, so
+  // that a tab that starts or comes back soon after needs no check of its own.
+  const ACCOUNT_STORE_KEY = 'accountCheck';
   const PROFILE_TIMEOUT_MS = 5000;
+  // An account check older than this is repeated on a return to the tab, and a
+  // stored one is not taken over by another tab.
   const PROFILE_MAX_AGE_MS = 10 * 60 * 1000;
   // The server itself may take ~11 s before it answers a slow search with a
   // 500.
@@ -1582,7 +1587,8 @@
   // -------------- account check --------------
 
   // /profile.json answers 200 logged out too. Without a usable answer the last
-  // detected size (or 2) stays in use.
+  // detected size (or 2) stays in use. Instead of making its own check, a tab
+  // may take over a recent one that another tab stored (adoptStoredAccount).
   const storedBatch = GM_getValue(BATCH_STORE_KEY, null);
   const batchStored = Number.isInteger(storedBatch) && storedBatch >= 1 &&
       storedBatch <= MAX_QUERY_BATCH;
@@ -1597,8 +1603,77 @@
       'Danbooru safe mode is on – only rating:g posts are visible';
 
   /**
+   * A successful account check as stored under ACCOUNT_STORE_KEY (as JSON):
+   * the Danbooru URL it was made for, when, the batch size it gave and what it
+   * found. Nothing that identifies the account is kept.
+   * @typedef {{
+   *   host: string,
+   *   at: number,
+   *   batch: number,
+   *   anonymous: boolean,
+   *   safeMode: boolean,
+   * }} StoredAccount
+   */
+
+  /**
+   * Reads the stored account check.
+   * @return {?StoredAccount} The stored check if it is well formed, was made
+   *     for DANBOORU_URL, and is not in the future nor older than
+   *     PROFILE_MAX_AGE_MS; otherwise null.
+   */
+  function readStoredAccount() {
+    const raw = GM_getValue(ACCOUNT_STORE_KEY, null);
+    let a;
+    try {
+      a = typeof raw === 'string' ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+    if (!a || typeof a !== 'object' || Array.isArray(a)) {
+      return null;
+    }
+    const age = Date.now() - a.at;
+    const ok = a.host === DANBOORU_URL &&
+        Number.isInteger(a.at) &&
+        age >= 0 &&
+        age <= PROFILE_MAX_AGE_MS &&
+        Number.isInteger(a.batch) &&
+        a.batch >= 1 &&
+        a.batch <= MAX_QUERY_BATCH &&
+        typeof a.anonymous === 'boolean' &&
+        typeof a.safeMode === 'boolean';
+    return ok ? a : null;
+  }
+
+  /**
+   * Takes over the stored account check (at start-up and when the tab becomes
+   * visible) if it is recent, found the account logged in with safe mode off,
+   * and is newer than this tab's own check, as if this tab had made it: its age
+   * counts from when it was made and its batch size applies. A check that found
+   * anything else is not taken over, since another tab may have logged in or
+   * switched safe mode off since; so stored data never raises a toast.
+   * detectedBatch is left to the tab that made the check.
+   * @return {boolean} Whether a stored check was taken over.
+   */
+  function adoptStoredAccount() {
+    const a = readStoredAccount();
+    if (!a || a.anonymous || a.safeMode || a.at <= profileCheckedAt) {
+      return false;
+    }
+    profileCheckedAt = a.at;
+    profileAnonymous = false;
+    if (a.batch !== profileBatch) {
+      profileBatch = a.batch;
+      queryBatch = a.batch;
+      retryFailed(['limit']);
+    }
+    return true;
+  }
+
+  /**
    * Reads the account's search term limit and safe-mode setting from
-   * /profile.json and sets the batch size.
+   * /profile.json, sets the batch size and stores the result for the other tabs
+   * (ACCOUNT_STORE_KEY).
    * @return {!Promise<void>}
    */
   async function checkProfile() {
@@ -1628,6 +1703,14 @@
       GM_setValue(BATCH_STORE_KEY, batch);
       retryFailed(['limit']);
     }
+    // Replaces what any tab stored before, whatever it found.
+    GM_setValue(ACCOUNT_STORE_KEY, JSON.stringify({
+      host: DANBOORU_URL,
+      at: profileCheckedAt,
+      batch,
+      anonymous: profileAnonymous,
+      safeMode: p.enable_safe_mode === true,
+    }));
     if (profileAnonymous) {
       showToast(
           'Not logged in to Danbooru – lookups limited',
@@ -2573,19 +2656,27 @@
   // Every visibility change cancels the pending re-check; becoming visible
   // re-scans, starts a new ladder of re-checks and shows the toasts that waited
   // while the tab was hidden. A return to the tab also retries failed lookups
-  // at once (always, whatever lastRetryAt says) and checks the account again
-  // when it was logged out, the last check is old, or lookups failed in a way
-  // that logging in or a Cloudflare check in another tab can fix.
+  // at once (always, whatever lastRetryAt says). It takes over a newer account
+  // check that another tab stored (adoptStoredAccount), then checks the account
+  // again when it is logged out, the last check (this tab's or the one it took
+  // over) is old, or lookups failed in a way that logging in or a Cloudflare
+  // check in another tab can fix. A tab that started hidden has no check yet
+  // (profileCheckedAt is 0), so here it takes over a stored one or makes its
+  // first one, before the scan queues any lookup.
   document.addEventListener('visibilitychange', () => {
     clearTimeout(recheckTimer);
     recheckTimer = null;
     if (!document.hidden) {
       const needsAccount = (e) => e.state === 'error' &&
           (e.reason === 'limit' || e.reason === 'blocked');
+      // Read before the take-over, which retries the 'limit' failures when the
+      // batch size changes; they still call for a check of this tab's own.
+      const failedForAccount = [tweetCache, hashCache].some(
+          (cache) => Object.values(cache).some(needsAccount));
+      adoptStoredAccount();
       const recheckProfile = profileAnonymous ||
           Date.now() - profileCheckedAt > PROFILE_MAX_AGE_MS ||
-          [tweetCache, hashCache].some(
-              (cache) => Object.values(cache).some(needsAccount));
+          failedForAccount;
       retryFailed(['network', 'server', 'blocked']);
       resumeQueue();
       lastRetryAt = Date.now();
@@ -2637,7 +2728,15 @@
     }
   });
 
-  requestProfileCheck();
+  // A recent check stored by another tab (or by an earlier load of this one)
+  // takes the place of this tab's own. Without one, a tab that starts hidden
+  // (opened in the background) sends nothing until it is first shown, when the
+  // visibilitychange handler takes over a check stored meanwhile or checks. It
+  // is not marked wanted (profileWanted), or an 'online' event would send the
+  // check while it is still hidden.
+  if (!adoptStoredAccount() && !document.hidden) {
+    requestProfileCheck();
+  }
   if (new URL(DANBOORU_URL).hostname === 'safebooru.donmai.us') {
     showToast(SAFE_MODE_TOAST, {reason: 'safeMode'});
   }
