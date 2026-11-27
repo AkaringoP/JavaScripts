@@ -5,6 +5,7 @@
 // FAIL until the entry is removed, so the scenario becomes an ordinary one with that task.
 const {chromium, newPage, inject, sleep, DESKTOP, DESKTOP_WIDE} = require('./h.js');
 const SCROLL = require('./run_scroll.js');
+const {readScript} = require('./script.js');
 
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
@@ -1055,7 +1056,183 @@ const S = {
       + ` focus after the visibilitychange's retry was answered: ${after}${after === 1 ? '' : ' <-- want 1'}`);
     return fin(c, {pass: ok && errs.every((e) => !e), detail: `requests per focus: ${rows.join(' | ')}${errs.join('')}`});
   },
+
+  // T6: a "not posted" or "partly posted" result is looked up again when its tweet is mounted again
+  // more than 10 minutes (RESULT_MAX_AGE_MS) after the lookup. Not a fully posted one, not one
+  // within the 10 minutes, not a tweet that stays mounted. While the new lookup runs, the new
+  // segment shows the old result and pulses, never the grey "checking" line. The script measures
+  // the age with Date.now, so the scenario steps it (__dnOff) instead of waiting.
+  async d14_stale_remount(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      // 8001 not posted, 8002 posted, 8003 partly posted (1 of 2), 8004 not posted and stays mounted.
+      window.__db.push(window.post(811, 'https://x.com/u/status/8002/photo/1'));
+      window.__db.push(window.post(812, 'https://x.com/u/status/8003/photo/1'));
+      window.mount = (id) => document.getElementById('root').appendChild(
+          window.mkTweet({id, hashes: id === '8003' ? ['SE3a', 'SE3b'] : ['SE' + id.slice(3)]}));
+      window.unmount = (ids) => ids.forEach((id) => document.getElementById('t' + id).remove());
+      window.states = (id) => [...document.querySelectorAll(`#t${id} .xdsu-bar-seg`)].map((s) => s.dataset.state).join(',');
+      ['8001', '8002', '8003', '8004'].forEach(window.mount);
+    });
+    await inject(r.page, v);
+    const want0 = {'8001': 'missing', '8002': 'found', '8003': 'found,foundWeak', '8004': 'missing'};
+    const atRest = (want) => Object.entries(want).every(([id, s]) => window.states(id) === s) && window.settled();
+    const ready = await waitUntil(r.page, atRest, want0, 6000);
+    const ids = ['8001', '8002', '8003', '8004'];
+    const count = () => r.page.evaluate((ids) => ids.map((id) => window.lookups('status/' + id).length), ids);
+    const n0 = await count();
+    // 5 minutes on: mounted again, the results are reused as they are.
+    await r.page.evaluate(() => {
+      window.unmount(['8001', '8002', '8003']);
+      window.__dnOff += 5 * 60 * 1000;
+      ['8001', '8002', '8003'].forEach(window.mount);
+    });
+    const back5 = await waitUntil(r.page, atRest, want0, 3000);
+    // Fixed: 1.5 s in which no lookup may be sent (a scan runs 0.1 s after the mount).
+    await sleep(1500);
+    const n5 = await count();
+    // 11 minutes after the lookups, with posts made meanwhile for 8001 and 8003's second image.
+    await r.page.evaluate(() => {
+      window.unmount(['8001', '8002', '8003']);
+      window.__dnOff += 6 * 60 * 1000;
+      window.__db.push(window.post(813, 'https://x.com/u/status/8001/photo/1'));
+      window.__db.push(window.post(814, 'https://x.com/u/status/8003/photo/2'));
+      // What 8001's new segment shows, from its creation on; * marks a segment held for a re-check.
+      window.__seq = [];
+      window.__seqIv = setInterval(() => {
+        const s = document.querySelector('#t8001 .xdsu-bar-seg');
+        const now = s ? s.dataset.state + (s.classList.contains('xdsu-rechecking') ? '*' : '') : null;
+        if (now && window.__seq[window.__seq.length - 1] !== now) {
+          window.__seq.push(now);
+        }
+      }, 5);
+      ['8001', '8002', '8003'].forEach(window.mount);
+    });
+    const want11 = {'8001': 'found', '8002': 'found', '8003': 'found,found', '8004': 'missing'};
+    const back11 = await waitUntil(r.page, atRest, want11, 5000);
+    // Fixed: 1 s for a lookup of 8002 or 8004, which must not come.
+    await sleep(1000);
+    const n11 = await count();
+    const s = await r.page.evaluate((ids) => {
+      clearInterval(window.__seqIv);
+      return {seq: window.__seq, states: ids.map((id) => window.states(id))};
+    }, ids);
+    const d5 = n5.map((x, i) => x - n0[i]);
+    const d11 = n11.map((x, i) => x - n5[i]);
+    const seq = s.seq;
+    const held = seq.length >= 2 && seq[0] === 'missing*' && seq[seq.length - 1] === 'found' && !seq.some((x) => x.startsWith('searching'));
+    const pass = ready && back5 && d5.every((x) => x === 0) && back11 && JSON.stringify(d11) === '[1,0,1,0]' && held;
+    return fin(r, {pass, detail: `first lookups done=${ready} | mounted again after 5 min: states restored=${back5},`
+      + ` lookups ${JSON.stringify(d5)} (want none) | after 11 min: lookups per tweet ${JSON.stringify(d11)} (want [1,0,1,0]),`
+      + ` states ${JSON.stringify(s.states)} | 8001's new segment showed ${JSON.stringify(seq)}`
+      + `${held ? '' : ' <-- want the old state held (missing*) until found, never searching'}`});
+  },
+
+  // T6: in a tab left open for long the caches are trimmed. Past 3000 entries (CACHE_MAX_ENTRIES)
+  // the oldest answered results that no tile in the page and no watched tweet uses are dropped,
+  // down to 2400 (CACHE_TRIM_TO), at most once a minute (CACHE_TRIM_INTERVAL_MS); refresh debounce
+  // stamps that have run out go too. Filling the caches through lookups would take thousands of
+  // tweets, so an in-memory copy of the script publishes the caches (window.__tc, __hc, __lr) and
+  // they are filled with made-up answered entries. Date.now is stepped past the minute (__dnOff).
+  async d15_cache_trim(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.__db.push(window.post(821, 'https://x.com/u/status/8101/photo/1'));
+      // 8101 posted and 8102 not posted, both stay mounted; 8103 not posted, opened for upload
+      // (watched) and then unmounted.
+      window.addBig('8101', 'CT1');
+      window.addBig('8102', 'CT2');
+      window.addBig('8103', 'CT3');
+    });
+    await injectExposed(r.page, v);
+    const ready = await waitUntil(r.page, () => !!window.seg('8101') && window.seg('8101').dataset.state === 'found'
+      && window.redIdle('8102', 'CT2') && window.redIdle('8103', 'CT3'), null, 6000);
+    if (!ready) {
+      return fin(r, {pass: false, detail: 'the three tweets never reached found / missing / missing'});
+    }
+    await r.page.evaluate(() => {
+      window.upload('8103');
+      document.getElementById('t8103').remove();
+      const now = Date.now();
+      for (let i = 0; i < 3200; i++) {
+        window.__tc['f' + i] = {state: 'done', posts: [], checkedAt: now - (4000 - i) * 1000};
+        window.__hc['h' + i] = {state: 'done', posts: [], checkedAt: now - (4000 - i) * 1000};
+      }
+      // The real results are made older than any made-up one; only the unused one may go.
+      ['8101', '8102', '8103'].forEach((id, k) => {
+        window.__tc[id].checkedAt = k + 1;
+      });
+      window.__hc.CT2.checkedAt = 1;
+      window.__hc.CT3.checkedAt = 2;
+      window.__tc.p1 = {state: 'pending', posts: []};
+      window.__lr.old = now - 60 * 1000;
+      window.poke = () => document.body.appendChild(document.createElement('div'));
+    });
+    const sizes = () => r.page.evaluate(() => [Object.keys(window.__tc).length, Object.keys(window.__hc).length]);
+    // Fixed waits of 0.5 s below: a scan runs 0.1 s after the page changes (poke).
+    await r.page.evaluate(() => window.poke());
+    await sleep(500);
+    const early = await sizes();
+    await r.page.evaluate(() => {
+      window.__dnOff += 61 * 1000;
+      window.poke();
+    });
+    await sleep(500);
+    const after = await sizes();
+    const kept = await r.page.evaluate(() => {
+      const has = (c, k) => k in c;
+      return {tweets: ['8101', '8102', '8103', 'p1'].filter((k) => has(window.__tc, k)).join(),
+        tweetEdge: [has(window.__tc, 'f803'), has(window.__tc, 'f804')], hashes: ['CT2', 'CT3'].filter((k) => has(window.__hc, k)).join(),
+        hashEdge: [has(window.__hc, 'h800'), has(window.__hc, 'h801')], oldStamp: has(window.__lr, 'old'),
+        watched: (window.storedIds() || []).includes('8103'), states: [window.seg('8101').dataset.state, window.seg('8102').dataset.state]};
+    });
+    // More results within the minute: not trimmed until the minute has passed.
+    await r.page.evaluate(() => {
+      const now = Date.now();
+      for (let i = 0; i < 1000; i++) {
+        window.__tc['g' + i] = {state: 'done', posts: [], checkedAt: now};
+      }
+      window.poke();
+    });
+    await sleep(500);
+    const within = await sizes();
+    await r.page.evaluate(() => {
+      window.__dnOff += 61 * 1000;
+      window.poke();
+    });
+    await sleep(500);
+    const later = await sizes();
+    const pass = ready && early[0] === 3204 && early[1] === 3202 && after[0] === 2400 && after[1] === 2400
+      && kept.tweets === '8101,8102,8103,p1' && JSON.stringify(kept.tweetEdge) === '[false,true]' && kept.hashes === 'CT2'
+      && JSON.stringify(kept.hashEdge) === '[false,true]' && !kept.oldStamp && kept.watched
+      && kept.states.join() === 'found,missing' && within[0] === 3400 && later[0] === 2400;
+    return fin(r, {pass, detail: `ready=${ready} | sizes [tweet ids, hashes]: filled ${JSON.stringify(early)} (within the first`
+      + ` minute), a minute on ${JSON.stringify(after)} (want [2400,2400]) | kept: tweet ids ${kept.tweets}`
+      + ` (want 8101,8102,8103,p1: in the page, watched, pending), f803/f804 ${JSON.stringify(kept.tweetEdge)},`
+      + ` hashes ${kept.hashes} (want CT2: CT3's tile is gone), h800/h801 ${JSON.stringify(kept.hashEdge)},`
+      + ` stale debounce stamp kept=${kept.oldStamp}, 8103 still watched=${kept.watched}, states ${kept.states}`
+      + ` | 1000 more within the minute: ${within[0]}, a minute on: ${later[0]} (want 3400, then 2400)`});
+  },
 };
+
+// Injects an in-memory copy of the variant that publishes its caches as window.__tc (tweet ids),
+// __hc (media hashes) and __lr (refresh debounce stamps). Throws if an anchor is not found once.
+async function injectExposed(page, v) {
+  let src = readScript(v);
+  for (const [anchor, add] of [
+    ['const hashCache = Object.create(null);', ' window.__tc = tweetCache; window.__hc = hashCache;'],
+    ['const lastRefresh = Object.create(null);', ' window.__lr = lastRefresh;'],
+  ]) {
+    if (src.split(anchor).length !== 2) {
+      throw new Error('expose anchor not found once: ' + anchor);
+    }
+    src = src.replace(anchor, anchor + add);
+  }
+  await page.evaluate(() => {
+    window.__t0 = performance.now();
+  });
+  await page.addScriptTag({content: src});
+}
 
 (async () => {
   const browser = await chromium.launch();

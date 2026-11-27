@@ -181,6 +181,18 @@
   // did so for this long. Focus changes and the mouse crossing the window edge
   // are frequent on a desktop.
   const RETURN_GAP_MS = 15000;
+  // A lookup that found no post for a tweet, or fewer posts than it has images,
+  // is repeated when the tweet is mounted again this long after it was made
+  // (someone may have posted it since). A tweet that stays mounted is not
+  // looked up again, and a fully posted one never.
+  const RESULT_MAX_AGE_MS = 10 * 60 * 1000;
+  // Lookup results kept per cache (tweet ids, media hashes) in a tab left open
+  // for long. Past CACHE_MAX_ENTRIES the oldest results no tile in the page
+  // uses are dropped, down to CACHE_TRIM_TO; this is checked at most once per
+  // CACHE_TRIM_INTERVAL_MS.
+  const CACHE_MAX_ENTRIES = 3000;
+  const CACHE_TRIM_TO = 2400;
+  const CACHE_TRIM_INTERVAL_MS = 60 * 1000;
   // Bottom offset of the toast, above X's bottom navigation. Raise it while
   // another fixed control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
@@ -723,12 +735,14 @@
    */
 
   /**
-   * The result of one lookup. state is 'pending', 'done' or 'error'; an error
-   * entry also has reason ('network', 'server', 'blocked', 'limit' or
-   * 'client'), at (time of the last failure) and tries.
+   * The result of one lookup. state is 'pending', 'done' or 'error'; a done
+   * entry has checkedAt (when the answer came); an error entry also has reason
+   * ('network', 'server', 'blocked', 'limit' or 'client'), at (time of the last
+   * failure) and tries.
    * @typedef {{
    *   state: string,
    *   posts: !Array<!Post>,
+   *   checkedAt: (number|undefined),
    *   reason: (string|undefined),
    *   at: (number|undefined),
    *   tries: (number|undefined),
@@ -771,6 +785,11 @@
 
   /** @const {!Array<!ImageRef>} Every tracked tile. */
   const imageRefs = [];
+  /**
+   * @const {!Set<string>} Tweets that got a new tile ref (a segment or the
+   * viewer button) since the last scan ended; see refreshIfStale.
+   */
+  const mounted = new Set();
 
   /**
    * Reads the stored watch list, which every X tab shares.
@@ -1056,6 +1075,7 @@
       openedAt: 0,
     };
     imageRefs.push(ref);
+    mounted.add(info.tweetId);
     ensureHashLookup(ref);
     enqueueTweetIdSearch(info.tweetId);
     return true;
@@ -1540,6 +1560,7 @@
         if (entries[i] && cache[k] === entries[i]) {
           entries[i].posts = bucket[k];
           entries[i].state = 'done';
+          entries[i].checkedAt = now;
         }
       });
       return [];
@@ -2225,6 +2246,7 @@
           photoCount: n,
         };
         imageRefs.push(pillRef);
+        mounted.add(info.tweetId);
       }
       // Photo count: the bar of a mounted article of the tweet, else the
       // viewer's images when image n was found among them, else n. Never less
@@ -2563,6 +2585,67 @@
   // post-like states since the testid toggles after the click.
   document.addEventListener('click', handleLikeClick, true);
 
+  // -------------- long sessions --------------
+
+  /**
+   * Looks a tweet up again when it is mounted again and its result is stale:
+   * the lookup is older than RESULT_MAX_AGE_MS and a tile of it in the page
+   * shows "not posted" or "partly posted". The segments keep that state, and
+   * pulse, until the new answer is in (see refreshTweetStatus).
+   * @param {string} tweetId
+   */
+  function refreshIfStale(tweetId) {
+    const tc = tweetCache[tweetId];
+    if (!tc || tc.state !== 'done' ||
+        !(Date.now() - tc.checkedAt > RESULT_MAX_AGE_MS)) {
+      return;
+    }
+    const weak = imageRefs.some(
+        (ref) => ref.tweetId === tweetId && ref.bar.isConnected &&
+            ['missing', 'foundWeak'].includes(resolveState(ref)));
+    if (weak) {
+      refreshTweetStatus(tweetId);
+    }
+  }
+
+  let trimmedAt = 0;
+
+  /**
+   * Keeps the caches from growing without end in a tab left open for long. At
+   * most once per CACHE_TRIM_INTERVAL_MS: drops the refresh debounce stamps
+   * that have run out, and a cache past CACHE_MAX_ENTRIES loses its oldest
+   * answered entries that no tile in the page and no watched tweet uses, down
+   * to CACHE_TRIM_TO. Pending and failed entries stay: the queue (takeBatch)
+   * and retryFailed drop those whose tweet is gone.
+   */
+  function trimCaches() {
+    const now = Date.now();
+    if (now - trimmedAt < CACHE_TRIM_INTERVAL_MS) {
+      return;
+    }
+    trimmedAt = now;
+    for (const id of Object.keys(lastRefresh)) {
+      if (lastRefresh[id] <= now - REFRESH_DEBOUNCE_MS) {
+        delete lastRefresh[id];
+      }
+    }
+    const live = imageRefs.filter((ref) => ref.bar.isConnected);
+    const usedTweets =
+        new Set([...live.map((ref) => ref.tweetId), ...watch.keys()]);
+    const usedHashes = new Set(live.map((ref) => ref.imageHash));
+    [[tweetCache, usedTweets], [hashCache, usedHashes]].forEach(
+        ([cache, used]) => {
+          const keys = Object.keys(cache);
+          if (keys.length <= CACHE_MAX_ENTRIES) {
+            return;
+          }
+          keys.filter((k) => cache[k].state === 'done' && !used.has(k))
+              .sort((a, b) => cache[a].checkedAt - cache[b].checkedAt)
+              .slice(0, keys.length - CACHE_TRIM_TO)
+              .forEach((k) => delete cache[k]);
+        });
+  }
+
   // -------------- MutationObserver + polling fallback --------------
 
   let scanTimer = null;
@@ -2577,7 +2660,10 @@
     }, SCAN_DEBOUNCE_MS);
   }
 
-  /** Runs one scan: tweets, dropped lookups, retries, repaint. */
+  /**
+   * Runs one scan: tweets, dropped lookups, retries, repaint, stale results,
+   * cache upkeep.
+   */
   function tick() {
     if (document.hidden) {
       return;
@@ -2598,6 +2684,11 @@
         scheduleFlush();
       }
       applyColors();
+      // After the repaint, so that a tweet mounted again first shows its old
+      // result and then holds it while the new lookup runs.
+      mounted.forEach(refreshIfStale);
+      mounted.clear();
+      trimCaches();
     } catch (e) {
       console.error('[XDSU] tick error', e);
     }
