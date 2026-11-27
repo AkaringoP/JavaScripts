@@ -163,28 +163,25 @@
       "post_count_at_build": 15,
       "post_count_30d_delta": 0
     },
-    "akai_takami": {
+    "ahad": {
       "post_ids": [
-        273415
+        393615
       ],
       "approvers": [
-        "Hereinafter"
+        "VeryActiveDuringTheNight"
       ],
       "aliased_from": [],
-      "pixiv_user_ids": [
-        "2739958"
-      ],
+      "pixiv_user_ids": [],
       "x_handles": [
-        "akai_takami"
+        "wiresandtrees"
       ],
-      "registered_at_utc": "2024-03-17T23:38:18.089Z",
+      "registered_at_utc": "2025-10-17T14:22:39.616Z",
       "completed": false,
-      "post_count_at_build": 42,
+      "post_count_at_build": 15,
       "post_count_30d_delta": 0
     }
   },
   "by_pixiv": {
-    "2739958": "akai_takami",
     "2915498": "21_ke",
     "19325383": "024_(1a41a4)",
     "37564109": "0_ebj",
@@ -205,12 +202,12 @@
     "8989_99": "89_(8989_99)",
     "8a9uu": "89_(8989_99)",
     "987654321qaqaqa": "789illust",
-    "akai_takami": "akai_takami",
     "gecl4_": "024_(1a41a4)",
     "hhhooke": "21_ke",
     "uku3h": "0_ebj",
     "ukumxd": "0_ebj",
     "ver2268581": "789illust",
+    "wiresandtrees": "ahad",
     "z_we3n": "0_ebj",
     "z_we6n": "0_ebj"
   }
