@@ -50,6 +50,7 @@ async function setup(browser, {ctxOpts = DESKTOP, profile = null, store = {}} = 
         hidden: document.hidden, done: null};
       window.__reqLog.push(rec);
       window.__inflight++;
+      window.__maxInflight = Math.max(window.__maxInflight || 0, window.__inflight);
       const end = (fn) => (x) => {
         window.__inflight--;
         rec.done = Math.round(performance.now() - (window.__t0 || 0));
@@ -1528,6 +1529,226 @@ const S = {
     return fin(r, {pass, detail: `rows looked up at the top: [${atTop}]${top ? '' : ' (rows 0-7 NOT all resolved)'}`
       + ` | after the jump to the bottom: [${all}]${bottom ? '' : ' (rows 14-19 NOT all resolved)'}`
       + ` | rows 9-11 (passed over) looked up: ${middle.filter((row) => all.includes(row)).join(',') || 'none'}`});
+  },
+
+  // T12: a photo grid is answered author by author. One search for every post whose source names a
+  // tweet of the grid's author (one term, 200 posts a page) turns every posted tile green with no
+  // lookup of its own. Only the tiles it left open are looked up tweet by tweet: a post that names
+  // the tweet without the author (i/web), one that names only the image, and the ones not posted.
+  // The viewer opened on an author-found tile still looks the tweet up itself. Further: an author
+  // with more than 200 posts is read page by page; when the author search fails every tile falls
+  // back to its own lookup.
+  async d20_grid_author(browser, v) {
+    const gridPage = async (tiles, cols) => {
+      const r = await setup(browser);
+      await r.page.evaluate(([tiles, cols]) => {
+        const ul = document.createElement('ul');
+        ul.id = 'grid';
+        ul.style.cssText = `display:grid;grid-template-columns:repeat(${cols},194px);gap:4px 3px;list-style:none;margin:0;padding:0`;
+        ul.innerHTML = tiles.map(([path, hash]) => `<li role="listitem"><a role="link" href="${path}/photo/1"`
+          + ` style="display:block;width:194px;height:194px"><img src="https://pbs.twimg.com/media/${hash}?format=jpg&name=360x360"`
+          + ` style="display:block;width:194px;height:194px"></a></li>`).join('');
+        document.getElementById('root').replaceWith(ul);
+        window.gstate = (id) => {
+          const s = document.querySelector(`#grid a[href*="/status/${id}/"] .xdsu-bar-seg`);
+          return s ? s.dataset.state : null;
+        };
+        window.glabel = (id) => document.querySelector(`#grid a[href*="/status/${id}/"] .xdsu-bar-seg`).title;
+        // The author search: every post whose source has /<user>/status/, without regard to case,
+        // by page. Everything else goes to the table of setup().
+        const table = window.__responder;
+        window.__responder = (u) => {
+          const am = u.match(/source:\*\/([^/*]+)\/status\/\*/);
+          if (!am) {
+            return table(u);
+          }
+          if (window.__authorFail) {
+            return {status: 500, body: 'oops'};
+          }
+          const limit = Number(u.match(/limit=(\d+)/)[1]);
+          const page = Number((u.match(/[?&]page=(\d+)/) || [0, 1])[1]);
+          const all = window.__db.filter((p) => p.source.toLowerCase().includes(`/${am[1].toLowerCase()}/status/`));
+          return {body: JSON.stringify(all.slice((page - 1) * limit, page * limit))};
+        };
+        window.authorReqs = () => window.__reqLog.filter((x) => /source:\*\/[^/*]+\/status\/\*/.test(x.url));
+        // Tweet ids named by the lookups that are not author searches.
+        window.idsLookedUp = () => [...new Set(window.__reqLog.filter((x) => !/source:\*\//.test(x.url))
+            .flatMap((x) => [...x.url.matchAll(/status\/(\d+)\*/g)].map((m) => m[1])))].sort();
+      }, [tiles, cols]);
+      return r;
+    };
+    const range = (a, n) => Array.from({length: n}, (_, i) => String(a + i));
+
+    // A: 31 tiles. 8600-8619 posted under the author's name, 8620 posted as i/web, 8621 posted with
+    // the image as its source, 8622-8629 not posted, 8630 a tile whose link names no author.
+    const tilesA = range(8600, 30).map((id) => [`/Artist_1/status/${id}`, 'GA' + id]).concat([['/i/web/status/8630', 'GA8630']]);
+    const a = await gridPage(tilesA, 6);
+    await a.page.evaluate((ids) => {
+      ids.forEach((id, i) => window.__db.push(window.post(9000 + i, i === 1
+        ? `https://twitter.com/Artist_1/status/${id}/photo/1` : `https://x.com/artist_1/status/${id}`)));
+      window.__db.push(window.post(9100, 'https://x.com/artist_1/status/8603'));
+      window.__db.push(window.post(9101, 'https://x.com/i/web/status/8620'));
+      window.__db.push(window.post(9102, 'https://pbs.twimg.com/media/GA8621.jpg'));
+    }, range(8600, 20));
+    await inject(a.page, v);
+    const posted = range(8600, 20);
+    const greens = await waitUntil(a.page, (ids) => ids.every((id) => window.gstate(id) === 'found'), posted, 6000);
+    const early = await a.page.evaluate(() => ({first: window.__reqLog.filter((x) => !x.url.includes('/profile.json'))[0],
+      author: window.authorReqs().length, ids: window.idsLookedUp()}));
+    const firstOk = !!early.first && /limit=200/.test(early.first.url) && (early.first.url.match(/source:/g) || []).length === 1
+      && /source:\*\/artist_1\/status\/\*/.test(early.first.url);
+    const wantA = Object.fromEntries(posted.map((id) => [id, 'found']).concat([['8620', 'found'], ['8621', 'found']],
+        range(8622, 9).map((id) => [id, 'missing'])));
+    const doneA = await waitUntil(a.page, (want) => Object.entries(want).every(([id, s]) => window.gstate(id) === s)
+      && window.__inflight === 0, wantA, 15000);
+    const endA = await a.page.evaluate(() => ({author: window.authorReqs().length, ids: window.idsLookedUp(),
+      label: window.glabel('8603'), max: 0}));
+    const idsOk = JSON.stringify(endA.ids) === JSON.stringify(range(8620, 11));
+    // The viewer on an author-found tile: its button looks the tweet up itself.
+    await a.page.evaluate(() => {
+      history.pushState({}, '', '/Artist_1/status/8600/photo/1');
+      const layer = document.createElement('div');
+      layer.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000';
+      layer.innerHTML = '<img src="https://pbs.twimg.com/media/GA8600?format=jpg&name=large" style="width:100%;height:100%">';
+      document.body.appendChild(layer);
+    });
+    const pill = await waitUntil(a.page, () => {
+      const p = document.querySelector('.xdsu-pill');
+      return !!p && p.dataset.state === 'found' && window.lookups('status/8600*').length === 1;
+    }, null, 5000);
+    const resA = await fin(a, {pass: true, detail: ''});
+    const okA = greens && firstOk && early.author === 1 && early.ids.every((id) => !posted.includes(id)) && doneA
+      && endA.author === 1 && idsOk && endA.label === 'On Danbooru: 2 posts' && pill && resA.pass;
+
+    // B: an author with 250 posts. The tile of the 230th post turns green from page 2.
+    const b = await gridPage([['/Big/status/8700', 'GB0'], ['/Big/status/8701', 'GB1'], ['/Big/status/8702', 'GB2']], 3);
+    await b.page.evaluate(() => {
+      for (let i = 0; i < 250; i++) {
+        const id = i === 229 ? 8700 : i === 5 ? 8701 : 700000 + i;
+        window.__db.push(window.post(20000 + i, `https://x.com/big/status/${id}`));
+      }
+    });
+    await inject(b.page, v);
+    const doneB = await waitUntil(b.page, () => window.gstate('8700') === 'found' && window.gstate('8701') === 'found'
+      && window.gstate('8702') === 'missing' && window.__inflight === 0, null, 8000);
+    const endB = await b.page.evaluate(() => ({pages: window.authorReqs().map((x) => Number(x.url.match(/[?&]page=(\d+)/)[1])),
+      ids: window.idsLookedUp()}));
+    const resB = await fin(b, {pass: true, detail: ''});
+    const okB = doneB && JSON.stringify(endB.pages) === '[1,2]' && JSON.stringify(endB.ids) === '["8702"]' && resB.pass;
+
+    // C: the author search fails (500). Every tile is then looked up by itself.
+    const c = await gridPage([['/Down/status/8800', 'GC0'], ['/Down/status/8801', 'GC1']], 3);
+    await c.page.evaluate(() => {
+      window.__authorFail = true;
+      window.__db.push(window.post(30000, 'https://x.com/down/status/8800'));
+    });
+    await inject(c.page, v);
+    const doneC = await waitUntil(c.page, () => window.gstate('8800') === 'found' && window.gstate('8801') === 'missing'
+      && window.__inflight === 0, null, 8000);
+    const endC = await c.page.evaluate(() => ({author: window.authorReqs().length, ids: window.idsLookedUp()}));
+    const resC = await fin(c, {pass: true, detail: ''});
+    const okC = doneC && endC.author === 1 && JSON.stringify(endC.ids) === '["8800","8801"]' && resC.pass;
+
+    return {pass: okA && okB && okC,
+      detail: `A: 20 posted tiles green=${greens}, first lookup is the author search=${firstOk}, by then author searches=${early.author}`
+        + ` and tweets looked up=[${early.ids}]; in the end author searches=${endA.author}, tweets looked up=[${endA.ids}]`
+        + `${idsOk ? '' : ' <-- want 8620..8630 only'}, all states right=${doneA}, 8603 "${endA.label}", viewer button looked 8600 up itself=${pill}`
+        + `${okA ? '' : ' <-- A wrong'}${resA.detail} | B (250 posts): pages ${JSON.stringify(endB.pages)}, states right=${doneB},`
+        + ` tweets looked up=[${endB.ids}]${okB ? '' : ' <-- B wrong'}${resB.detail} | C (author search fails): author searches=${endC.author},`
+        + ` tweets looked up=[${endC.ids}], states right=${doneC}${okC ? '' : ' <-- C wrong'}${resC.detail}`};
+  },
+
+  // T12: while a photo grid is in the page, up to 4 lookups (GRID_PARALLEL) run at once; the author
+  // search runs alone before them. A timeline keeps to one request at a time. After a 429 the grid
+  // goes back to one at a time as well. Lookups answer after 300 ms, so that overlaps show.
+  async d21_grid_parallel(browser, v) {
+    const slow = () => {
+      const table = window.__responder;
+      window.__responder = (u) => {
+        if (window.__limit && /status\/\d+\*/.test(u)) {
+          return {status: 429, body: 'slow down', delay: 300};
+        }
+        return Object.assign(table(u), {delay: 300});
+      };
+      // The largest number of lookups in flight at once, and whether an author search overlapped
+      // any other lookup, from the request log (profile checks left out).
+      window.overlap = (from = 0) => {
+        const reqs = window.__reqLog.filter((x) => !x.url.includes('/profile.json') && x.t >= from && x.done !== null);
+        const isAuthor = (x) => /source:\*\/[^/*]+\/status\/\*/.test(x.url);
+        const over = (a, b) => a !== b && a.t < b.done && b.t < a.done;
+        return {max: Math.max(0, ...reqs.map((a) => 1 + reqs.filter((b) => over(a, b)).length)),
+          authorAlone: reqs.filter(isAuthor).every((a) => !reqs.some((b) => over(a, b))),
+          tweets: reqs.filter((x) => !isAuthor(x) && /status\/\d+\*/.test(x.url)).length, n: reqs.length};
+      };
+    };
+    const grid = (ids) => {
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+      ul.innerHTML = ids.map((id) => `<li role="listitem"><a role="link" href="/Par/status/${id}/photo/1"`
+        + ` style="display:block;width:194px;height:194px"><img src="https://pbs.twimg.com/media/GP${id}?format=jpg&name=360x360"`
+        + ` style="display:block;width:194px;height:194px"></a></li>`).join('');
+      document.getElementById('root').replaceWith(ul);
+    };
+    const allMissing = (n) => {
+      const s = [...document.querySelectorAll('.xdsu-bar-seg')];
+      return s.length === n && s.every((x) => x.dataset.state === 'missing') && window.__inflight === 0;
+    };
+    const ids = Array.from({length: 24}, (_, i) => String(8900 + i));
+
+    // A: a grid of 24 tiles, none posted, Member (3 tweets a request).
+    const a = await setup(browser);
+    await a.page.evaluate(slow);
+    await a.page.evaluate(grid, ids);
+    await inject(a.page, v);
+    const doneA = await waitUntil(a.page, allMissing, 24, 15000);
+    const oa = await a.page.evaluate(() => window.overlap());
+    const resA = await fin(a, {pass: true, detail: ''});
+    const okA = doneA && oa.max === 4 && oa.authorAlone && oa.tweets === 8 && resA.pass;
+
+    // B: a timeline of 8 tweets (all within range of the viewport), none posted: one request at a
+    // time.
+    const b = await setup(browser);
+    await b.page.evaluate(slow);
+    await b.page.evaluate(() => {
+      for (let i = 0; i < 8; i++) {
+        window.add({id: String(8950 + i), hashes: ['GT' + i]});
+      }
+    });
+    await inject(b.page, v);
+    const doneB = await waitUntil(b.page, allMissing, 8, 20000);
+    const ob = await b.page.evaluate(() => window.overlap());
+    const resB = await fin(b, {pass: true, detail: ''});
+    const okB = doneB && ob.max === 1 && ob.n >= 6 && resB.pass;
+
+    // C: the grid again, with the first tweet lookups answered 429. The queue pauses; a return to
+    // the tab lifts the pause, and from then on the grid sends one request at a time.
+    const c = await setup(browser);
+    await c.page.evaluate(slow);
+    await c.page.evaluate(() => {
+      window.__limit = true;
+    });
+    await c.page.evaluate(grid, ids);
+    await inject(c.page, v);
+    const limited = await waitUntil(c.page, () => window.__reqLog.filter((x) => /status\/\d+\*/.test(x.url)
+      && !/source:\*\//.test(x.url) && x.done !== null).length >= 1 && window.__inflight === 0, null, 8000);
+    const tReturn = await c.page.evaluate(() => {
+      window.__limit = false;
+      const t = window.tNow();
+      window.setHidden(true);
+      window.setHidden(false);
+      return t;
+    });
+    const doneC = await waitUntil(c.page, allMissing, 24, 30000);
+    const oc = await c.page.evaluate((t) => ({before: window.overlap().max, after: window.overlap(t)}), tReturn);
+    const resC = await fin(c, {pass: true, detail: ''});
+    const okC = limited && doneC && oc.after.max === 1 && oc.after.n > 8 && resC.pass;
+
+    return {pass: okA && okB && okC,
+      detail: `A grid: all 24 resolved=${doneA}, most lookups at once=${oa.max} (want 4), author search alone=${oa.authorAlone},`
+        + ` tweet lookups=${oa.tweets} (want 8)${okA ? '' : ' <-- A wrong'}${resA.detail} | B timeline: resolved=${doneB}, most at once=${ob.max}`
+        + ` (want 1)${okB ? '' : ' <-- B wrong'}${resB.detail} | C grid after a 429: paused=${limited}, resolved after the return=${doneC},`
+        + ` most at once before=${oc.before}, after=${oc.after.max} over ${oc.after.n} lookups (want 1)${okC ? '' : ' <-- C wrong'}${resC.detail}`};
   },
 };
 

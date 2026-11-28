@@ -210,6 +210,17 @@
   // A photo-grid tile (a profile's media tab) is such a link outside every
   // tweet, around a media image.
   const GRID_TILE_SELECTOR = 'a[href*="/status/"][href*="/photo/"]';
+  // A photo grid shows one author's tweets, so one search for every post whose
+  // source names a tweet of that author (one search term) answers most of its
+  // tiles at once. Danbooru returns at most AUTHOR_PAGE_SIZE posts per page;
+  // an author with more is read up to AUTHOR_MAX_PAGES pages.
+  const AUTHOR_PAGE_SIZE = 200;
+  const AUTHOR_MAX_PAGES = 5;
+  // Lookups sent at once while a photo grid is in the page (one at a time
+  // everywhere else): a grid shows a screenful of tweets at once. Danbooru
+  // sets no rate limit on reads; after a 429 or a block the tab goes back to
+  // one at a time.
+  const GRID_PARALLEL = 4;
 
   // -------------- styles --------------
 
@@ -786,7 +797,8 @@
   /**
    * One media tile of a tweet. bar is its bar segment and btn its upload
    * button; for the viewer button's own ref bar is that button, btn is null
-   * and photoCount is set; a photo-grid tile has grid set and no btn. Video and
+   * and photoCount is set; a photo-grid tile has grid set, user (the author's
+   * lower-case name, or null when its link names none) and no btn. Video and
    * GIF tiles have imageHash null. applied is the last state applyColors wrote;
    * openedAt is when a tap last opened the post.
    * @typedef {{
@@ -800,6 +812,7 @@
    *   openedAt: number,
    *   photoCount: (number|undefined),
    *   grid: (boolean|undefined),
+   *   user: (?string|undefined),
    * }} ImageRef
    */
 
@@ -817,6 +830,26 @@
   const pendingTweetIds = [];
   /** @const {!Array<string>} Media hashes waiting for a lookup. */
   const pendingHashes = [];
+
+  /**
+   * The posts found for one author's tweets (see runAuthorLookup). state is
+   * 'pending', 'done' or 'error'; posts maps a tweet id to its posts and is
+   * kept while a later lookup of the same author runs; checkedAt is when the
+   * last lookup ended.
+   * @typedef {{
+   *   state: string,
+   *   posts: !Map<string, !Array<!Post>>,
+   *   checkedAt: number,
+   * }} AuthorEntry
+   */
+
+  /**
+   * @const {!Object<string, !AuthorEntry>} Author lookups by lower-case user
+   * name, for photo-grid tiles.
+   */
+  const authorCache = Object.create(null);
+  /** @const {!Array<string>} User names waiting for an author lookup. */
+  const pendingAuthors = [];
 
   /** @const {!Array<!ImageRef>} Every tracked tile. */
   const imageRefs = [];
@@ -920,6 +953,7 @@
   function processGridTile(link) {
     const m = link.pathname.match(VIEWER_PATH_RE);
     const info = m && parseStatusPath(link.pathname);
+    const user = (link.pathname.match(TWEET_PATH_RE) || [])[1];
     const img = link.querySelector('img[src*="pbs.twimg.com/media/"]');
     const imageHash = img ? parseTwitterImageHash(img.src) : null;
     // A video or GIF tile, or a photo that has not loaded yet.
@@ -969,11 +1003,14 @@
       applied: null,
       openedAt: 0,
       grid: true,
+      user: /^\w+$/.test(user || '') ? user.toLowerCase() : null,
     };
     imageRefs.push(ref);
     mounted.add(info.tweetId);
-    ensureHashLookup(ref);
-    enqueueTweetIdSearch(info.tweetId);
+    if (ref.user) {
+      ensureAuthorLookup(ref.user);
+    }
+    queueRefLookups(ref);
   }
 
   /**
@@ -1376,6 +1413,59 @@
   }
 
   /**
+   * Queues the lookup of a photo grid's author unless one is running or the
+   * last one is not older than RESULT_MAX_AGE_MS. The posts of an earlier
+   * lookup stay in use while the new one runs.
+   * @param {string} user Lower-case user name.
+   */
+  function ensureAuthorLookup(user) {
+    const a = authorCache[user];
+    if (a && (a.state === 'pending' ||
+        Date.now() - a.checkedAt <= RESULT_MAX_AGE_MS)) {
+      return;
+    }
+    authorCache[user] =
+        {state: 'pending', posts: a ? a.posts : new Map(), checkedAt: 0};
+    if (!pendingAuthors.includes(user)) {
+      pendingAuthors.push(user);
+    }
+    scheduleFlush();
+  }
+
+  /**
+   * @param {!ImageRef} ref
+   * @return {!Array<!Post>} The posts the author lookup found for a photo-grid
+   *     tile's tweet; empty for any other ref.
+   */
+  function authorPosts(ref) {
+    const a = ref.grid && ref.user ? authorCache[ref.user] : null;
+    return (a && a.posts.get(ref.tweetId)) || [];
+  }
+
+  /**
+   * Queues the lookups a ref needs. A tweet's tile: its tweet, then its image
+   * (ensureHashLookup). A photo-grid tile waits for its author's lookup, and
+   * needs none of its own when that found a post for its tweet; what the
+   * author lookup did not find is looked up tweet by tweet, since a post may
+   * name the tweet without the author's present name.
+   * @param {!ImageRef} ref
+   */
+  function queueRefLookups(ref) {
+    if (ref.grid && ref.user) {
+      const a = authorCache[ref.user];
+      if (!a) {
+        ensureAuthorLookup(ref.user);
+        return;
+      }
+      if (a.state === 'pending' || authorPosts(ref).length) {
+        return;
+      }
+    }
+    enqueueTweetIdSearch(ref.tweetId);
+    ensureHashLookup(ref);
+  }
+
+  /**
    * Puts a failed lookup back in the queue. The cache entry stays the same
    * object, so its tries and at survive and a batch that is still running can
    * write into it.
@@ -1428,10 +1518,13 @@
 
   // The queue stops while offline or paused (pausedUntil). flushPending runs
   // only from the timer below, and a pause is lifted only through resumeQueue.
+  // It sends one request at a time, except for a photo grid (lanes).
   let flushTimer = null;
   let flushRunning = false;
   let pausedUntil = 0;
   let failedBatches = 0;
+  // Lookups a photo grid may send at once; 1 once Danbooru refused a request.
+  let gridParallel = GRID_PARALLEL;
   const isOffline = () => navigator.onLine === false;
 
   /**
@@ -1456,9 +1549,7 @@
       }
       // During a pause, wait above stretches to the end of the pause. Keys out
       // of range wait for a scroll or a scan to bring them in.
-      const more = Date.now() < pausedUntil ?
-          pendingTweetIds.length || pendingHashes.length :
-          hasDueKeys();
+      const more = Date.now() < pausedUntil ? anyQueued() : hasDueKeys();
       if (more) {
         scheduleFlush();
       }
@@ -1477,16 +1568,20 @@
     }
     clearTimeout(flushTimer);
     flushTimer = null;
-    if (pendingTweetIds.length || pendingHashes.length) {
+    if (anyQueued()) {
       scheduleFlush();
     }
   }
 
   const ownsTweet = (ref, k) => ref.tweetId === k;
   const ownsHash = (ref, k) => ref.imageHash === k;
+  const ownsAuthor = (ref, k) => !!ref.grid && ref.user === k;
+  /** @return {boolean} Whether any lookup is queued. */
+  const anyQueued = () => pendingAuthors.length > 0 ||
+      pendingTweetIds.length > 0 || pendingHashes.length > 0;
 
   /**
-   * @param {string} k A tweet id or media hash.
+   * @param {string} k A tweet id, media hash or author name.
    * @param {function(!ImageRef, string): boolean} owns Whether a ref belongs to
    *     the key.
    * @return {number} Distance in px from the viewport to the key's nearest
@@ -1504,7 +1599,8 @@
   /** @return {boolean} Whether a queued key is in range of the viewport. */
   function hasDueKeys() {
     const due = (owns) => (k) => keyDistance(k, owns) <= window.innerHeight;
-    return pendingTweetIds.some(due(ownsTweet)) ||
+    return pendingAuthors.some(due(ownsAuthor)) ||
+        pendingTweetIds.some(due(ownsTweet)) ||
         pendingHashes.some(due(ownsHash));
   }
 
@@ -1532,8 +1628,38 @@
   }
 
   /**
-   * Runs the queue: tweet lookups before hash lookups. The profile check never
-   * overlaps a lookup.
+   * @return {number} How many lookups may run at once: gridParallel while a
+   *     photo-grid tile is in the page, else 1.
+   */
+  function lanes() {
+    const grid = imageRefs.some((ref) => ref.grid && ref.bar.isConnected);
+    return grid ? gridParallel : 1;
+  }
+
+  /**
+   * Takes up to n batches (see takeBatch), nearest to the viewport first.
+   * @param {number} n
+   * @param {!Array<string>} queue
+   * @param {!Object<string, !CacheEntry>} cache
+   * @param {function(!ImageRef, string): boolean} owns
+   * @return {!Array<!Array<string>>}
+   */
+  function takeBatches(n, queue, cache, owns) {
+    const out = [];
+    while (out.length < n) {
+      const batch = takeBatch(queue, cache, owns);
+      if (!batch.length) {
+        break;
+      }
+      out.push(batch);
+    }
+    return out;
+  }
+
+  /**
+   * Runs the queue: author lookups (photo grids) before tweet lookups before
+   * hash lookups, one request at a time, or lanes() batches at once for a
+   * photo grid. The profile check never overlaps a lookup.
    * @return {!Promise<void>}
    */
   async function flushPending() {
@@ -1548,21 +1674,96 @@
         await profileCheck;
         continue;
       }
-      const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
+      const authors = takeBatch(pendingAuthors, authorCache, ownsAuthor);
+      if (authors.length) {
+        // One author per turn; the tiles its lookup left open then get their
+        // own lookups.
+        pendingAuthors.unshift(...authors.slice(1));
+        await runAuthorLookup(authors[0]);
+        imageRefs.filter((ref) => ref.bar.isConnected)
+            .forEach(queueRefLookups);
+        applyColors();
+        continue;
+      }
+      const ids =
+          takeBatches(lanes(), pendingTweetIds, tweetCache, ownsTweet);
       if (ids.length) {
-        await runTweetIdBatch(ids);
+        await Promise.all(ids.map(runTweetIdBatch));
         imageRefs.filter((ref) => ref.bar.isConnected)
             .forEach(ensureHashLookup);
         applyColors();
         continue;
       }
-      const hashes = takeBatch(pendingHashes, hashCache, ownsHash);
+      const hashes =
+          takeBatches(lanes(), pendingHashes, hashCache, ownsHash);
       if (!hashes.length) {
         return;
       }
-      await runHashBatch(hashes);
+      await Promise.all(hashes.map(runHashBatch));
       applyColors();
     }
+  }
+
+  /**
+   * Looks up every post whose source names a tweet of one author (a source:
+   * search for /<user>/status/ with a wildcard on either side, which Danbooru
+   * matches without regard to case), page by page, and files the posts by
+   * tweet id. A first lookup shows its posts page by page; a repeated one
+   * keeps the earlier posts in use until it is complete. What it finds is
+   * certain; what it does not find is not known to be
+   * missing (see queueRefLookups). On a failure the author's tiles fall back
+   * to their own lookups, and the author is tried again once the entry is
+   * stale.
+   * @param {string} user Lower-case user name.
+   * @return {!Promise<void>}
+   */
+  async function runAuthorLookup(user) {
+    const entry = authorCache[user];
+    // An earlier lookup's posts stay in use until this one is complete.
+    const posts = entry.posts.size ? new Map() : entry.posts;
+    const tags = `status:any source:*/${user}/status/*`;
+    for (let page = 1; page <= AUTHOR_MAX_PAGES; page++) {
+      const url = `${DANBOORU_URL}posts.json?limit=${AUTHOR_PAGE_SIZE}` +
+          `&page=${page}&only=id,source,is_deleted,is_banned` +
+          `&tags=${encodeURIComponent(tags)}`;
+      const res = classifyResponse(await gmFetch(url).catch(() => null));
+      // Dropped while the request ran (its tiles left the page).
+      if (authorCache[user] !== entry) {
+        return;
+      }
+      if (!res.posts) {
+        entry.state = 'error';
+        entry.checkedAt = Date.now();
+        if (res.reason === 'blocked' || res.reason === 'rateLimited') {
+          pausedUntil = Date.now() + PAUSE_MS;
+          gridParallel = 1;
+        }
+        return;
+      }
+      for (const post of res.posts) {
+        const info = parseDanbooruSource(post.source);
+        if (!info.tweetId) {
+          continue;
+        }
+        if (!posts.has(info.tweetId)) {
+          posts.set(info.tweetId, []);
+        }
+        posts.get(info.tweetId).push({
+          id: post.id,
+          photoIndex: info.photoIndex,
+          imageHash: info.imageHash,
+          isDeleted: !!post.is_deleted,
+          isBanned: !!post.is_banned,
+        });
+      }
+      applyColors();
+      if (res.posts.length < AUTHOR_PAGE_SIZE) {
+        break;
+      }
+    }
+    entry.posts = posts;
+    entry.state = 'done';
+    entry.checkedAt = Date.now();
   }
 
   /**
@@ -1717,10 +1918,12 @@
     if (res.reason === 'rateLimited') {
       queue.unshift(...keys.filter((k) => !queue.includes(k)));
       pausedUntil = now + PAUSE_MS;
+      gridParallel = 1;
       return [];
     }
     setKeysError(cache, keys, entries, res.reason);
     if (res.reason === 'blocked') {
+      gridParallel = 1;
       // Everything still queued would be refused too.
       const queues =
           [[tweetCache, pendingTweetIds], [hashCache, pendingHashes]];
@@ -1959,6 +2162,12 @@
    */
   function resolveState(ref) {
     const tc = tweetCache[ref.tweetId];
+    // A photo-grid tile whose author lookup found a post is posted, whatever
+    // its own lookup says and whether or not it had one.
+    if (!(tc && tc.state === 'done' && tc.posts.length) &&
+        authorPosts(ref).length) {
+      return 'found';
+    }
     if (!tc || tc.state === 'pending') {
       return 'searching';
     }
@@ -2005,12 +2214,17 @@
   /**
    * @param {!ImageRef} ref
    * @return {!Array<!Post>} The posts the segment is judged on: the tweet's,
-   *     else those found by the image's media hash.
+   *     else (photo grid) those of the author lookup, else those found by the
+   *     image's media hash.
    */
   function matchedPosts(ref) {
     const tc = tweetCache[ref.tweetId];
     if (tc && tc.state === 'done' && tc.posts.length) {
       return tc.posts;
+    }
+    const byAuthor = authorPosts(ref);
+    if (byAuthor.length) {
+      return byAuthor;
     }
     const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
     if (hc && hc.state === 'done' && hc.posts.length) {
@@ -2295,7 +2509,7 @@
     }
     // A lookup only the pill wanted is dropped by the next flush (see
     // takeBatch).
-    if (pendingTweetIds.length || pendingHashes.length) {
+    if (anyQueued()) {
       scheduleFlush();
     }
   }
@@ -2806,10 +3020,8 @@
       syncPill();
       // A lookup dropped while its tweet was off screen (see takeBatch) runs
       // again if the same segment came back before a scan saw it leave.
-      imageRefs.filter((ref) => ref.bar.isConnected).forEach((ref) => {
-        enqueueTweetIdSearch(ref.tweetId);
-        ensureHashLookup(ref);
-      });
+      imageRefs.filter((ref) => ref.bar.isConnected)
+          .forEach(queueRefLookups);
       retryFailed(null);
       // A queued key can come into range without a scroll (remount, layout
       // change).
