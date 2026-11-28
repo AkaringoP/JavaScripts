@@ -197,8 +197,16 @@
   // Bottom offset of the toast, above X's bottom navigation. Raise it while
   // another fixed control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
+  // From this viewport width up X has no bottom navigation, keeps a sidebar on
+  // the left and shows its own toasts at the bottom centre. The toast then
+  // sits centred, WIDE_TOAST_BOTTOM up: above X's toasts, clear of the
+  // sidebar. (500 is X's layout switch as far as known; a little off does no
+  // harm, the centred place is above the bottom navigation too.)
+  const WIDE_MIN_WIDTH_PX = 500;
+  const WIDE_TOAST_BOTTOM = '88px';
   // The photo viewer's pill sits in the same corner; while it is shown the
-  // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap).
+  // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap), at
+  // every width.
   const PILL_POS = {
     left: '12px',
     bottom: 'calc(64px + env(safe-area-inset-bottom))',
@@ -386,6 +394,13 @@
       text-decoration: underline !important;
     }
     .xdsu-toast.xdsu-above-pill { bottom: ${PILL_POS.toastBottom}; }
+    @media (min-width: ${WIDE_MIN_WIDTH_PX}px) {
+      .xdsu-toast:not(.xdsu-above-pill) {
+        left: 50%;
+        bottom: ${WIDE_TOAST_BOTTOM};
+        transform: translateX(-50%);
+      }
+    }
     /* Photo viewer: an icon button like the tile's. Border style and colour
        follow the bar (solid found, dashed partly posted, red missing, blue
        dashes failed, grey dots checking); title and aria-label name the state.

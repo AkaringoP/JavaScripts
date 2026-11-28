@@ -1913,6 +1913,67 @@ const S = {
         + ` "${on.typed}"${typedOk ? '' : ' <-- want "l"'}${on.tail} | setting off (red before=${off.red}): ${off.rows.join(', ')}${off.tail}`};
   },
 
+  // T5, after T0 (items 3 and 4): from 500 px of viewport width up the toast sits centred, 88 px
+  // from the bottom (above X's own toasts, clear of the sidebar it covered at the left); below 500
+  // it keeps the phone's corner, above the bottom navigation. While the photo viewer's button is
+  // shown it stays above that button at every width. At 1140x911, the window T0 was recorded in,
+  // neither place touches the viewer's controls as recorded there.
+  async d25_toast_wide(browser, v) {
+    const place = async (width, height, touch) => {
+      const r = await setup(browser, {ctxOpts: {viewport: {width, height}, hasTouch: touch, isMobile: touch}, profile: SCROLL.ANON});
+      await r.page.evaluate((touch) => {
+        if (touch) {
+          // x.com has a device-width viewport; without it a phone lays the page out 980px wide.
+          document.head.insertAdjacentHTML('beforeend', '<meta name="viewport" content="width=device-width,initial-scale=1">');
+        }
+        window.addBig('9401', 'TW1');
+      }, touch);
+      await inject(r.page, v);
+      const shown = await waitUntil(r.page, () => !!document.querySelector('.xdsu-toast.xdsu-show'), null, 6000);
+      const g = !shown ? null : await r.page.evaluate(() => {
+        const t = document.querySelector('.xdsu-toast');
+        const rect = () => {
+          const b = t.getBoundingClientRect();
+          return {l: Math.round(b.left), t: Math.round(b.top), r: Math.round(b.right), b: Math.round(b.bottom)};
+        };
+        const free = rect();
+        t.classList.add('xdsu-above-pill');
+        const abovePill = rect();
+        t.classList.remove('xdsu-above-pill');
+        return {cw: document.documentElement.clientWidth, vh: window.innerHeight, free, abovePill};
+      });
+      const res = await fin(r, {pass: true, detail: ''});
+      return {width, shown, g, ok: res.pass, tail: res.detail};
+    };
+    // The viewer's controls at 1140x911 as T0 recorded them: [left, top, width, height].
+    const T0_CONTROLS = [[12, 12, 36, 36], [742, 12, 36, 36], [742, 414, 36, 36], [123, 863, 38, 48], [253, 863, 52, 48],
+      [384, 863, 58, 48], [645, 863, 23, 48]];
+    const hits = (a) => T0_CONTROLS.filter(([l, t, w, h]) => a.l < l + w && l < a.r && a.t < t + h && t < a.b).length;
+    const rows = [];
+    let ok = true;
+    for (const [width, height, touch, wide] of [[1140, 911, false, true], [1920, 1080, false, true], [500, 800, false, true],
+      [499, 800, false, false], [360, 800, true, false]]) {
+      const p = await place(width, height, touch);
+      let good = p.shown && p.ok;
+      let text = 'no toast';
+      if (p.g) {
+        const {cw, vh, free, abovePill} = p.g;
+        const centred = Math.abs((free.l + free.r) / 2 - cw / 2) <= 1;
+        const pillOk = abovePill.l === 12 && vh - abovePill.b === 116;
+        good = good && pillOk && (wide ? centred && vh - free.b === 88 : free.l === 12 && vh - free.b === 64);
+        text = `left ${free.l}, right ${free.r} of ${cw}, ${vh - free.b} px up (want ${wide ? 'centred, 88' : 'left 12, 64'});`
+          + ` above the viewer button: left ${abovePill.l}, ${vh - abovePill.b} px up (want 12, 116)`;
+        if (width === 1140) {
+          const touched = hits(free) + hits(abovePill);
+          good = good && touched === 0;
+          text += `; recorded controls touched: ${touched} (want 0)`;
+        }
+      }
+      ok = ok && good;
+      rows.push(`${width}x${height}: ${text}${good ? '' : ' <-- wrong'}${p.tail}`);
+    }
+    return {pass: ok, detail: rows.join(' | ')};
+  },
 };
 
 // Injects an in-memory copy of the variant that publishes its caches as window.__tc (tweet ids),
