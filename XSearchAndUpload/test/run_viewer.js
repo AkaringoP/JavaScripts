@@ -595,7 +595,8 @@ const S = {
     const pass = during.same && during.ref.length === 1 && during.ref[0].count === 2
       && strip(during.states[0]) === strip(before[0]) && strip(after.states[0]) === strip(before[0])
       && before[0].segs.every((g) => g.state === 'foundWeak' && g.aria === '2 of 4 images posted')
-      && during.opened.length === 1 && after.refs.length === 0 && after.total === 5
+      // Clicks on the two segments open nothing (desktop task T11: segments only show the state).
+      && during.opened.length === 0 && after.refs.length === 0 && after.total === 5
       && !during.pillAttrs.includes('data-tracked') && !during.pillAttrs.includes('data-image-hash')
       && during.p.aria === 'On Danbooru' && r.errors.length === 0;
     return {pass, detail: `9861 before: ${F_ST(before[0])} | viewer 9862 open 4.5 s: pill ref same object=${during.same} ${JSON.stringify(during.ref)}`

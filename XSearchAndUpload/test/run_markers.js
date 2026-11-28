@@ -93,7 +93,8 @@ async function setup(browser, {noPoll = false, profile = null} = {}) {
         barNext: bar && bar.nextElementSibling ? (bar.nextElementSibling.dataset.g || bar.nextElementSibling.tagName) : null,
         segs: [...a.querySelectorAll('.xdsu-bar-seg')].map((s) => ({
           state: s.dataset.state,
-          href: s.getAttribute('href'),
+          // The post the segment stands for: its href before desktop task T11, data-match-url since.
+          href: s.getAttribute('href') || s.dataset.matchUrl || null,
           title: s.getAttribute('title'),
           aria: s.getAttribute('aria-label'),
           role: s.getAttribute('role'),

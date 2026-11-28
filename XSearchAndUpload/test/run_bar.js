@@ -1,4 +1,4 @@
-// Bar tap targets and tap actions, state shapes and contrast, menu commands.
+// The status bar (shows the state only since desktop task T11): its place, its taps going to the tweet, state shapes and contrast, menu commands.
 // node run_bar.js [variant,..] [scenario,..]
 const {chromium, newPage, inject, sleep, withTimeout} = require('./h.js');
 const L = require('./lib.js');
@@ -86,10 +86,11 @@ async function setup(browser, opts = {}) {
     window.__dnOff = 0;
     Date.now = () => realNow() + window.__dnOff;
     window.seg = (id, n = 1) => document.querySelectorAll(`#t${id} .xdsu-bar-seg`)[n - 1];
+    // match: the post a segment stands for (href before desktop task T11, data-match-url since).
     window.segAttrs = (id, n = 1) => {
       const s = window.seg(id, n);
       return s && {tag: s.tagName, state: s.dataset.state || null, href: s.getAttribute('href'),
-        target: s.getAttribute('target'), rel: s.getAttribute('rel'), role: s.getAttribute('role'),
+        match: s.getAttribute('href') || s.dataset.matchUrl || null, role: s.getAttribute('role'),
         aria: s.getAttribute('aria-label'), title: s.getAttribute('title'), color: window.segColor(s)};
     };
   });
@@ -226,8 +227,10 @@ async function bandReport(page, tid) {
 // ---------- scenarios ----------
 
 const S = {
-  // ---------- T17 / S13 ----------
-  // Band geometry and taps on a found segment, flex-column and block parents, 1-image and 4-image tweets.
+  // ---------- T17 / S13 (since desktop task T11: the bar only shows the state) ----------
+  // The bar on a touch screen, flex-column and block parents, 1-image and 4-image tweets: it sits
+  // between the photos and the action row without overlapping either, and a tap anywhere on it
+  // does nothing: it reaches neither x.com nor any action of the script's.
   async e17_band_flex(browser, v) {
     return bandScenario(browser, v, '');
   },
@@ -235,135 +238,89 @@ const S = {
     return bandScenario(browser, v, '.content{display:block !important}');
   },
 
-  // A tap on a missing segment re-checks once and never reaches the article; a 2nd tap within 1.5 s does nothing.
-  async e17_missing_tap(browser, v) {
-    const r = await setup(browser);
-    await r.page.evaluate(() => window.add({id: '9101', hashes: ['MS1']}));
-    await inject(r.page, v);
-    await sleep(1500);
-    const a0 = await r.page.evaluate(() => window.segAttrs('9101'));
-    const n0 = await r.page.evaluate(() => window.countReq('status/9101'));
-    await tapSeg(r.page, '9101');
-    await sleep(100);
-    const mid = await r.page.evaluate(() => window.segAttrs('9101'));
-    await sleep(500);
-    await tapSeg(r.page, '9101'); // ~600 ms after the first
-    await sleep(700);
-    const n1 = await r.page.evaluate(() => window.countReq('status/9101'));
-    await sleep(800); // > 1.5 s after the first tap
-    await tapSeg(r.page, '9101');
-    await sleep(800);
-    const n2 = await r.page.evaluate(() => window.countReq('status/9101'));
-    const s = await r.page.evaluate(() => ({clicks: window.__clicks, md: window.__mousedowns, opened: window.__opened.length,
-      toasts: window.__toasts, a: window.segAttrs('9101')}));
-    const pass = a0.state === 'missing' && n1 - n0 === 1 && n2 - n0 === 2 && s.clicks.length === 0 && s.md === 0
-      && s.opened === 0 && r.popups.length === 0 && s.a.state === 'missing';
-    return fin(r, pass, `before=${JSON.stringify(a0)} mid=${mid.state}${mid.color} lookups: initial=${n0} after 2 taps in 1.5 s=+${n1 - n0}`
-      + ` after 3rd tap at 1.6 s=+${n2 - n0}; x.com clicks=${JSON.stringify(s.clicks)} mousedowns=${s.md} opened=${s.opened} toasts=${JSON.stringify(s.toasts)}`);
-  },
-
-  // A tap on a failed segment retries now and names the reason in a toast, every time.
-  async e17_error_tap(browser, v) {
+  // A tap on a segment, whatever its state, does nothing: no lookup, no tab, no toast, and it does
+  // not reach x.com's tweet either.
+  async e17_taps_pass(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
-      window.__fail = (u) => (u.includes('status/') ? {status: 400, body: '{"error":"X","message":"bad"}'} : {body: '[]'});
-      window.add({id: '9201', hashes: ['ER1']});
+      window.__db.push({id: 501, source: 'https://x.com/u/status/9401/photo/1', is_deleted: false, is_banned: false});
+      const table = window.__responder;
+      window.__responder = (u) => (u.includes('status/9201') ? {status: 400, body: '{"error":"X","message":"bad"}'} : table(u));
+      window.add({id: '9401', hashes: ['FD1']});
+      window.add({id: '9101', hashes: ['MS1']});
     });
     await inject(r.page, v);
     await sleep(1500);
-    const steps = [];
-    const reasons = [
-      // next failure after the tap
-      () => (u) => (u.includes('status/') ? {error: true} : {body: '[]'}),
-      () => (u) => (u.includes('status/') ? {status: 500, body: 'oops'} : {body: '[]'}),
-      () => null,
-    ];
-    for (let i = 0; i < 3; i++) {
-      const before = await r.page.evaluate(() => ({a: window.segAttrs('9201'), n: window.countReq('status/9201'), t: window.__toasts.length}));
-      await r.page.evaluate((src) => {
-        window.__fail = src ? eval(src) : null;
-        if (!src) {
-          window.__db.push({id: 77, source: 'https://x.com/u/status/9201', is_deleted: false, is_banned: false});
-        }
-      }, i < 2 ? `(${reasons[i]()})` : null);
-      await tapSeg(r.page, '9201');
-      await sleep(200);
-      const right = await r.page.evaluate(() => window.segAttrs('9201').state);
-      await sleep(i === 2 ? 1500 : 4800);
-      const after = await r.page.evaluate(() => ({a: window.segAttrs('9201'), n: window.countReq('status/9201'), toasts: window.__toasts}));
-      steps.push({before: before.a.state, sent: after.n - before.n, stateRightAfter: right, after: after.a.state,
-        toast: after.toasts.slice(before.t)});
-    }
-    const s = await r.page.evaluate(() => ({clicks: window.__clicks, opened: window.__opened.length}));
-    const pass = steps[0].before === 'error' && steps.every((x) => x.sent >= 1)
-      && JSON.stringify(steps[0].toast) === '["Danbooru refused the search. Trying again."]'
-      && JSON.stringify(steps[1].toast) === '["Could not reach Danbooru. Trying again."]'
-      && JSON.stringify(steps[2].toast) === '["Danbooru had a server error. Trying again."]'
-      && steps[0].after === 'error' && steps[1].after === 'error' && steps[2].after === 'found'
-      && s.clicks.length === 0 && s.opened === 0;
-    return fin(r, pass, `steps=${JSON.stringify(steps)} x.com clicks=${JSON.stringify(s.clicks)} opened=${s.opened}`);
-  },
-
-  // A tap on a searching segment does nothing and is swallowed.
-  async e17_searching_tap(browser, v) {
-    const r = await setup(browser);
+    // Alone, so that its refused lookup fails no other tweet.
+    await r.page.evaluate(() => window.add({id: '9201', hashes: ['ER1']}));
+    await sleep(1500);
     await r.page.evaluate(() => {
       window.__delay = 8000;
       window.add({id: '9301', hashes: ['SR1']});
     });
-    await inject(r.page, v);
     await sleep(1200);
-    const a = await r.page.evaluate(() => ({a: window.segAttrs('9301'), n: window.__lookups.length}));
-    await tapSeg(r.page, '9301');
-    await tapSeg(r.page, '9301');
-    await sleep(600);
-    const s = await r.page.evaluate(() => ({a: window.segAttrs('9301'), n: window.__lookups.length, clicks: window.__clicks,
-      md: window.__mousedowns, opened: window.__opened.length, toasts: window.__toasts, win: window.__winOpen.length}));
-    const pass = a.a.state === 'searching' && s.a.state === 'searching' && s.n === a.n && s.clicks.length === 0 && s.md === 0
-      && s.opened === 0 && s.win === 0 && s.toasts.length === 0 && r.popups.length === 0;
-    return fin(r, pass, `before=${JSON.stringify(a.a)} lookups ${a.n}->${s.n} x.com clicks=${JSON.stringify(s.clicks)} mousedowns=${s.md}`
-      + ` opened=${s.opened} toasts=${s.toasts.length}`);
+    const rows = [];
+    let ok = true;
+    for (const [id, want] of [['9401', 'found'], ['9101', 'missing'], ['9201', 'error'], ['9301', 'searching']]) {
+      const a = await r.page.evaluate(() => ({n: window.__lookups.length, t: window.__toasts.length, c: window.__clicks.length}));
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+      });
+      await tapSeg(r.page, id);
+      await sleep(200);
+      await tapSeg(r.page, id);
+      await sleep(600);
+      const s = await r.page.evaluate(() => ({n: window.__lookups.length, t: window.__toasts.length,
+        clicks: window.__clicks.slice(), opened: window.__opened.length, win: window.__winOpen.length}));
+      const state = await r.page.evaluate((id) => window.segAttrs(id).state, id);
+      const clicks = s.clicks.slice(a.c);
+      const good = state === want && s.n === a.n && s.t === a.t && s.opened === 0 && s.win === 0
+        && clicks.length === 0;
+      ok = ok && good;
+      rows.push(`${id} ${state}: lookups +${s.n - a.n}, toasts +${s.t - a.t}, opened ${s.opened}, x.com clicks ${JSON.stringify(clicks)}${good ? '' : ' <-- wrong'}`);
+    }
+    return fin(r, ok && r.popups.length === 0, `${rows.join(' | ')} | popups=${r.popups.length}`);
   },
 
-  // Double tap on a found segment opens one tab; the lock is per segment, 1.5 s (like the upload button).
-  // With GM_openInTab throwing, window.open is the fallback.
-  async e17_found_double_tap(browser, v) {
+  // A failed segment names the reason in its label (the tooltip with a mouse): a refused search, a
+  // network error and a server error. One tweet at a time, so each lookup fails its own way.
+  async e17_error_reason(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
-      window.__db.push({id: 501, source: 'https://x.com/u/status/9401/photo/1', is_deleted: false, is_banned: false});
-      window.add({id: '9401', hashes: ['FD1']});
-    });
-    await inject(r.page, v);
-    await sleep(1500);
-    const p = await segCentre(r.page, '9401');
-    await r.page.touchscreen.tap(p.x, p.y);
-    await sleep(120);
-    await r.page.touchscreen.tap(p.x, p.y);
-    await sleep(400);
-    const first = await r.page.evaluate(() => window.__opened.slice());
-    await sleep(1200); // 1.7 s after the first tap
-    await r.page.touchscreen.tap(p.x, p.y);
-    await sleep(300);
-    const second = await r.page.evaluate(() => window.__opened.slice());
-    await r.page.evaluate(() => {
-      window.GM_openInTab = () => {
-        throw new Error('no tabs');
+      window.__fail = (u) => {
+        if (u.includes('status/9211')) {
+          return {status: 400, body: '{"error":"X","message":"bad"}'};
+        }
+        if (u.includes('status/9212')) {
+          return {error: true};
+        }
+        if (u.includes('status/9213')) {
+          return {status: 500, body: 'oops'};
+        }
+        return {body: '[]'};
       };
     });
-    await sleep(1600);
-    await r.page.touchscreen.tap(p.x, p.y);
-    await sleep(300);
-    const s = await r.page.evaluate(() => ({clicks: window.__clicks, md: window.__mousedowns, win: window.__winOpen}));
-    const errs = r.errors.filter((e) => e.includes('[XDSU] open post failed'));
-    r.errors = r.errors.filter((e) => !e.includes('[XDSU] open post failed'));
-    const pass = first.length === 1 && first[0] === B + 'posts/501' && second.length === 2 && r.popups.length === 0
-      && s.clicks.length === 0 && s.md === 0 && JSON.stringify(s.win) === JSON.stringify([B + 'posts/501']) && errs.length === 1;
-    return fin(r, pass, `2 taps 120 ms apart -> opened=${JSON.stringify(first)}; 3rd tap at 1.7 s -> ${second.length};`
-      + ` GM_openInTab throwing -> window.open=${JSON.stringify(s.win)} (logged ${errs.length}); popups=${r.popups.length}`
-      + ` x.com clicks=${JSON.stringify(s.clicks)} mousedowns=${s.md}`);
+    await inject(r.page, v);
+    const want = {
+      9211: 'Lookup failed – Danbooru refused the search.',
+      9212: 'Lookup failed – Could not reach Danbooru.',
+      9213: 'Lookup failed – Danbooru had a server error.',
+    };
+    const got = {};
+    for (const id of Object.keys(want)) {
+      await r.page.evaluate((id) => window.add({id, hashes: ['ER' + id]}), id);
+      // A network or server error is retried once after 1.5 s before it counts.
+      await r.page.waitForFunction((id) => window.seg(id) && window.seg(id).dataset.state === 'error', id,
+          {timeout: 6000, polling: 50}).catch(() => null);
+      got[id] = await r.page.evaluate((id) => window.segAttrs(id), id);
+    }
+    const ok = Object.entries(want).every(([id, t]) => got[id] && got[id].state === 'error' && got[id].title === t
+      && got[id].aria === t);
+    return fin(r, ok, Object.entries(got).map(([id, x]) => `${id}: ${x && x.state} "${x && x.title}"`).join(' | '));
   },
 
-  // found -> re-check -> missing -> re-check -> found on the same element, still tracked.
+  // found -> re-check -> missing -> re-check -> found on the same element, still tracked. Both
+  // re-checks come from the Like button.
   async e17_identity(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
@@ -383,16 +340,17 @@ const S = {
       n: document.querySelectorAll('#t9501 .xdsu-bar-seg').length}));
     await r.page.evaluate(() => window.__db.push({id: 602, source: 'https://x.com/u/status/9501/photo/1', is_deleted: false, is_banned: false}));
     await sleep(200);
-    await tapSeg(r.page, '9501');
+    await like(r.page, '9501');
     await sleep(1500);
     const c = await r.page.evaluate(() => ({a: window.segAttrs('9501'), same: window.seg('9501') === window.__el}));
-    const pass = a.state === 'found' && a.href === B + 'posts/601' && b.same && b.n === 1 && b.a.state === 'missing' && b.a.href === null
-      && c.same && c.a.state === 'found' && c.a.href === B + 'posts/602';
-    return fin(r, pass, `found=${JSON.stringify(a)} | after Like re-check: ${JSON.stringify(b)} | after tap re-check: ${JSON.stringify(c)}`);
+    const pass = a.state === 'found' && a.match === B + 'posts/601' && b.same && b.n === 1 && b.a.state === 'missing' && b.a.match === null
+      && c.same && c.a.state === 'found' && c.a.match === B + 'posts/602';
+    return fin(r, pass, `found=${JSON.stringify(a)} | after a Like: ${JSON.stringify(b)} | after another Like: ${JSON.stringify(c)}`);
   },
 
-  // Long-press path: found segments are real links; the others have no href.
-  async e17_long_press(browser, v) {
+  // No segment is a link or takes the focus: every one is a <span role="img"> whose label is its
+  // title. A found or partly posted one names its post in data-match-url (no href).
+  async e17_no_links(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
       window.__db.push({id: 701, source: 'https://x.com/u/status/9601/photo/1', is_deleted: false, is_banned: false});
@@ -413,11 +371,12 @@ const S = {
     });
     await sleep(1200);
     const s = await r.page.evaluate(() => ({found: window.segAttrs('9601'), weak: window.segAttrs('9602', 1),
-      missing: window.segAttrs('9603'), error: window.segAttrs('9604'), searching: window.segAttrs('9605')}));
-    const linkOk = (x, url) => x.tag === 'A' && x.href === url && x.target === '_blank' && x.rel === 'noopener';
-    const pass = s.found.state === 'found' && linkOk(s.found, B + 'posts/701')
-      && s.weak.state === 'foundWeak' && linkOk(s.weak, B + 'posts/702')
-      && ['missing', 'error', 'searching'].every((k) => s[k].state === k && s[k].href === null && s[k].tag === 'A');
+      missing: window.segAttrs('9603'), error: window.segAttrs('9604'), searching: window.segAttrs('9605'),
+      tabbable: [...document.querySelectorAll('.xdsu-bar-seg')].filter((x) => x.tabIndex >= 0).length}));
+    const plain = (x, k) => x.state === k && x.tag === 'SPAN' && x.href === null && x.role === 'img' && !!x.aria && x.aria === x.title;
+    const pass = plain(s.found, 'found') && s.found.match === B + 'posts/701'
+      && plain(s.weak, 'foundWeak') && s.weak.match === B + 'posts/702'
+      && ['missing', 'error', 'searching'].every((k) => plain(s[k], k) && s[k].match === null) && s.tabbable === 0;
     return fin(r, pass, Object.entries(s).map(([k, x]) => `${k}: ${JSON.stringify(x)}`).join(' | '));
   },
 
@@ -465,7 +424,8 @@ const S = {
       searching: (c) => c.bgi === 'linear-gradient(rgb(118, 118, 118), rgb(118, 118, 118))' && c.bgs === '100% 2px'
         && c.bgr === 'no-repeat' && c.bgp === '50% 50%' && c.anim === 'xdsu-pulse',
     };
-    const role = {found: null, foundWeak: null, missing: 'button', error: 'button', searching: null};
+    // Since desktop task T11 every segment only shows its state.
+    const role = {found: 'img', foundWeak: 'img', missing: 'img', error: 'img', searching: 'img'};
     const bad = Object.keys(shape).filter((k) => !(s[k] && s[k].state === k && s[k].aria && s[k].aria === s[k].title
       && s[k].role === role[k] && shape[k](s[k].cs)));
     const distinct = new Set(Object.values(s).map((x) => JSON.stringify(x.cs))).size;
@@ -636,7 +596,9 @@ const S = {
     const legend = out.default.alerts[0] || '';
     const pass = out.default.names.includes('Danbooru URL (danbooru.donmai.us)') && out.safe.names.includes('Danbooru URL (safebooru.donmai.us)')
       && out.default.alerts.length === 1
-      && ['Solid green', 'Green stripes', 'Red outline', 'Blue dashes', 'Thin grey line'].every((t) => legend.includes(t));
+      && ['Solid green', 'Green stripes', 'Red outline', 'Blue dashes', 'Thin grey line'].every((t) => legend.includes(t))
+      // The bar does nothing when tapped (desktop task T11).
+      && !/\btap\b/i.test(legend);
     return {pass, detail: `menus=${JSON.stringify(out.default.names)} safebooru menus=${JSON.stringify(out.safe.names)} legend=${JSON.stringify(legend)}`};
   },
 
@@ -730,14 +692,18 @@ const S = {
   },
 };
 
+// The bar on the realistic page with a touch screen (desktop task T11: it only shows the state).
+// Judged: the bar sits between the photos and the action row without overlapping either; every
+// point of it, gaps between segments included, hits a segment; real taps on it and on the gaps do
+// nothing at all. Were the segments to let taps through, the browser's touch adjustment would move
+// a tap near the edges to the photo above or to the Like button below.
 async function bandScenario(browser, v, pageCss) {
   const r = await realPage(browser, v, {pageCss});
   const page = r.page;
   const R = {};
   let ok = true;
-  for (const [tid, url] of [['1001', B + 'posts/501'], ['1004', B + 'posts/541']]) {
+  for (const tid of ['1001', '1004']) {
     const g = await bandReport(page, tid);
-    // Real touch taps at the centre x, offsets -9..+9.
     const taps = [];
     for (let d = -9; d <= 9; d++) {
       const p = await page.evaluate((tid) => {
@@ -747,9 +713,8 @@ async function bandScenario(browser, v, pageCss) {
         return {x: b.left + b.width / 2, y: b.top + b.height / 2};
       }, tid);
       const t = await realTap(page, p.x, p.y + d);
-      taps.push({k: d, v: t.open.length === 1 && t.open[0] === url && t.clicks.length === 0 ? 'opens' : `open=${JSON.stringify(t.open)} clicks=${t.clicks}`});
+      taps.push({k: d, v: t.open.length ? `opened ${JSON.stringify(t.open)}` : t.clicks.length ? t.clicks.join('+') : 'nothing'});
     }
-    // Real taps at the gaps between segments (4-image tweet): something opens, nothing reaches x.com.
     const gapTaps = [];
     for (const gp of g.gaps) {
       for (const d of [-9, 0, 9]) {
@@ -759,20 +724,21 @@ async function bandScenario(browser, v, pageCss) {
           return b.top + b.height / 2;
         }, tid);
         const t = await realTap(page, gp.x, cy + d);
-        gapTaps.push(`gap${gp.i}/${d}:${t.open.length === 1 && t.clicks.length === 0 ? 'opens' : JSON.stringify(t)}`);
+        gapTaps.push(`gap${gp.i}/${d}:${t.open.length ? 'opened' : t.clicks.join('+') || 'nothing'}`);
       }
     }
     const efpOk = g.centreSweep.every((x) => x.v === 'seg0');
     const gapOk = g.gaps.every((gp) => gp.rows.every((x) => /^seg\d$/.test(x.v)));
-    const tapOk = taps.every((x) => x.v === 'opens');
-    const gapTapOk = gapTaps.every((x) => x.endsWith('opens'));
-    const geoOk = g.band.inBarV && g.photoOverlapPx2 === 0 && g.actionOverlapPx2 === 0 && g.hMisses.length === 0;
-    ok = ok && efpOk && gapOk && tapOk && gapTapOk && geoOk;
+    const noHitOk = efpOk && gapOk && g.hMisses.length === 0;
+    const tapOk = taps.every((x) => x.v === 'nothing');
+    const gapTapOk = gapTaps.every((x) => x.endsWith(':nothing'));
+    const geoOk = g.band.inBarV && g.photoOverlapPx2 === 0 && g.actionOverlapPx2 === 0;
+    ok = ok && noHitOk && tapOk && gapTapOk && geoOk;
     R[tid] = {segs: g.segs, segH: g.segH, barH: g.barH, band: g.band, gapPhotoToBand: g.gapPhotoToBand, gapBandToActions: g.gapBandToActions,
       photoOverlapPx2: g.photoOverlapPx2, actionOverlapPx2: g.actionOverlapPx2,
-      efpCentre: L.bands(g.centreSweep), efpWide: L.bands(g.wideSweep), efpGaps: g.gaps.map((gp) => L.bands(gp.rows)),
-      hMisses: g.hMisses.slice(0, 6), hMissCount: g.hMisses.length, taps: L.bands(taps), gapTaps: gapTapOk ? 'all open' : gapTaps,
-      ok: {efpOk, gapOk, tapOk, gapTapOk, geoOk}};
+      efpCentre: L.bands(g.centreSweep), efpGaps: g.gaps.map((gp) => L.bands(gp.rows)), hMissCount: g.hMisses.length,
+      taps: L.bands(taps), gapTaps: gapTapOk ? 'all do nothing' : gapTaps,
+      ok: {noHitOk, tapOk, gapTapOk, geoOk}};
   }
   await r.context.close();
   return {pass: ok, detail: JSON.stringify(R)};

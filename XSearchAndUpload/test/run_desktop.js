@@ -188,12 +188,13 @@ async function mouseClick(page, p, kind) {
 }
 
 // The four clicks on one control. Left opens one tab in front, Ctrl + left and middle one tab
-// behind, right opens nothing. None may reach x.com (click, or auxclick/mousedown of the left or
-// middle button), open a page of the browser's own or navigate. A right click is left to the
-// browser (link menu), so its auxclick and contextmenu may bubble; they are listed, not judged.
-async function clickMatrix(r, sel, urlRe) {
+// behind, right opens nothing; with opens false (a segment since desktop task T11) no click opens
+// anything. None may reach x.com (click, or auxclick/mousedown of the left or middle button), open
+// a page of the browser's own or navigate. A right click is left to the browser (link menu), so its
+// auxclick and contextmenu may bubble; they are listed, not judged.
+async function clickMatrix(r, sel, urlRe, opens = true) {
   const {page} = r;
-  const want = {left: true, ctrl: false, middle: false, right: null};
+  const want = opens ? {left: true, ctrl: false, middle: false, right: null} : {left: null, ctrl: null, middle: null, right: null};
   const rows = [];
   let ok = true;
   for (const kind of Object.keys(want)) {
@@ -319,7 +320,8 @@ const S = {
       return fin(r, {pass: false, detail: 'segments never reached found / missing'});
     }
     await r.page.evaluate(() => window.watchReach());
-    const seg = await clickMatrix(r, '#t7011 .xdsu-bar-seg', /\/posts\/501$/);
+    // Since desktop task T11 a segment opens nothing; its clicks are swallowed.
+    const seg = await clickMatrix(r, '#t7011 .xdsu-bar-seg', null, false);
     const btn = await clickMatrix(r, '#t7012 .xdsu-upload-btn', /\/uploads\/new\?/);
     // The viewer over the timeline, on the missing tweet's photo: the button uploads that image.
     await r.page.evaluate(() => {
@@ -1216,11 +1218,11 @@ const S = {
       + ` | 1000 more within the minute: ${within[0]}, a minute on: ${later[0]} (want 3400, then 2400)`});
   },
 
-  // T4: with a mouse, the segment under the pointer lights up (filter: brightness) when tapping it
-  // does something (posted, partly posted, not posted, failed), and a checking segment keeps the
-  // default cursor; the viewer button darkens under the pointer like the tile's button. With the
-  // keyboard, the controls that take the focus show a focus ring. On a phone none of the hover
-  // rules apply.
+  // T4, revised by T11: a segment only shows the state. With a mouse it keeps the default cursor
+  // and does not light up in any state, but takes the pointer, so its label shows as the tooltip;
+  // it does not take the keyboard focus. The viewer button darkens under the pointer like the
+  // tile's button, and the controls that take the focus show a focus ring. On a phone none of the
+  // hover rules apply, and the segments still take taps (to swallow them; see run_bar.js).
   async d16_hover_focus(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
@@ -1252,8 +1254,10 @@ const S = {
       return fin(r, {pass: false, detail: `set-up: states ${JSON.stringify(await Promise.all(['8201', '8202', '8203', '8204'].map(state)))}`});
     }
     const look = (sel) => r.page.evaluate((sel) => {
-      const cs = getComputedStyle(document.querySelector(sel));
-      return {filter: cs.filter, cursor: cs.cursor, bg: cs.backgroundColor, outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`};
+      const el = document.querySelector(sel);
+      const cs = getComputedStyle(el);
+      return {filter: cs.filter, cursor: cs.cursor, pe: cs.pointerEvents, bg: cs.backgroundColor,
+        outline: `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`, title: el.title, aria: el.getAttribute('aria-label')};
     }, sel);
     const hover = async (sel) => {
       await r.page.mouse.move(5, 5);
@@ -1266,13 +1270,13 @@ const S = {
     };
     const rows = [];
     let ok = true;
-    const want = {'8201': true, '8202': true, '8203': true, '8204': false};
-    for (const [id, lit] of Object.entries(want)) {
+    for (const id of ['8201', '8202', '8203', '8204']) {
       const h = await hover(`#t${id} .xdsu-bar-seg`);
-      const good = (lit ? h.on.filter === 'brightness(1.35)' && h.on.cursor === 'pointer'
-        : h.on.filter === 'none' && h.on.cursor === 'default') && h.off.filter === 'none';
+      const good = h.on.filter === 'none' && h.on.cursor === 'default' && h.on.pe === 'auto' && !!h.on.title
+        && h.on.title === h.on.aria && h.off.filter === 'none';
       ok = ok && good;
-      rows.push(`${id} ${await state(id)}: hovered filter=${h.on.filter} cursor=${h.on.cursor}, after=${h.off.filter}${good ? '' : ' <-- wrong'}`);
+      rows.push(`${id} ${await state(id)}: hovered filter=${h.on.filter} cursor=${h.on.cursor} pointer-events=${h.on.pe}`
+        + ` tooltip="${h.on.title}"${good ? '' : ' <-- wrong'}`);
     }
     // Keyboard: Tab until the control has the focus (at most 40 presses), then read its outline.
     const ring = async (sel) => {
@@ -1299,7 +1303,7 @@ const S = {
     const pill = pillReady ? await hover('.xdsu-pill') : null;
     const pillRing = pillReady ? await ring('.xdsu-pill') : 'no viewer button';
     const pillOk = !!pill && pill.on.bg === 'rgba(0, 0, 0, 0.78)' && pill.off.bg === 'rgba(0, 0, 0, 0.55)';
-    const ringsOk = [segRing, btnRing, pillRing].every((x) => x === RING);
+    const ringsOk = segRing === 'never focused' && [btnRing, pillRing].every((x) => x === RING);
     const res = await fin(r, {pass: true, detail: ''});
     // A phone: the same posted segment, touched and hovered, does not light up.
     const p = await setup(browser, {ctxOpts: PHONE});
@@ -1312,19 +1316,19 @@ const S = {
     const pos = await centre(p.page, '#t8211 .xdsu-bar-seg');
     await p.page.mouse.move(pos.x, pos.y);
     const phone = await p.page.evaluate(() => ({mq: matchMedia('(hover: hover) and (pointer: fine)').matches,
-      filter: getComputedStyle(window.seg('8211')).filter}));
+      filter: getComputedStyle(window.seg('8211')).filter, pe: getComputedStyle(window.seg('8211')).pointerEvents}));
     const res2 = await fin(p, {pass: true, detail: ''});
-    const phoneOk = phoneReady && !phone.mq && phone.filter === 'none';
+    const phoneOk = phoneReady && !phone.mq && phone.filter === 'none' && phone.pe === 'auto';
     return {pass: ok && ringsOk && pillOk && phoneOk && res.pass && res2.pass,
       detail: `segments: ${rows.join(' | ')} | viewer button hovered bg=${pill && pill.on.bg}, after=${pill && pill.off.bg}${pillOk ? '' : ' <-- wrong'}`
-        + ` | focus rings: posted segment=${segRing}, upload button=${btnRing}, viewer button=${pillRing}${ringsOk ? '' : ' <-- want ' + RING}`
-        + ` | phone: hover media query=${phone.mq}, hovered filter=${phone.filter}${phoneOk ? '' : ' <-- wrong'}${res.detail}${res2.detail}`};
+        + ` | focus: posted segment=${segRing} (want never focused), upload button=${btnRing}, viewer button=${pillRing}${ringsOk ? '' : ' <-- want ' + RING}`
+        + ` | phone: hover media query=${phone.mq}, filter=${phone.filter}, segment pointer-events=${phone.pe}${phoneOk ? '' : ' <-- wrong'}${res.detail}${res2.detail}`};
   },
 
-  // T4: Command+click (macOS) opens the tab behind, as Ctrl+click and a middle click do, on a posted
-  // segment and an upload button; a plain click still opens it in front. A middle press on a
-  // segment is cancelled, so that one without a link (not posted) does not start the browser's
-  // autoscroll; read from the mousedown event once its dispatch is over.
+  // T4, revised by T11: Command+click (macOS) opens the upload tab behind, as Ctrl+click and a middle
+  // click do; a plain click still opens it in front. A click on a posted segment opens nothing. A
+  // middle press on a segment is cancelled, so that it does not start the browser's autoscroll;
+  // read from the mousedown event once its dispatch is over.
   async d17_meta_middle(browser, v) {
     const r = await setup(browser);
     await r.page.evaluate(() => {
@@ -1356,13 +1360,15 @@ const S = {
     };
     const rows = [];
     let ok = true;
-    for (const [label, sel] of [['posted segment', '#t8301 .xdsu-bar-seg'], ['upload button', '#t8302 .xdsu-upload-btn']]) {
-      for (const [kind, front] of [['left', true], ['meta', false]]) {
-        const a = await opened(sel, kind);
-        const good = a.length === 1 && a[0] === front;
-        ok = ok && good;
-        rows.push(`${label} ${kind}: active=${JSON.stringify(a)}${good ? '' : ' <-- want [' + front + ']'}`);
-      }
+    // [label, selector, kind, the tab's active flag, or null for no tab]
+    for (const [label, sel, kind, front] of [
+      ['posted segment', '#t8301 .xdsu-bar-seg', 'left', null], ['posted segment', '#t8301 .xdsu-bar-seg', 'meta', null],
+      ['upload button', '#t8302 .xdsu-upload-btn', 'left', true], ['upload button', '#t8302 .xdsu-upload-btn', 'meta', false]]) {
+      const a = await opened(sel, kind);
+      const want = front === null ? [] : [front];
+      const good = JSON.stringify(a) === JSON.stringify(want);
+      ok = ok && good;
+      rows.push(`${label} ${kind}: active=${JSON.stringify(a)}${good ? '' : ' <-- want ' + JSON.stringify(want)}`);
     }
     // Middle presses: the posted segment, then the one that is not posted (no link).
     const downs = [];

@@ -120,11 +120,11 @@
 
   GM_registerMenuCommand('XDSU legend', () => {
     alert([
-      'Bar under each image:',
-      'Solid green: on Danbooru (tap to open)',
-      'Green stripes: the tweet is only partly on Danbooru (tap to open)',
-      'Red outline: not on Danbooru (tap to check again)',
-      'Blue dashes: lookup failed (tap to retry)',
+      'Bar under each image (with a mouse, point at it for details):',
+      'Solid green: on Danbooru',
+      'Green stripes: the tweet is only partly on Danbooru',
+      'Red outline: not on Danbooru',
+      'Blue dashes: lookup failed',
       'Thin grey line: checking',
     ].join('\n'));
   });
@@ -239,9 +239,10 @@
       box-sizing: border-box;
       border-radius: 3px;
       pointer-events: auto;
-      cursor: pointer;
+      cursor: default;
     }
-    /* The tap area fills the bar's margins and the gaps between segments. */
+    /* The area that shows the tooltip, and swallows taps, fills the bar's
+       margins and the gaps between segments. */
     .xdsu-bar-seg::after {
       content: '';
       position: absolute;
@@ -286,8 +287,8 @@
         opacity: 0.6;
       }
     }
-    /* Padding, not margin: a margin can collapse into the action row's and
-       let the tap area overlap the Like button. */
+    /* Touch screens: a thicker line in a taller strip. Padding, not margin: a
+       margin can collapse into the action row's. */
     @media (pointer: coarse) {
       .xdsu-bar {
         height: 24px;
@@ -412,20 +413,12 @@
     .xdsu-pill[data-state="error"] { border: 2px dashed var(--xdsu-error); }
     .xdsu-pill[data-state="searching"] { cursor: default; }
     .xdsu-pill.xdsu-rechecking { opacity: 0.7; }
-    /* A checking segment does nothing when tapped. */
-    .xdsu-bar-seg[data-state="searching"] { cursor: default; }
-    /* Mouse: the segment under the pointer lights up (a filter, so nothing
-       moves and the tap area stays as it is); the viewer button darkens like
-       the tile's. */
+    /* Mouse: the viewer button darkens under the pointer like the tile's. */
     @media (hover: hover) and (pointer: fine) {
-      .xdsu-bar-seg:not([data-state="searching"]):hover {
-        filter: brightness(1.35);
-      }
       .xdsu-pill:hover { background-color: rgba(0,0,0,0.78); }
     }
-    /* Keyboard: a focus ring on the controls that take the focus (segments
-       that link to a post, the upload buttons, the viewer button). */
-    .xdsu-bar-seg:focus-visible,
+    /* Keyboard: a focus ring on the controls that take the focus (the upload
+       buttons, the viewer button). */
     .xdsu-upload-btn:focus-visible,
     .xdsu-pill:focus-visible {
       outline: 2px solid var(--xdsu-focus);
@@ -1015,19 +1008,20 @@
       // Placed before the Like group existed, or moved by a re-render.
       actionGroup.parentNode.insertBefore(bar, actionGroup);
     }
-    // A segment stays the same <a> for its whole life; applyColors only toggles
-    // its href, so imageRefs keeps tracking it.
+    // A segment stays the same element for its whole life; applyColors only
+    // rewrites its attributes, so imageRefs keeps tracking it. It shows the
+    // state and does nothing when clicked (onSegmentClick).
     while (bar.children.length < photoCount) {
-      const seg = document.createElement('a');
+      const seg = document.createElement('span');
       seg.className = 'xdsu-bar-seg';
+      seg.setAttribute('role', 'img');
       seg.dataset.state = 'searching';
       seg.title = 'Checking';
       seg.setAttribute('aria-label', 'Checking');
       seg.addEventListener('click', onSegmentClick);
       seg.addEventListener('auxclick', onSegmentClick);
-      // Keeps x.com's tweet link from reacting to the press.
-      // A middle press is cancelled too: on a segment without a link (not
-      // posted, failed) it would start the browser's autoscroll.
+      // Keeps x.com's tweet link from reacting to the press. A middle press is
+      // cancelled too, or it would start the browser's autoscroll.
       seg.addEventListener('mousedown', (ev) => {
         ev.stopPropagation();
         if (ev.button === 1) {
@@ -1923,7 +1917,8 @@
 
   /**
    * @param {!ImageRef} ref
-   * @return {?string} The Danbooru URL a tap on the segment opens, or null.
+   * @return {?string} The Danbooru post, or search, the ref stands for (the
+   *     viewer button opens it), or null.
    */
   function resolveMatchUrl(ref) {
     const posts = matchedPosts(ref);
@@ -1952,7 +1947,9 @@
       return 'Not on Danbooru';
     }
     if (state === 'error') {
-      return 'Lookup failed';
+      const failed = failedEntry(ref);
+      const why = failed && ERROR_TEXT[failed.reason];
+      return why ? `Lookup failed – ${why}` : 'Lookup failed';
     }
     const posts = matchedPosts(ref);
     if (state === 'foundWeak') {
@@ -1973,9 +1970,9 @@
 
   /**
    * The only writer of segment state. A segment being re-checked keeps its
-   * previous state, link and label (and pulses) until the new answer is in.
-   * Found segments are links; missing and failed ones are buttons (a tap checks
-   * again).
+   * previous state and label (and pulses) until the new answer is in. A segment
+   * only shows the state: its label is the tooltip, and a found one names the
+   * post it stands for in data-match-url (the viewer button opens it).
    */
   function applyColors() {
     for (const ref of imageRefs) {
@@ -2007,16 +2004,9 @@
       ref.bar.title = label;
       ref.bar.setAttribute('aria-label', label);
       if (matchUrl) {
-        ref.bar.href = matchUrl;
-        ref.bar.target = '_blank';
-        ref.bar.rel = 'noopener';
+        ref.bar.dataset.matchUrl = matchUrl;
       } else {
-        ref.bar.removeAttribute('href');
-      }
-      if (state === 'missing' || state === 'error') {
-        ref.bar.setAttribute('role', 'button');
-      } else {
-        ref.bar.removeAttribute('role');
+        delete ref.bar.dataset.matchUrl;
       }
       if (ref.btn) {
         const found = state === 'found';
@@ -2031,9 +2021,10 @@
     }
   }
 
-  // -------------- bar segment taps --------------
+  // -------------- clicks, failures --------------
 
-  // Why a lookup failed, for the toast shown when a failed segment is tapped.
+  // Why a lookup failed: in a failed segment's tooltip, and in the toast when
+  // the viewer button retries.
   const ERROR_TEXT = {
     network: 'Could not reach Danbooru.',
     server: 'Danbooru had a server error.',
@@ -2043,9 +2034,23 @@
   };
 
   /**
-   * Every tap on a segment stops here, so none reaches the tweet or x.com's
-   * links. A found segment opens its post, a missing one checks again, a failed
-   * one retries now, a searching one does nothing.
+   * @param {!ImageRef} ref
+   * @return {(!CacheEntry|undefined)} The failed lookup of the ref's tweet or,
+   *     failing that, of its image.
+   */
+  function failedEntry(ref) {
+    const tc = tweetCache[ref.tweetId];
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
+    return [tc, hc].find((e) => e && e.state === 'error');
+  }
+
+  /**
+   * Swallows a left or middle click or a tap on a segment. The bar only shows
+   * the state, with its label as the tooltip; a click on it must not reach the
+   * tweet or x.com's links either. On a touch screen this matters most: were
+   * the segments to let taps through, the browser's touch adjustment would
+   * move a tap on the bar to the nearest target, the photo above or the Like
+   * button below. A right click is left to the browser.
    * @param {!Event} ev
    */
   function onSegmentClick(ev) {
@@ -2054,19 +2059,6 @@
     }
     ev.preventDefault();
     ev.stopPropagation();
-    const seg = ev.currentTarget;
-    const ref = imageRefs.find((r) => r.bar === seg);
-    if (!ref) {
-      return;
-    }
-    const state = seg.dataset.state;
-    if (state === 'found' || state === 'foundWeak') {
-      openPost(ev, ref, seg.getAttribute('href'));
-    } else if (state === 'missing') {
-      refreshTweetStatus(ref.tweetId);
-    } else if (state === 'error') {
-      retryLookup(ref);
-    }
   }
 
   /**
@@ -2098,9 +2090,7 @@
    * @param {!ImageRef} ref
    */
   function retryLookup(ref) {
-    const tc = tweetCache[ref.tweetId];
-    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
-    const failed = [tc, hc].find((e) => e && e.state === 'error');
+    const failed = failedEntry(ref);
     // Already being checked again.
     if (!failed) {
       return;
