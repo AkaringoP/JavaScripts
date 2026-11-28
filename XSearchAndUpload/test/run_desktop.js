@@ -1676,7 +1676,8 @@ const S = {
         const reqs = window.__reqLog.filter((x) => !x.url.includes('/profile.json') && x.t >= from && x.done !== null);
         const isAuthor = (x) => /source:\*\/[^/*]+\/status\/\*/.test(x.url);
         const over = (a, b) => a !== b && a.t < b.done && b.t < a.done;
-        return {max: Math.max(0, ...reqs.map((a) => 1 + reqs.filter((b) => over(a, b)).length)),
+        // In flight at once: counted at each send, the moments the number goes up.
+        return {max: Math.max(0, ...reqs.map((a) => reqs.filter((b) => b.t <= a.t && a.t < b.done).length)),
           authorAlone: reqs.filter(isAuthor).every((a) => !reqs.some((b) => over(a, b))),
           tweets: reqs.filter((x) => !isAuthor(x) && /status\/\d+\*/.test(x.url)).length, n: reqs.length};
       };
@@ -1749,6 +1750,60 @@ const S = {
         + ` tweet lookups=${oa.tweets} (want 8)${okA ? '' : ' <-- A wrong'}${resA.detail} | B timeline: resolved=${doneB}, most at once=${ob.max}`
         + ` (want 1)${okB ? '' : ' <-- B wrong'}${resB.detail} | C grid after a 429: paused=${limited}, resolved after the return=${doneC},`
         + ` most at once before=${oc.before}, after=${oc.after.max} over ${oc.after.n} lookups (want 1)${okC ? '' : ' <-- C wrong'}${resC.detail}`};
+  },
+  // T13: on a photo grid a lookup that answers paints its tiles and frees its place at once. One
+  // slow lookup holds up its own tiles only: the other places keep working through the queue.
+  async d22_grid_sliding(browser, v) {
+    const ids = Array.from({length: 24}, (_, i) => String(9100 + i));
+    const r = await setup(browser);
+    await r.page.evaluate((ids) => {
+      const isTweet = (u) => /status\/\d+\*/.test(u);
+      const isAuthor = (u) => /source:\*\/[^/*]+\/status\/\*/.test(u);
+      // The first tweet lookup takes 6 s, every other request 200 ms. Nothing is posted.
+      const table = window.__responder;
+      window.__responder = (u) => {
+        const slow = isTweet(u) && !window.__slowSent;
+        window.__slowSent = window.__slowSent || slow;
+        return Object.assign(table(u), {delay: slow ? 6000 : 200});
+      };
+      const lookups = () => window.__reqLog.filter((x) => !x.url.includes('/profile.json'));
+      window.slowReq = () => lookups().find((x) => isTweet(x.url));
+      window.missing = () => [...document.querySelectorAll('.xdsu-bar-seg')].filter((x) => x.dataset.state === 'missing').length;
+      window.snap = () => {
+        const slow = window.slowReq();
+        const over = (a, b) => a !== b && a.t < (b.done ?? Infinity) && b.t < (a.done ?? Infinity);
+        return {missing: window.missing(), slowDone: !!slow && slow.done !== null, t: window.tNow(),
+          tweets: lookups().filter((x) => isTweet(x.url)).length, hashes: lookups().filter((x) => x.url.includes('media/')).length,
+          authorAlone: lookups().filter((x) => isAuthor(x.url)).every((a) => !lookups().some((b) => over(a, b))),
+          max: window.__maxInflight};
+      };
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+      ul.innerHTML = ids.map((id) => `<li role="listitem"><a role="link" href="/Sli/status/${id}/photo/1"`
+        + ` style="display:block;width:194px;height:194px"><img src="https://pbs.twimg.com/media/GS${id}?format=jpg&name=360x360"`
+        + ` style="display:block;width:194px;height:194px"></a></li>`).join('');
+      document.getElementById('root').replaceWith(ul);
+    }, ids);
+    await inject(r.page, v);
+    // Member: 3 tweets a request, so 8 tweet lookups and 8 hash lookups. While the slow one is out,
+    // the other seven are sent and answered, and their 21 tiles turn red (a tile is red once its
+    // tweet lookup found nothing; the hash lookups follow in the free places).
+    const early = await waitUntil(r.page, () => {
+      const slow = window.slowReq();
+      return !!slow && slow.done === null && window.missing() >= 21;
+    }, null, 5000);
+    const mid = await r.page.evaluate(() => window.snap());
+    const done = await waitUntil(r.page, () => window.missing() === 24 && window.__inflight === 0, null, 15000);
+    const end = await r.page.evaluate(() => window.snap());
+    const res = await fin(r, {pass: true, detail: ''});
+    const ok = early && !mid.slowDone && mid.tweets === 8 && mid.hashes >= 1 && done && end.tweets === 8 && end.hashes === 8
+      && end.max === 4 && end.authorAlone && res.pass;
+    return {pass: ok,
+      detail: `while the slow lookup was out (at ${mid.t} ms, it had answered=${mid.slowDone}): tiles resolved=${mid.missing} (want 21),`
+        + ` tweet lookups sent=${mid.tweets} (want 8), hash lookups sent=${mid.hashes} (want >=1) | in the end: all 24 resolved=${done},`
+        + ` tweet/hash lookups=${end.tweets}/${end.hashes} (want 8/8), most at once=${end.max} (want 4), author search alone=${end.authorAlone}`
+        + `${ok ? '' : ' <-- wrong'}${res.detail}`};
   },
 };
 

@@ -1518,7 +1518,8 @@
 
   // The queue stops while offline or paused (pausedUntil). flushPending runs
   // only from the timer below, and a pause is lifted only through resumeQueue.
-  // It sends one request at a time, except for a photo grid (lanes).
+  // It sends one request at a time, except for a photo grid (lanes), where
+  // each lookup paints its result and frees its place as soon as it answers.
   let flushTimer = null;
   let flushRunning = false;
   let pausedUntil = 0;
@@ -1596,12 +1597,20 @@
     }));
   }
 
+  /**
+   * @param {!Array<string>} queue
+   * @param {function(!ImageRef, string): boolean} owns
+   * @return {boolean} Whether a key of the queue is in range of the viewport.
+   */
+  function hasDue(queue, owns) {
+    return queue.some((k) => keyDistance(k, owns) <= window.innerHeight);
+  }
+
   /** @return {boolean} Whether a queued key is in range of the viewport. */
   function hasDueKeys() {
-    const due = (owns) => (k) => keyDistance(k, owns) <= window.innerHeight;
-    return pendingAuthors.some(due(ownsAuthor)) ||
-        pendingTweetIds.some(due(ownsTweet)) ||
-        pendingHashes.some(due(ownsHash));
+    return hasDue(pendingAuthors, ownsAuthor) ||
+        hasDue(pendingTweetIds, ownsTweet) ||
+        hasDue(pendingHashes, ownsHash);
   }
 
   /**
@@ -1637,29 +1646,58 @@
   }
 
   /**
-   * Takes up to n batches (see takeBatch), nearest to the viewport first.
-   * @param {number} n
-   * @param {!Array<string>} queue
-   * @param {!Object<string, !CacheEntry>} cache
-   * @param {function(!ImageRef, string): boolean} owns
-   * @return {!Array<!Array<string>>}
+   * Starts the lookup nearest to the viewport, a tweet lookup before a hash
+   * lookup, and paints its result when it answers.
+   * @return {?Promise<void>} Null when nothing is in range.
    */
-  function takeBatches(n, queue, cache, owns) {
-    const out = [];
-    while (out.length < n) {
-      const batch = takeBatch(queue, cache, owns);
-      if (!batch.length) {
-        break;
-      }
-      out.push(batch);
+  function startLookup() {
+    const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
+    if (ids.length) {
+      return runTweetIdBatch(ids).then(() => {
+        imageRefs.filter((ref) => ref.bar.isConnected)
+            .forEach(ensureHashLookup);
+        applyColors();
+      });
     }
-    return out;
+    const hashes = takeBatch(pendingHashes, hashCache, ownsHash);
+    return hashes.length ? runHashBatch(hashes).then(applyColors) : null;
+  }
+
+  /**
+   * Runs tweet and hash lookups, up to lanes() at once: a lookup that answers
+   * frees its place for the next one, chosen by where the viewport is then.
+   * No lookup is started while the queue is stopped or an account check or an
+   * author lookup is due (flushPending runs those alone); the ones in flight
+   * are waited for.
+   * @return {!Promise<boolean>} Whether a lookup ran.
+   */
+  async function runLookups() {
+    const running = new Set();
+    let ran = false;
+    const mayStart = () => running.size < lanes() && !isOffline() &&
+        Date.now() >= pausedUntil && !profileWanted && !profileCheck &&
+        !hasDue(pendingAuthors, ownsAuthor);
+    for (;;) {
+      while (mayStart()) {
+        const lookup = startLookup();
+        if (!lookup) {
+          break;
+        }
+        ran = true;
+        const done = lookup.finally(() => running.delete(done));
+        running.add(done);
+      }
+      if (!running.size) {
+        return ran;
+      }
+      await Promise.race(running);
+    }
   }
 
   /**
    * Runs the queue: author lookups (photo grids) before tweet lookups before
-   * hash lookups, one request at a time, or lanes() batches at once for a
-   * photo grid. The profile check never overlaps a lookup.
+   * hash lookups, one request at a time, or up to lanes() at once for a photo
+   * grid (runLookups). The profile check never overlaps a lookup.
    * @return {!Promise<void>}
    */
   async function flushPending() {
@@ -1685,22 +1723,11 @@
         applyColors();
         continue;
       }
-      const ids =
-          takeBatches(lanes(), pendingTweetIds, tweetCache, ownsTweet);
-      if (ids.length) {
-        await Promise.all(ids.map(runTweetIdBatch));
-        imageRefs.filter((ref) => ref.bar.isConnected)
-            .forEach(ensureHashLookup);
-        applyColors();
-        continue;
-      }
-      const hashes =
-          takeBatches(lanes(), pendingHashes, hashCache, ownsHash);
-      if (!hashes.length) {
+      // Whatever stopped the lookups (an account check, an author) runs in the
+      // next turn; a turn that finds nothing in range ends the flush.
+      if (!await runLookups()) {
         return;
       }
-      await Promise.all(hashes.map(runHashBatch));
-      applyColors();
     }
   }
 
