@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X (Twitter) Danbooru Search and Upload
 // @namespace    https://github.com/AkaringoP
-// @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. Mobile-friendly (Firefox + Tampermonkey).
+// @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. For desktop and mobile (Tampermonkey).
 // @author       AkaringoP
 // @license      MIT
 // @match        *://x.com/*
