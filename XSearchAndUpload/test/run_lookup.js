@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const {readScript} = require('./script.js');
-const {chromium, newPage, colors, sleep} = require('./h.js');
+const {chromium, newPage, colors, sleep, withTimeout} = require('./h.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 
@@ -74,7 +74,13 @@ async function setup(browser, {store = {}, profile = MEMBER, urlPath = '/home', 
           fn(x);
         }
       };
-      orig(Object.assign({}, d, {onload: end(d.onload), onerror: end(d.onerror), ontimeout: end(d.ontimeout)}));
+      const send = () => orig(Object.assign({}, d, {onload: end(d.onload), onerror: end(d.onerror), ontimeout: end(d.ontimeout)}));
+      // __profileDelay: ms the account check takes beyond the stub's 50 ms (a slow /profile.json).
+      if (rec.kind === 'profile' && window.__profileDelay) {
+        setTimeout(send, window.__profileDelay);
+      } else {
+        send();
+      }
     };
     window.reqs = (kind) => window.__log.filter((x) => !kind || x.kind === kind);
     // Toasts as shown, polled every 50 ms.
@@ -132,6 +138,101 @@ const range = (a, n) => Array.from({length: n}, (_, i) => String(a + i));
 const flat = (c) => c.flat().join(',');
 const allAre = (c, set) => c.flat().length > 0 && c.flat().every((x) => set.includes(x));
 const RESOLVED = ['RED', 'GREEN', 'LGREEN'];
+
+// The stored account check (desktop task T3): key, the base URL the script uses by default, and a
+// stored value as the script writes it (a JSON string) for a check made ageMs ago, Gold unless o
+// says otherwise.
+const ACCOUNT_KEY = 'accountCheck';
+const HOST = 'https://danbooru.donmai.us/';
+const MIN = 60 * 1000;
+const acct = (o = {}, ageMs = MIN) => JSON.stringify(Object.assign(
+    {host: HOST, at: Date.now() - ageMs, batch: 6, anonymous: false, safeMode: false}, o));
+// Resolves true once fn(arg) is truthy in the page, false after ms.
+const waitUntil = (page, fn, arg, ms) => page.waitForFunction(fn, arg, {timeout: ms, polling: 20}).then(() => true, () => false);
+// Every segment has left grey and no request is in flight (the hash lookups that follow red tweet
+// lookups run in the same flush, so nothing is in flight only once they have answered).
+const allResolved = () => {
+  const s = [...document.querySelectorAll('.xdsu-bar-seg')];
+  return s.length > 0 && s.every((x) => window.segColor(x) !== 'rgb(154, 154, 154)') && window.__inflight === 0;
+};
+// Account checks as [sent, answered] (ms since injection) and the first tweet lookup.
+const startLog = (page) => page.evaluate(() => {
+  const f = window.reqs('tweet')[0];
+  return {p: window.reqs('profile').map((x) => [x.t, x.done]), first: f ? {t: f.t, terms: f.terms} : null};
+});
+const fmtStart = (s) => `account checks [sent, answered]=${JSON.stringify(s.p)}`
+  + ` first lookup=${s.first ? `${s.first.t} ms, ${s.first.terms} terms` : 'none'}`;
+
+// A tab started with the given store, the server answering profile: did it make a real account
+// check (one, answered before the first lookup, whose batch size the first lookup uses)?
+async function startsWithCheck(browser, v, store, {profile = MEMBER, terms = 3, first = 6201} = {}) {
+  const r = await setup(browser, {store, profile});
+  await addN(r.page, range(first, 6));
+  await inject(r.page, v);
+  const done = await waitUntil(r.page, allResolved, null, 8000);
+  const s = await startLog(r.page);
+  const toasts = await r.page.evaluate(() => window.__toasts.slice());
+  const stored = await r.page.evaluate((k) => window.__store[k], ACCOUNT_KEY);
+  const ok = done && s.p.length === 1 && s.p[0][1] !== null && !!s.first && s.first.t >= s.p[0][1] && s.first.terms === terms;
+  const f = await fin(r, ok, fmtStart(s) + (done ? '' : ' (not resolved in 8 s)'));
+  return Object.assign(f, {toasts, stored});
+}
+
+// At least n segments, none grey, nothing in flight.
+const resolvedN = (n) => {
+  const s = [...document.querySelectorAll('.xdsu-bar-seg')];
+  return s.length >= n && s.every((x) => window.segColor(x) !== 'rgb(154, 154, 154)') && window.__inflight === 0;
+};
+
+// A visible tab makes its own account check (the server answers profile) and resolves 3 tweets.
+// Then Date.now is stepped by stepMs, another tab stores a check (a normal Gold one changed by o,
+// made agoMs before the stepped now, or fromOwnMs after this tab's own check when given) and the
+// tab returns; 6 tweets are added after that. With checkFails, account checks fail (network
+// error) from the return on. Reports the account checks before the return and in all, the terms
+// of the first lookup of an added tweet and detectedBatch.
+async function returnCase(browser, v, {profile = MEMBER, stepMs = 0, o = {}, agoMs = 1000, fromOwnMs = null,
+  checkFails = false, first}) {
+  const r = await setup(browser, {profile});
+  await r.page.evaluate(() => {
+    const realNow = Date.now;
+    window.__dnOff = 0;
+    Date.now = () => realNow() + window.__dnOff;
+  });
+  await addN(r.page, range(first, 3));
+  await inject(r.page, v);
+  const done = await waitUntil(r.page, resolvedN, 3, 8000);
+  const before = await r.page.evaluate(() => window.reqs('profile').length);
+  const seeded = await r.page.evaluate(([k, host, o, stepMs, agoMs, fromOwnMs, checkFails]) => {
+    if (checkFails) {
+      window.__profile = 'fail';
+    }
+    let own = null;
+    try {
+      own = JSON.parse(window.__store[k]).at;
+    } catch {
+      own = null;
+    }
+    window.__dnOff += stepMs;
+    const at = fromOwnMs === null ? Date.now() - agoMs : own + fromOwnMs;
+    window.__store[k] = JSON.stringify(Object.assign({host, at, batch: 6, anonymous: false, safeMode: false}, o));
+    window.returnToTab();
+    return window.__store[k];
+  }, [ACCOUNT_KEY, HOST, o, stepMs, agoMs, fromOwnMs, checkFails]);
+  // Fixed: 1 s. The visibilitychange handler sends a check at once if it sends one (answered in
+  // 50 ms); the tweets are added only after it.
+  await sleep(1000);
+  const added = range(first + 3, 6);
+  await addN(r.page, added);
+  const done2 = await waitUntil(r.page, resolvedN, 9, 8000);
+  const s = await r.page.evaluate((ids) => {
+    const firstNew = window.reqs('tweet').find((x) => ids.some((id) => x.url.includes(`status/${id}*`)));
+    return {checks: window.reqs('profile').length, terms: firstNew ? firstNew.terms : null, batch: window.__store.detectedBatch};
+  }, added);
+  const f = await fin(r, done && done2, `stored by the other tab=${seeded} | account checks before the return=${before},`
+    + ` in all=${s.checks} | first lookup of an added tweet: ${s.terms} terms | detectedBatch=${s.batch}`
+    + (done && done2 ? '' : ' (not resolved in 8 s)'));
+  return Object.assign(f, {before, checks: s.checks, terms: s.terms, batch: s.batch});
+}
 
 const S = {
   // ---------- T08 ----------
@@ -498,6 +599,392 @@ const S = {
         `menus=${JSON.stringify(s.menus)} terms=${JSON.stringify(s.terms)}`);
   },
 
+  // ---------- desktop task T3 (P1): the stored account check ----------
+  // A successful check is stored (accountCheck). A tab that starts within 10 minutes of a check
+  // that found the account logged in with safe mode off takes it over and sends no check of its
+  // own; anything else is checked afresh. A tab that starts hidden sends nothing until it is shown.
+
+  // A fresh Gold result is stored and the account check is slow (3 s): no check at all, and the
+  // first lookup goes out at once with 6 terms (only the stored check gives 6: nothing else is
+  // stored, so the default would be 2) and does not write detectedBatch. The same page with
+  // nothing stored: the first lookup comes after the check has answered.
+  async p1_reuse(browser, v) {
+    const run = async (store) => {
+      const r = await setup(browser, {store, profile: GOLD});
+      await r.page.evaluate(() => {
+        window.__profileDelay = 3000;
+      });
+      await addN(r.page, range(6101, 9));
+      await inject(r.page, v);
+      const done = await waitUntil(r.page, allResolved, null, 10000);
+      const s = await startLog(r.page);
+      const batch = await r.page.evaluate(() => window.__store.detectedBatch);
+      const c = await colors(r.page);
+      const f = await fin(r, true, `${fmtStart(s)} detectedBatch=${batch} colours=${flat(c)}`);
+      return {f, done, s, batch, c};
+    };
+    const a = await run({[ACCOUNT_KEY]: acct({batch: 6})});
+    const b = await run({});
+    const aOk = a.f.pass && a.done && a.s.p.length === 0 && !!a.s.first && a.s.first.terms === 6 && a.s.first.t < 3000
+      && a.batch === undefined && allAre(a.c, ['RED']);
+    const bOk = b.f.pass && b.done && b.s.p.length === 1 && !!b.s.first && b.s.first.t >= b.s.p[0][1]
+      && b.s.first.terms === 6;
+    const saved = a.s.first && b.s.first ? b.s.first.t - a.s.first.t : null;
+    return {pass: aOk && bOk, detail: `stored Gold: ${a.f.detail} || nothing stored: ${b.f.detail}`
+      + ` || first lookup earlier by ${saved} ms`};
+  },
+  // Round trip: a tab with an empty store checks (Member) and stores the result; its shape is
+  // exactly {host, at, batch, anonymous, safeMode}, with no id or name. A second tab given that
+  // store (account check slow, 3 s) takes it over: no check, first lookup at once with 3 terms.
+  async p1_round_trip(browser, v) {
+    const r = await setup(browser);
+    await addN(r.page, range(6151, 4));
+    const before = Date.now();
+    await inject(r.page, v);
+    const done = await waitUntil(r.page, allResolved, null, 8000);
+    const after = Date.now();
+    const s1 = await startLog(r.page);
+    const store = await r.page.evaluate(() => Object.assign({}, window.__store));
+    const f1 = await fin(r, true, fmtStart(s1));
+    const raw = store[ACCOUNT_KEY];
+    let rec = null;
+    try {
+      rec = JSON.parse(raw);
+    } catch {
+      rec = null;
+    }
+    const keys = rec && typeof rec === 'object' ? Object.keys(rec).sort().join() : null;
+    // 1 s either side for the two clocks (this process, the page).
+    const shapeOk = typeof raw === 'string' && keys === 'anonymous,at,batch,host,safeMode' && rec.host === HOST
+      && rec.batch === 3 && rec.anonymous === false && rec.safeMode === false && Number.isInteger(rec.at)
+      && rec.at >= before - 1000 && rec.at <= after + 1000 && !/tester|"id"|"name"|"level"/.test(raw);
+    const r2 = await setup(browser, {store});
+    await r2.page.evaluate(() => {
+      window.__profileDelay = 3000;
+    });
+    await addN(r2.page, range(6161, 6));
+    await inject(r2.page, v);
+    const done2 = await waitUntil(r2.page, allResolved, null, 8000);
+    const s2 = await startLog(r2.page);
+    const f2 = await fin(r2, true, fmtStart(s2));
+    const pass = f1.pass && f2.pass && done && s1.p.length === 1 && shapeOk && done2 && s2.p.length === 0 && !!s2.first
+      && s2.first.terms === 3 && s2.first.t < 3000;
+    return {pass, detail: `first tab: ${f1.detail} | stored ${ACCOUNT_KEY}=${JSON.stringify(raw)}`
+      + ` (keys ${keys}; at within the run: ${!!rec && rec.at >= before - 1000 && rec.at <= after + 1000})`
+      + ` || second tab: ${f2.detail}`};
+  },
+  // Not reused: each stored check below fails one condition, and the tab makes a real check. The
+  // stored batch size differs from the server's answer, so the first lookup shows which was used.
+  async p1_not_reused_old(browser, v) {
+    // 11 minutes old (the limit is 10).
+    return startsWithCheck(browser, v, {[ACCOUNT_KEY]: acct({batch: 6}, 11 * MIN)});
+  },
+  async p1_not_reused_anonymous(browser, v) {
+    // Stored logged out (2); the user has logged in since (Gold, 6).
+    return startsWithCheck(browser, v, {[ACCOUNT_KEY]: acct({batch: 2, anonymous: true})}, {profile: GOLD, terms: 6});
+  },
+  async p1_not_reused_safe_mode(browser, v) {
+    // Stored with safe mode on; it is off now. The stored state raises no toast, and the fresh
+    // check replaces it.
+    const f = await startsWithCheck(browser, v, {[ACCOUNT_KEY]: acct({safeMode: true})});
+    let rec = null;
+    try {
+      rec = JSON.parse(f.stored);
+    } catch {
+      rec = null;
+    }
+    const replaced = !!rec && rec.safeMode === false && rec.batch === 3;
+    return {pass: f.pass && f.toasts.length === 0 && replaced,
+      detail: `${f.detail} | toasts=${JSON.stringify(f.toasts)} | stored after=${f.stored}`};
+  },
+  async p1_not_reused_other_host(browser, v) {
+    // Made for another Danbooru URL than the one in use.
+    return startsWithCheck(browser, v, {[ACCOUNT_KEY]: acct({host: 'https://testbooru.donmai.us/'})});
+  },
+  async p1_not_reused_malformed(browser, v) {
+    const now = Date.now();
+    const base = {host: HOST, at: now - MIN, batch: 6, anonymous: false, safeMode: false};
+    const json = (o) => JSON.stringify(Object.assign({}, base, o));
+    const without = (k) => {
+      const o = Object.assign({}, base);
+      delete o[k];
+      return JSON.stringify(o);
+    };
+    const cases = [
+      ['at is a string', json({at: String(now - MIN)})],
+      ['at in the future', json({at: now + 5 * MIN})],
+      ['batch is a string', json({batch: '6'})],
+      ['batch 0', json({batch: 0})],
+      ['batch 7', json({batch: 7})],
+      ['batch 2.5', json({batch: 2.5})],
+      ['anonymous is 0', json({anonymous: 0})],
+      ['safeMode missing', without('safeMode')],
+      ['host missing', without('host')],
+      ['not JSON', '{"host":'],
+      ['JSON null', 'null'],
+      ['JSON number', '6'],
+      ['JSON array', JSON.stringify([base])],
+      ['an object, not a string', Object.assign({}, base)],
+    ];
+    const rows = [];
+    let pass = true;
+    for (const [name, value] of cases) {
+      const f = await startsWithCheck(browser, v, {[ACCOUNT_KEY]: value});
+      pass = pass && f.pass;
+      rows.push(`${name}: ${f.pass ? 'checked' : 'NOT CHECKED ' + f.detail}`);
+    }
+    return {pass, detail: rows.join(' | ')};
+  },
+  // A tab opened in the background with nothing stored: no request of any kind while hidden, also
+  // not on 'online', a window focus or the mouse entering. Once shown: exactly one account check
+  // (slow, 1 s, so the first flush has to wait for it), then the lookups, never overlapping.
+  async p1_hidden_start(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.__profileDelay = 1000;
+      window.setVis(true);
+    });
+    await addN(r.page, range(6301, 6));
+    await inject(r.page, v);
+    // Fixed: 5 s hidden, past the first scan and two 2 s polls; the absence of requests is the point.
+    await sleep(2500);
+    await r.page.evaluate(() => {
+      window.dispatchEvent(new Event('online'));
+      window.dispatchEvent(new Event('focus'));
+      document.documentElement.dispatchEvent(new PointerEvent('pointerenter', {pointerType: 'mouse'}));
+    });
+    await sleep(2500);
+    const hidden = await r.page.evaluate(() => window.__log.length);
+    // Read before the dispatch: the visibilitychange handler may send a request inside setVis.
+    const tVis = await r.page.evaluate(() => {
+      const t = Math.round(performance.now() - window.__t0);
+      window.setVis(false);
+      return t;
+    });
+    const done = await waitUntil(r.page, allResolved, null, 8000);
+    const s = await startLog(r.page);
+    const order = await r.page.evaluate(() => window.__log.map((x) => [x.kind, x.t, x.done]));
+    const lookups = order.filter((x) => x[0] !== 'profile');
+    const ok = hidden === 0 && done && s.p.length === 1 && s.p[0][0] >= tVis && s.p[0][1] !== null
+      && lookups.length > 0 && lookups.every((x) => x[1] >= s.p[0][1]) && !!s.first && s.first.terms === 3;
+    return fin(r, ok, `requests while hidden=${hidden} | shown at ${tVis} ms: ${fmtStart(s)}`);
+  },
+  // A tab opened in the background with a fresh Gold result stored: nothing while hidden; once
+  // shown, lookups with 6 terms and no account check (which would take 3 s).
+  async p1_hidden_start_reuse(browser, v) {
+    const r = await setup(browser, {store: {[ACCOUNT_KEY]: acct({batch: 6})}, profile: GOLD});
+    await r.page.evaluate(() => {
+      window.__profileDelay = 3000;
+      window.setVis(true);
+    });
+    await addN(r.page, range(6401, 9));
+    await inject(r.page, v);
+    // Fixed: 5 s hidden, as in p1_hidden_start.
+    await sleep(2500);
+    await r.page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await sleep(2500);
+    const hidden = await r.page.evaluate(() => window.__log.length);
+    // Read before the dispatch: the visibilitychange handler may send a request inside setVis.
+    const tVis = await r.page.evaluate(() => {
+      const t = Math.round(performance.now() - window.__t0);
+      window.setVis(false);
+      return t;
+    });
+    // A check would be sent by the visibilitychange handler itself, so it is logged by the time
+    // the lookups have answered.
+    const done = await waitUntil(r.page, allResolved, null, 8000);
+    const s = await startLog(r.page);
+    const ok = hidden === 0 && done && s.p.length === 0 && !!s.first && s.first.terms === 6 && s.first.t >= tVis
+      && s.first.t - tVis < 3000;
+    return fin(r, ok, `requests while hidden=${hidden} | shown at ${tVis} ms: ${fmtStart(s)}`);
+  },
+  // The reused size is too large: Member (3) is stored, but the user has logged out since (limit 2,
+  // a 422 TagLimitError for more than 2 terms). The first lookup is refused and split, one account
+  // check follows and the rest goes 2 at a time; results are right (6805 has a post). The stored
+  // check is replaced by the logged-out one, which a tab started next does not take over.
+  async p1_reused_too_large(browser, v) {
+    const r = await setup(browser, {store: {detectedBatch: 3, [ACCOUNT_KEY]: acct({batch: 3})}, profile: ANON});
+    await r.page.evaluate((body) => {
+      window.__responder = (u) => {
+        if ((u.match(/source:/g) || []).length > 2) {
+          return {status: 422, body};
+        }
+        return {body: u.includes('status/6805*') ? JSON.stringify([{id: 1, source: 'https://x.com/u/status/6805'}]) : '[]'};
+      };
+    }, TAG_LIMIT_BODY(2));
+    await addN(r.page, range(6801, 9));
+    const before = Date.now();
+    await inject(r.page, v);
+    const done = await waitUntil(r.page, allResolved, null, 10000);
+    const s = await r.page.evaluate(() => ({log: window.__log.map((x) => ({k: x.kind, n: x.terms, s: x.status})),
+      store: Object.assign({}, window.__store), toasts: window.__toasts.slice(),
+      c: Object.fromEntries([...document.querySelectorAll('article')].map((a) => [a.id,
+        window.segColor(a.querySelector('.xdsu-bar-seg'))]))}));
+    const f1 = await fin(r, true, '');
+    const pi = s.log.findIndex((x) => x.k === 'profile');
+    const profiles = s.log.filter((x) => x.k === 'profile').length;
+    let rec = null;
+    try {
+      rec = JSON.parse(s.store[ACCOUNT_KEY]);
+    } catch {
+      rec = null;
+    }
+    const GREEN = 'rgb(26, 140, 26)';
+    const RED = 'rgb(229, 57, 53)';
+    const right = Object.entries(s.c).every(([id, col]) => col === (id === 't6805' ? GREEN : RED));
+    const first = s.log[0] || {};
+    const ok1 = f1.pass && done && first.k === 'tweet' && first.n === 3 && first.s === 422 && profiles === 1 && pi > 1
+      && s.log.slice(1).every((x) => x.n <= 2) && right && !!rec && rec.anonymous === true && rec.batch === 2
+      && rec.at >= before && s.store.detectedBatch === 2 && s.toasts.includes(LOGIN_TEXT);
+    const next = await startsWithCheck(browser, v, s.store, {profile: ANON, terms: 2, first: 6811});
+    const log = s.log.map((x) => `${x.k}/${x.n}${x.s && x.s !== 200 ? ':' + x.s : ''}`);
+    return {pass: ok1 && next.pass, detail: `requests=${JSON.stringify(log)} colours=${JSON.stringify(s.c)}`
+      + ` stored after=${s.store[ACCOUNT_KEY]} detectedBatch=${s.store.detectedBatch} toasts=${JSON.stringify(s.toasts)}`
+      + `${f1.detail} || a tab started next: ${next.detail}`};
+  },
+  // The age of a reused check counts from when it was made: stored 9 minutes ago, no check at
+  // start, none on a return to the tab at once; Date.now stepped 2 minutes on (11 minutes since the
+  // check), a return checks once.
+  async p1_age_from_check(browser, v) {
+    const r = await setup(browser, {store: {detectedBatch: 3, [ACCOUNT_KEY]: acct({batch: 3}, 9 * MIN)}});
+    await r.page.evaluate(() => {
+      const realNow = Date.now;
+      window.__dnOff = 0;
+      Date.now = () => realNow() + window.__dnOff;
+    });
+    await addN(r.page, range(6901, 3));
+    await inject(r.page, v);
+    const done = await waitUntil(r.page, allResolved, null, 8000);
+    const count = () => r.page.evaluate(() => window.reqs('profile').length);
+    const n0 = await count();
+    await r.page.evaluate(() => window.returnToTab());
+    // Fixed: 1 s. The visibilitychange handler would send a check at once (answered in 50 ms).
+    await sleep(1000);
+    const n1 = await count();
+    await r.page.evaluate((ms) => {
+      window.__dnOff += ms;
+      window.returnToTab();
+    }, 2 * MIN);
+    const checked = await waitUntil(r.page, () => window.reqs('profile').length > 0
+      && window.reqs('profile').every((x) => x.done !== null), null, 3000);
+    // Fixed: 1 s for a second check that must not come.
+    await sleep(1000);
+    const n2 = await count();
+    const stored = await r.page.evaluate((k) => window.__store[k], ACCOUNT_KEY);
+    return fin(r, done && n0 === 0 && n1 === 0 && checked && n2 === 1,
+        `account checks: at start=${n0}, after a return at 9 min=${n1}, after a return at 11 min=${n2}`
+        + ` | stored after=${stored}`);
+  },
+
+  // On a return the tab also takes over a newer check another tab stored (logged in, safe mode
+  // off, within 10 minutes). The other tab's write is made by changing __store after this page
+  // loaded, as d10 does for the watch list.
+
+  // Opened in the background with nothing stored; while it is hidden another tab stores a fresh
+  // Gold check. Shown: no account check (the server would answer Member after 3 s), lookups with 6
+  // terms at once, none while hidden.
+  async p1_return_hidden_start(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      window.__profileDelay = 3000;
+      window.setVis(true);
+    });
+    await addN(r.page, range(7001, 9));
+    await inject(r.page, v);
+    // Fixed: 3 s hidden, the other tab storing its check half way; no request may come.
+    await sleep(1500);
+    await r.page.evaluate(([k, host]) => {
+      window.__store[k] = JSON.stringify({host, at: Date.now() - 1000, batch: 6, anonymous: false, safeMode: false});
+    }, [ACCOUNT_KEY, HOST]);
+    await sleep(1500);
+    const hidden = await r.page.evaluate(() => window.__log.length);
+    // Read before the dispatch: the visibilitychange handler may send a request inside setVis.
+    const tVis = await r.page.evaluate(() => {
+      const t = Math.round(performance.now() - window.__t0);
+      window.setVis(false);
+      return t;
+    });
+    const done = await waitUntil(r.page, allResolved, null, 8000);
+    const s = await startLog(r.page);
+    const ok = hidden === 0 && done && s.p.length === 0 && !!s.first && s.first.terms === 6 && s.first.t >= tVis
+      && s.first.t - tVis < 3000;
+    return fin(r, ok, `requests while hidden=${hidden} | shown at ${tVis} ms: ${fmtStart(s)}`);
+  },
+  // The tab checked as Member (3); 11 minutes later another tab has just stored a Gold check. A
+  // return takes it over: no account check (the server still answers Member, so one would also
+  // show as 3 terms), and the tweets added after use 6 terms.
+  async p1_return_after_old_check(browser, v) {
+    const f = await returnCase(browser, v, {stepMs: 11 * MIN, agoMs: MIN, first: 7051});
+    return {pass: f.pass && f.before === 1 && f.checks === 1 && f.terms === 6, detail: f.detail};
+  },
+  // The tab checked logged out (2); another tab then stores a fresh logged-in check (Gold). A
+  // return takes it over: no account check (a logged-out tab checks on every return), the added
+  // tweets use 6 terms, and detectedBatch is left as this tab's own check wrote it (2).
+  async p1_return_after_anonymous(browser, v) {
+    const f = await returnCase(browser, v, {profile: ANON, agoMs: 0, first: 7061});
+    return {pass: f.pass && f.before === 1 && f.checks === 1 && f.terms === 6 && f.batch === 2, detail: f.detail};
+  },
+  // Not taken over on a return; each case below ends as it would without the return rule. Here
+  // the tab's own check (Member) is 11 minutes old, so the return checks, and the added tweets use
+  // the check's 3 terms.
+  async p1_return_not_anonymous(browser, v) {
+    const f = await returnCase(browser, v, {stepMs: 11 * MIN, agoMs: MIN, o: {anonymous: true, batch: 2}, first: 7071});
+    return {pass: f.pass && f.before === 1 && f.checks === 2 && f.terms === 3, detail: f.detail};
+  },
+  async p1_return_not_safe_mode(browser, v) {
+    const f = await returnCase(browser, v, {stepMs: 11 * MIN, agoMs: MIN, o: {safeMode: true}, first: 7081});
+    return {pass: f.pass && f.before === 1 && f.checks === 2 && f.terms === 3, detail: f.detail};
+  },
+  // Stored 30 s after this tab's own check, so newer, but 10.5 minutes old at the return. The
+  // return's check fails (network error): the tab keeps its own 3 terms. A stale check taken over
+  // would be checked again just the same (it is old too), so only a failed check shows it: its 6
+  // terms would stay.
+  async p1_return_not_stale(browser, v) {
+    const f = await returnCase(browser, v, {stepMs: 11 * MIN, fromOwnMs: 30000, checkFails: true, first: 7091});
+    return {pass: f.pass && f.before === 1 && f.checks === 2 && f.terms === 3, detail: f.detail};
+  },
+  // Fresh but 2 minutes older than this tab's own check (fresh too): nothing changes. No check,
+  // and the added tweets keep the tab's own 3 terms.
+  async p1_return_not_older(browser, v) {
+    const f = await returnCase(browser, v, {fromOwnMs: -2 * MIN, first: 7101});
+    return {pass: f.pass && f.before === 1 && f.checks === 1 && f.terms === 3, detail: f.detail};
+  },
+  // A lookup that failed with 'limit' (refused even alone) or 'blocked' (403) still makes the
+  // return check the account, although a fresh normal check is stored meanwhile: the first request
+  // after the return is that check. For 'limit' the take-over changes the batch size (3 -> 6) and
+  // so retries the failed lookup; that must not hide the failure.
+  async p1_return_failed_lookup(browser, v) {
+    const one = async (kind, first) => {
+      const r = await setup(browser);
+      await r.page.evaluate(([kind, id, body]) => {
+        window.__responder = (u) => {
+          if (kind === 'blocked') {
+            return {status: 403, body: ''};
+          }
+          return u.includes(`status/${id}*`) ? {status: 422, body} : {body: '[]'};
+        };
+      }, [kind, String(first + 1), TAG_LIMIT_BODY(0)]);
+      await addN(r.page, range(first, 3));
+      await inject(r.page, v);
+      const done = await waitUntil(r.page, allResolved, null, 8000);
+      const failed = await r.page.evaluate((id) => window.segColor(document.querySelector(`#t${id} .xdsu-bar-seg`)), String(first + 1));
+      const n0 = await r.page.evaluate(([k, host]) => {
+        window.__store[k] = JSON.stringify({host, at: Date.now(), batch: 6, anonymous: false, safeMode: false});
+        const n = window.__log.length;
+        window.returnToTab();
+        return n;
+      }, [ACCOUNT_KEY, HOST]);
+      // The request after the return has been sent and answered (a lookup comes 250 ms later).
+      const sent = await waitUntil(r.page, (n) => window.__log.length > n && window.__log[n].done !== null, n0, 3000);
+      const next = await r.page.evaluate((n) => (window.__log[n] ? `${window.__log[n].kind}/${window.__log[n].terms}` : 'none'), n0);
+      const ok = done && failed === 'rgb(61, 78, 232)' && sent && next === 'profile/0';
+      return fin(r, ok, `${kind}: failed segment blue=${failed === 'rgb(61, 78, 232)'} | first request after the return=${next}`);
+    };
+    const a = await one('limit', 7111);
+    const b = await one('blocked', 7121);
+    return {pass: a.pass && b.pass, detail: `${a.detail} || ${b.detail}`};
+  },
+
   // ---------- T11 ----------
   // Every lookup carries only=; a stub that returns only those fields gives the same judgements.
   async t11_only(browser, v) {
@@ -781,7 +1268,7 @@ const S = {
       }
       const t0 = Date.now();
       try {
-        const r = await Promise.race([fn(browser, v), sleep(120000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 120000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);

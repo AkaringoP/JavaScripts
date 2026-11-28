@@ -1,6 +1,6 @@
 // Re-check after an upload, the Like trigger, the upload button, per-image upload URLs.
 // node run_upload.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, colors, sleep} = require('./h.js');
+const {chromium, newPage, inject, colors, sleep, withTimeout} = require('./h.js');
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
 
@@ -305,6 +305,141 @@ const S = {
     return fin(r, pass, `stored before reload=${JSON.stringify(saved.map((e) => e[0]))} stored after load=${ids}`
       + ` tweet lookups 1205=${s.a} 1206(old)=${s.b}`);
   },
+  // (e) T2: back in X for longer than the ladder of re-checks (0, 5, 20, 60 s) before posting.
+  // The entry outlives the ladder, so the return after the post still re-checks the tweet.
+  // v2.0.0 dropped the entry at the ladder's last step.
+  async t16e_ladder_outlived(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => window.add({id: '1251', hashes: ['X1']}));
+    await inject(r.page, v);
+    await sleep(1500);
+    const before = (await colors(r.page))[0].join();
+    await tapBtn(r.page, '1251');
+    await r.page.evaluate(() => window.setVis(true));
+    await sleep(500);
+    const n0 = await r.page.evaluate(() => window.countReq('status/1251'));
+    // Back in X, still without a post. Fixed: the ladder runs in real time, its last step 60 s
+    // after the return; that time passing is the point. Then 5 s more in which nothing may be sent.
+    await r.page.evaluate(() => window.setVis(false));
+    const ladder = await r.page.waitForFunction((n) => window.countReq('status/1251') >= n + 4, n0,
+        {timeout: 70000, polling: 100}).then(() => true, () => false);
+    await sleep(5000);
+    const mid = await r.page.evaluate(() => ({n: window.countReq('status/1251'), watch: window.__store.watch}));
+    // Off to post, the post exists, back to X.
+    await r.page.evaluate((body) => {
+      window.setVis(true);
+      window.__responder = (u) => (u.includes('status/1251') ? {body} : {body: '[]'});
+    }, tweetPost(1251, '/photo/1'));
+    await sleep(500);
+    await r.page.evaluate(() => {
+      window.__s = window.sample('t1251');
+      window.setVis(false);
+    });
+    await sleep(2000);
+    const s = await r.page.evaluate(() => {
+      clearInterval(window.__s.iv);
+      return {seq: window.__s.seq, firstFound: window.__s.firstFound, n: window.countReq('status/1251')};
+    });
+    const pass = before === 'RED' && ladder && mid.n - n0 === 4 && (mid.watch || '').includes('"1251"')
+      && s.firstFound !== null && s.firstFound <= 2000 && s.n === mid.n + 1;
+    return fin(r, pass, `before=${before} ladder lookups (until 5 s after its end)=${mid.n - n0} stored watch then=${mid.watch}`
+      + ` | return after the post: lookups ${mid.n}->${s.n} seq=${s.seq.join(' > ')} foundAfter=${s.firstFound}ms`);
+  },
+  // (f) T2: a watched tweet that never gets a post is dropped, from memory and from the store, once
+  // the re-checks have queued WATCH_MAX_CHECKS (12) lookups for it; a return after that sends
+  // nothing. Returns that cannot look it up (X unmounted the tweet) do not use up the 12. Date.now
+  // is stepped (+2 s a return) past the 1.5 s refresh debounce instead of waiting.
+  async t16f_check_cap(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      const realNow = Date.now;
+      window.__dnOff = 0;
+      Date.now = () => realNow() + window.__dnOff;
+      // Requests in flight: a re-check of a tweet without posts is a tweet lookup, then a hash lookup.
+      const orig = window.GM_xmlhttpRequest;
+      window.__inflight = 0;
+      window.GM_xmlhttpRequest = (d) => {
+        window.__inflight++;
+        const end = (fn) => (x) => {
+          window.__inflight--;
+          if (fn) {
+            fn(x);
+          }
+        };
+        return orig(Object.assign({}, d, {onload: end(d.onload), onerror: end(d.onerror), ontimeout: end(d.ontimeout)}));
+      };
+      window.settled = () => window.__inflight === 0 && !document.querySelector('.xdsu-rechecking');
+      window.storedIds = () => {
+        try {
+          return JSON.parse(window.__store.watch).map((e) => e[0]);
+        } catch {
+          return null;
+        }
+      };
+      window.add({id: '1261', hashes: ['Y1']});
+    });
+    await inject(r.page, v);
+    await sleep(1500);
+    const before = (await colors(r.page))[0].join();
+    await tapBtn(r.page, '1261');
+    await r.page.evaluate(() => window.setVis(true));
+    const count = () => r.page.evaluate(() => window.countReq('status/1261'));
+    const n0 = await count();
+    // X unmounts the tweet: three returns, each with a fixed 0.5 s for a lookup that must not come.
+    await r.page.evaluate(() => document.getElementById('t1261').remove());
+    for (let i = 0; i < 3; i++) {
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+        window.setVis(false);
+      });
+      await sleep(500);
+      await r.page.evaluate(() => window.setVis(true));
+    }
+    // A fourth return mounts it again; the pass runs before the scan sees the new tweet.
+    await r.page.evaluate(() => {
+      window.__dnOff += 2000;
+      window.setVis(false);
+      window.add({id: '1261', hashes: ['Y1']});
+    });
+    const back = await r.page.waitForFunction(() => !!document.querySelector('#t1261 .xdsu-bar-seg'), null,
+        {timeout: 3000, polling: 20}).then(() => true, () => false);
+    await sleep(300);
+    await r.page.evaluate(() => window.setVis(true));
+    const off = (await count()) - n0;
+    // Returns until the entry has left the store. Each ends long before the ladder's 5 s step; were
+    // one to come, it would be a counted lookup as well.
+    const per = [];
+    let leftAt = null;
+    for (let i = 0; i < 16 && leftAt === null; i++) {
+      const b = await count();
+      await r.page.evaluate(() => {
+        window.__dnOff += 2000;
+        window.setVis(false);
+      });
+      await r.page.waitForFunction((b) => window.countReq('status/1261') > b && window.settled(), b,
+          {timeout: 3000, polling: 20}).catch(() => {});
+      const n = (await count()) - n0;
+      const stored = await r.page.evaluate(() => window.storedIds());
+      per.push(n);
+      if (stored && !stored.includes('1261')) {
+        leftAt = n;
+      }
+      await r.page.evaluate(() => window.setVis(true));
+    }
+    // One more return. Fixed: 1.5 s for a lookup that must not come.
+    const b = await count();
+    await r.page.evaluate(() => {
+      window.__dnOff += 2000;
+      window.setVis(false);
+    });
+    await sleep(1500);
+    const extra = (await count()) - b;
+    const c = (await colors(r.page))[0].join();
+    const pass = before === 'RED' && off === 0 && back && leftAt === 12 && extra === 0 && c === 'RED';
+    return fin(r, pass, `before=${before} lookups during 4 returns while unmounted=${off} remounted=${back}`
+      + ` | lookups after each later return=${JSON.stringify(per)} left the store at lookup ${leftAt} (want 12)`
+      + ` | a return after that: lookups ${extra} colours=${c}`);
+  },
 
   // ---------- T19 ----------
   // S14: two taps 120 ms apart -> one tab, no click reaches the photo link or the article.
@@ -428,8 +563,15 @@ const S = {
     await inject(r.page, v);
     await sleep(1200);
     await tapBtn(r.page, '1309');
-    await sleep(1000);
-    return fin(r, r.popups.length === 1, `newPages=${JSON.stringify(r.popups.map(dec))}`, /open tab failed/);
+    // The browser can report the fallback's page late under load: wait for the first one, bounded.
+    const t0 = Date.now();
+    while (!r.popups.length && Date.now() - t0 < 8000) {
+      await sleep(50);
+    }
+    const first = r.popups.length ? `first after ${Date.now() - t0} ms` : 'none within 8 s';
+    // Fixed on purpose: 1.5 s more in which a second page must not appear.
+    await sleep(1500);
+    return fin(r, r.popups.length === 1, `newPages=${JSON.stringify(r.popups.map(dec))} (${first})`, /open tab failed/);
   },
 
   // ---------- T20 ----------
@@ -557,7 +699,7 @@ const S = {
         continue;
       }
       try {
-        const r = await Promise.race([fn(browser, v), sleep(90000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 90000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name}\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.message.split('\n')[0]}`);

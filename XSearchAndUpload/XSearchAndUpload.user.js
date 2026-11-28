@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         X (Twitter) Danbooru Search and Upload
 // @namespace    https://github.com/AkaringoP
-// @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. Mobile-friendly (Firefox + Tampermonkey).
+// @description  Show Danbooru-presence bars under tweet images on x.com and add a one-click Danbooru upload button. For desktop and mobile (Tampermonkey).
 // @author       AkaringoP
 // @license      MIT
 // @match        *://x.com/*
@@ -19,7 +19,7 @@
 // @connect      danbooru.donmai.us
 // @connect      donmai.us
 // @noframes
-// @version      2.0.0
+// @version      2.1.0
 // ==/UserScript==
 
 /* Lookups also work logged out, but then a search allows only 2 terms, so they
@@ -34,7 +34,7 @@
    * @const {string} Logged at start-up. Must mirror the @version line in the
    * header above, which is what the userscript manager reads for updates.
    */
-  const VERSION = '2.0.0';
+  const VERSION = '2.1.0';
   console.log(`[XDSU] v${VERSION} loaded`);
 
   // -------------- config --------------
@@ -120,11 +120,11 @@
 
   GM_registerMenuCommand('XDSU legend', () => {
     alert([
-      'Bar under each image:',
-      'Solid green: on Danbooru (tap to open)',
-      'Green stripes: the tweet is only partly on Danbooru (tap to open)',
-      'Red outline: not on Danbooru (tap to check again)',
-      'Blue dashes: lookup failed (tap to retry)',
+      'Bar under each image (tap or point at a segment for details):',
+      'Solid green: on Danbooru',
+      'Green stripes: the tweet is only partly on Danbooru',
+      'Red outline: not on Danbooru',
+      'Blue dashes: lookup failed',
       'Thin grey line: checking',
     ].join('\n'));
   });
@@ -140,7 +140,12 @@
   // value is stored for when the check fails.
   const MAX_QUERY_BATCH = 6;
   const BATCH_STORE_KEY = 'detectedBatch';
+  // The result of the last successful account check, shared by every X tab, so
+  // that a tab that starts or comes back soon after needs no check of its own.
+  const ACCOUNT_STORE_KEY = 'accountCheck';
   const PROFILE_TIMEOUT_MS = 5000;
+  // An account check older than this is repeated on a return to the tab, and a
+  // stored one is not taken over by another tab.
   const PROFILE_MAX_AGE_MS = 10 * 60 * 1000;
   // The server itself may take ~11 s before it answers a slow search with a
   // 500.
@@ -163,14 +168,50 @@
   // Tiles lower than this keep the small button so it does not cover the photo
   // link.
   const SMALL_TILE_PX = 120;
+  // A tweet opened for upload is watched until its post count rises, for at
+  // most WATCH_MAX_AGE_MS, and for at most WATCH_MAX_CHECKS lookups started by
+  // the re-checks.
   const WATCH_MAX_AGE_MS = 30 * 60 * 1000;
+  const WATCH_MAX_CHECKS = 12;
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
+  // A return noticed while the tab stayed visible (window focus, the mouse
+  // entering the page) re-checks only if no return of any kind did so for this
+  // long; the timed re-checks that follow a return to the tab do not count. A
+  // focus likewise retries failed lookups and lifts a queue pause only if no
+  // return did so for this long. Focus changes and the mouse crossing the
+  // window edge are frequent on a desktop.
+  const RETURN_GAP_MS = 15000;
+  // A lookup that found no post for a tweet, or fewer posts than it has images,
+  // is repeated when the tweet is mounted again this long after it was made
+  // (someone may have posted it since). A tweet that stays mounted is not
+  // looked up again, and a fully posted one never.
+  const RESULT_MAX_AGE_MS = 10 * 60 * 1000;
+  // Lookup results kept per cache (tweet ids, media hashes) in a tab left open
+  // for long. Past CACHE_MAX_ENTRIES the oldest results no tile in the page
+  // uses are dropped, down to CACHE_TRIM_TO; this is checked at most once per
+  // CACHE_TRIM_INTERVAL_MS.
+  const CACHE_MAX_ENTRIES = 3000;
+  const CACHE_TRIM_TO = 2400;
+  const CACHE_TRIM_INTERVAL_MS = 60 * 1000;
   // Bottom offset of the toast, above X's bottom navigation. Raise it while
   // another fixed control uses the same corner.
   const TOAST_BOTTOM = 'calc(64px + env(safe-area-inset-bottom))';
+  // From this viewport width up X has no bottom navigation, keeps a sidebar on
+  // the left and shows its own toasts at the bottom centre. The toast then
+  // sits centred, WIDE_TOAST_BOTTOM up: above X's toasts, clear of the
+  // sidebar. (500 is X's layout switch as far as known; a little off does no
+  // harm, the centred place is above the bottom navigation too.)
+  const WIDE_MIN_WIDTH_PX = 500;
+  const WIDE_TOAST_BOTTOM = '88px';
+  // How long the tip stays that a tap on a segment shows (the segment's label,
+  // which a mouse gets as the tooltip), and its distance from the bar and from
+  // the viewport's edges.
+  const TIP_MS = 2500;
+  const TIP_GAP_PX = 8;
   // The photo viewer's pill sits in the same corner; while it is shown the
-  // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap).
+  // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap), at
+  // every width.
   const PILL_POS = {
     left: '12px',
     bottom: 'calc(64px + env(safe-area-inset-bottom))',
@@ -180,6 +221,22 @@
   // the pill is shown.
   const PILL_URL_CHECK_MS = 150;
   const VIEWER_PATH_RE = /\/status(?:es)?\/\d+\/photo\/(\d+)\/?$/;
+  // A photo-grid tile (a profile's media tab) is such a link outside every
+  // tweet, around a media image.
+  const GRID_TILE_SELECTOR = 'a[href*="/status/"][href*="/photo/"]';
+  // A profile's photo grid shows one author's tweets, so one search for every
+  // post whose source names a tweet of that author (one search term) answers
+  // most of its tiles at once. Danbooru returns at most AUTHOR_PAGE_SIZE posts
+  // per page; an author with more is read up to AUTHOR_MAX_PAGES pages. Any
+  // other photo grid (search results) mixes authors and gets no such search
+  // (gridAuthor).
+  const AUTHOR_PAGE_SIZE = 200;
+  const AUTHOR_MAX_PAGES = 5;
+  // Lookups sent at once while a photo grid is in the page (one at a time
+  // everywhere else): a grid shows a screenful of tweets at once. Danbooru
+  // sets no rate limit on reads; after a 429 or a block the tab goes back to
+  // one at a time.
+  const GRID_PARALLEL = 4;
 
   // -------------- styles --------------
 
@@ -192,6 +249,7 @@
       --xdsu-missing: #e53935;
       --xdsu-error: #5b6cff;
       --xdsu-searching: #767676;
+      --xdsu-focus: #5b6cff;
     }
     .xdsu-bar {
       display: flex;
@@ -211,9 +269,10 @@
       box-sizing: border-box;
       border-radius: 3px;
       pointer-events: auto;
-      cursor: pointer;
+      cursor: default;
     }
-    /* The tap area fills the bar's margins and the gaps between segments. */
+    /* The area that shows the tooltip, and swallows taps, fills the bar's
+       margins and the gaps between segments. */
     .xdsu-bar-seg::after {
       content: '';
       position: absolute;
@@ -258,8 +317,8 @@
         opacity: 0.6;
       }
     }
-    /* Padding, not margin: a margin can collapse into the action row's and
-       let the tap area overlap the Like button. */
+    /* Touch screens: a thicker line in a taller strip. Padding, not margin: a
+       margin can collapse into the action row's. */
     @media (pointer: coarse) {
       .xdsu-bar {
         height: 24px;
@@ -342,6 +401,36 @@
       text-decoration: underline !important;
     }
     .xdsu-toast.xdsu-above-pill { bottom: ${PILL_POS.toastBottom}; }
+    @media (min-width: ${WIDE_MIN_WIDTH_PX}px) {
+      .xdsu-toast:not(.xdsu-above-pill) {
+        left: 50%;
+        bottom: ${WIDE_TOAST_BOTTOM};
+        /* Or it would wrap at half the viewport, the room right of left. */
+        width: max-content;
+        transform: translateX(-50%);
+      }
+    }
+    /* What a tap on a segment shows, where a mouse gets the tooltip. Placed by
+       showTip. */
+    .xdsu-tip {
+      position: fixed;
+      left: 0;
+      top: 0;
+      display: none;
+      width: max-content;
+      max-width: calc(100vw - 16px);
+      box-sizing: border-box;
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 6px;
+      background: rgba(15, 20, 25, 0.92);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      color: white;
+      font: 13px/1.35 system-ui, sans-serif;
+      z-index: 2147483000;
+      pointer-events: none;
+    }
+    .xdsu-tip.xdsu-show { display: block; }
     /* Photo viewer: an icon button like the tile's. Border style and colour
        follow the bar (solid found, dashed partly posted, red missing, blue
        dashes failed, grey dots checking); title and aria-label name the state.
@@ -384,6 +473,35 @@
     .xdsu-pill[data-state="error"] { border: 2px dashed var(--xdsu-error); }
     .xdsu-pill[data-state="searching"] { cursor: default; }
     .xdsu-pill.xdsu-rechecking { opacity: 0.7; }
+    /* Photo grid (a profile's media tab): one segment over the bottom edge of
+       each tile, on a dark backing so that it reads over any photo. It only
+       shows the state; a click on it goes through to the tile (the viewer). */
+    .xdsu-grid-bar {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 6px;
+      z-index: 5;
+      display: flex;
+      height: 6px;
+      padding: 3px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.6);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
+      pointer-events: none;
+    }
+    .xdsu-grid-bar .xdsu-bar-seg::after { content: none; }
+    /* Mouse: the viewer button darkens under the pointer like the tile's. */
+    @media (hover: hover) and (pointer: fine) {
+      .xdsu-pill:hover { background-color: rgba(0,0,0,0.78); }
+    }
+    /* Keyboard: a focus ring on the controls that take the focus (the upload
+       buttons, the viewer button). */
+    .xdsu-upload-btn:focus-visible,
+    .xdsu-pill:focus-visible {
+      outline: 2px solid var(--xdsu-focus);
+      outline-offset: 2px;
+    }
   `);
 
   // -------------- helpers --------------
@@ -618,11 +736,16 @@
   const toastQueue = [];
   const toastReasons = new Set();
   let toastEl = null;
+  // Whether toastQueue[0] is on screen. A toast stays queued, unshown, while
+  // the tab is hidden.
+  let toastShown = false;
 
   /**
-   * Shows a short message in the bottom-left corner. A toast with a url opens
-   * it when tapped and stays 8 s; any other toast lets taps through to the page
-   * and stays 4 s.
+   * Shows a short message near the bottom of the screen (see TOAST_BOTTOM and
+   * WIDE_MIN_WIDTH_PX for where). A toast with a url opens it when tapped and
+   * stays 8 s; any other toast lets taps through to the page and stays 4 s.
+   * Toasts show one after another, and only while the tab is visible: one
+   * that comes while it is hidden waits for the return.
    * @param {string} text
    * @param {{reason: (?string|undefined), url: (?string|undefined)}=} options
    *     A toast with a reason (an automatic one) shows at most once per
@@ -636,15 +759,17 @@
       toastReasons.add(reason);
     }
     toastQueue.push({text, url});
-    if (toastQueue.length === 1) {
-      showNextToast();
-    }
+    showNextToast();
   }
 
-  /** Shows the first queued toast, then the next one when it ends. */
+  /**
+   * Shows the first queued toast, then the next one when it ends. Does nothing
+   * while a toast is on screen or the tab is hidden; becoming visible calls it
+   * again.
+   */
   function showNextToast() {
     const t = toastQueue[0];
-    if (!t) {
+    if (!t || toastShown || document.hidden) {
       return;
     }
     if (!toastEl) {
@@ -678,9 +803,12 @@
     toastEl.classList.toggle('xdsu-action', !!t.url);
     toastEl.classList.toggle('xdsu-above-pill', !!pillEl);
     toastEl.classList.add('xdsu-show');
+    toastShown = true;
+    // Runs on even if the tab is hidden meanwhile.
     setTimeout(() => {
       toastEl.classList.remove('xdsu-show');
       toastQueue.shift();
+      toastShown = false;
       showNextToast();
     }, t.url ? 8000 : 4000);
   }
@@ -699,12 +827,14 @@
    */
 
   /**
-   * The result of one lookup. state is 'pending', 'done' or 'error'; an error
-   * entry also has reason ('network', 'server', 'blocked', 'limit' or
-   * 'client'), at (time of the last failure) and tries.
+   * The result of one lookup. state is 'pending', 'done' or 'error'; a done
+   * entry has checkedAt (when the answer came); an error entry also has reason
+   * ('network', 'server', 'blocked', 'limit' or 'client'), at (time of the last
+   * failure) and tries.
    * @typedef {{
    *   state: string,
    *   posts: !Array<!Post>,
+   *   checkedAt: (number|undefined),
    *   reason: (string|undefined),
    *   at: (number|undefined),
    *   tries: (number|undefined),
@@ -714,9 +844,10 @@
   /**
    * One media tile of a tweet. bar is its bar segment and btn its upload
    * button; for the viewer button's own ref bar is that button, btn is null
-   * and photoCount is set. Video and GIF tiles have imageHash null. applied is
-   * the last state applyColors wrote; openedAt is when a tap last opened the
-   * post.
+   * and photoCount is set; a photo-grid tile has grid set, user (the author's
+   * lower-case name, or null when its link names none) and no btn. Video and
+   * GIF tiles have imageHash null. applied is the last state applyColors wrote;
+   * openedAt is when a tap last opened the post.
    * @typedef {{
    *   tweetId: string,
    *   imageHash: ?string,
@@ -727,6 +858,8 @@
    *   applied: ?string,
    *   openedAt: number,
    *   photoCount: (number|undefined),
+   *   grid: (boolean|undefined),
+   *   user: (?string|undefined),
    * }} ImageRef
    */
 
@@ -745,13 +878,40 @@
   /** @const {!Array<string>} Media hashes waiting for a lookup. */
   const pendingHashes = [];
 
+  /**
+   * The posts found for one author's tweets (see runAuthorLookup). state is
+   * 'pending', 'done' or 'error'; posts maps a tweet id to its posts and is
+   * kept while a later lookup of the same author runs; checkedAt is when the
+   * last lookup ended.
+   * @typedef {{
+   *   state: string,
+   *   posts: !Map<string, !Array<!Post>>,
+   *   checkedAt: number,
+   * }} AuthorEntry
+   */
+
+  /**
+   * @const {!Object<string, !AuthorEntry>} Author lookups by lower-case user
+   * name, for photo-grid tiles.
+   */
+  const authorCache = Object.create(null);
+  /** @const {!Array<string>} User names waiting for an author lookup. */
+  const pendingAuthors = [];
+
   /** @const {!Array<!ImageRef>} Every tracked tile. */
   const imageRefs = [];
+  /**
+   * @const {!Set<string>} Tweets that got a new tile ref (a segment or the
+   * viewer button) since the last scan ended; see refreshIfStale.
+   */
+  const mounted = new Set();
 
-  // Tweets opened for upload: tweetId -> {t0, n0}, n0 = posts known when the
-  // upload was opened. Stored so that it survives Firefox discarding and
-  // reloading the X tab.
-  const watch = new Map((() => {
+  /**
+   * Reads the stored watch list, which every X tab shares.
+   * @return {!Array<!Array<?>>} The [tweetId, {t0, n0}] pairs that are well
+   *     formed and not older than WATCH_MAX_AGE_MS.
+   */
+  function readStoredWatch() {
     try {
       const saved = JSON.parse(GM_getValue('watch', '[]'));
       return (Array.isArray(saved) ? saved : []).filter(
@@ -761,17 +921,38 @@
     } catch {
       return [];
     }
-  })());
-
-  /** Stores the watch list. */
-  function saveWatch() {
-    GM_setValue('watch', JSON.stringify([...watch]));
   }
-  saveWatch();
+
+  /**
+   * Reads the stored watch list, applies one change and writes it back, so the
+   * entries other tabs stored meanwhile are kept. Expired and malformed entries
+   * are dropped on the way.
+   * @param {function(!Map<string, {t0: number, n0: number}>)} change Changes
+   *     the stored entries in place.
+   */
+  function updateStoredWatch(change) {
+    const stored = new Map(readStoredWatch());
+    change(stored);
+    GM_setValue('watch', JSON.stringify([...stored]));
+  }
+
+  // Tweets opened for upload: tweetId -> {t0, n0, checks}, n0 = posts known
+  // when the upload was opened, checks = lookups the re-checks started for it.
+  // {t0, n0} is stored too, so that the list survives the browser discarding
+  // and reloading the X tab; checks is kept in this tab only. This map is this
+  // tab's own view: it starts from the stored list and changes only through
+  // this tab, which writes each change to the store entry by entry.
+  const watch = new Map(readStoredWatch().map(
+      ([id, w]) => [id, {t0: w.t0, n0: w.n0, checks: 0}]));
+  // Prunes the expired entries from the store, whichever tab wrote them.
+  updateStoredWatch(() => {});
 
   // -------------- DOM scan --------------
 
-  /** Processes every tweet article and drops the refs of removed segments. */
+  /**
+   * Processes every tweet article and every photo-grid tile, and drops the refs
+   * of removed segments.
+   */
   function scanTweets() {
     const articles = document.querySelectorAll(ARTICLE_SELECTOR);
     for (const article of articles) {
@@ -779,6 +960,16 @@
         processArticle(article);
       } catch (e) {
         console.error('[XDSU] article scan failed', e);
+      }
+    }
+    for (const link of document.querySelectorAll(GRID_TILE_SELECTOR)) {
+      if (link.closest('article')) {
+        continue;
+      }
+      try {
+        processGridTile(link);
+      } catch (e) {
+        console.error('[XDSU] grid tile scan failed', e);
       }
     }
     // Prune disconnected segment refs. Clear their markers too, so the same
@@ -795,6 +986,78 @@
         imageRefs.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * Gives a photo-grid tile (a profile's media tab: a link to
+   * /status/<id>/photo/<n> outside every tweet) a one-segment bar over its
+   * bottom edge and tracks it. The grid shows one tile per tweet, so the
+   * tweet's image count is unknown there: the ref counts as a one-image tweet,
+   * i.e. any post makes it found (photoCountOf). A tile reused for another
+   * photo gets a new bar; the old one's ref is pruned.
+   * @param {!Element} link
+   */
+  function processGridTile(link) {
+    const m = link.pathname.match(VIEWER_PATH_RE);
+    const info = m && parseStatusPath(link.pathname);
+    const user = (link.pathname.match(TWEET_PATH_RE) || [])[1];
+    const img = link.querySelector('img[src*="pbs.twimg.com/media/"]');
+    const imageHash = img ? parseTwitterImageHash(img.src) : null;
+    // A video or GIF tile, or a photo that has not loaded yet.
+    if (!info || !imageHash) {
+      return;
+    }
+    const photoIndex = parseInt(m[1], 10);
+    let bar = link.querySelector(':scope > .xdsu-grid-bar');
+    if (bar && (bar.dataset.tweetId !== info.tweetId ||
+        bar.dataset.photo !== String(photoIndex) ||
+        bar.dataset.imageHash !== imageHash)) {
+      bar.remove();
+      bar = null;
+    }
+    if (!bar) {
+      if (window.getComputedStyle(link).position === 'static') {
+        link.style.position = 'relative';
+      }
+      bar = document.createElement('span');
+      bar.className = 'xdsu-grid-bar';
+      bar.dataset.tweetId = info.tweetId;
+      bar.dataset.photo = String(photoIndex);
+      bar.dataset.imageHash = imageHash;
+      // No click listener, unlike a tweet's segments: a click on it goes
+      // through to the tile, which opens the viewer.
+      const seg = document.createElement('span');
+      seg.className = 'xdsu-bar-seg';
+      seg.setAttribute('role', 'img');
+      seg.dataset.state = 'searching';
+      seg.title = 'Checking';
+      seg.setAttribute('aria-label', 'Checking');
+      bar.appendChild(seg);
+      link.appendChild(bar);
+    }
+    const segment = bar.firstElementChild;
+    if (segment.dataset.tracked) {
+      return;
+    }
+    segment.dataset.tracked = '1';
+    const ref = {
+      tweetId: info.tweetId,
+      imageHash,
+      photoIndex,
+      bar: segment,
+      btn: null,
+      rechecking: false,
+      applied: null,
+      openedAt: 0,
+      grid: true,
+      user: gridAuthor(user),
+    };
+    imageRefs.push(ref);
+    mounted.add(info.tweetId);
+    if (ref.user) {
+      ensureAuthorLookup(ref.user);
+    }
+    queueRefLookups(ref);
   }
 
   /**
@@ -932,18 +1195,26 @@
       // Placed before the Like group existed, or moved by a re-render.
       actionGroup.parentNode.insertBefore(bar, actionGroup);
     }
-    // A segment stays the same <a> for its whole life; applyColors only toggles
-    // its href, so imageRefs keeps tracking it.
+    // A segment stays the same element for its whole life; applyColors only
+    // rewrites its attributes, so imageRefs keeps tracking it. It shows the
+    // state and does nothing when clicked (onSegmentClick).
     while (bar.children.length < photoCount) {
-      const seg = document.createElement('a');
+      const seg = document.createElement('span');
       seg.className = 'xdsu-bar-seg';
+      seg.setAttribute('role', 'img');
       seg.dataset.state = 'searching';
       seg.title = 'Checking';
       seg.setAttribute('aria-label', 'Checking');
       seg.addEventListener('click', onSegmentClick);
       seg.addEventListener('auxclick', onSegmentClick);
-      // Keeps x.com's tweet link from reacting to the press.
-      seg.addEventListener('mousedown', (ev) => ev.stopPropagation());
+      // Keeps x.com's tweet link from reacting to the press. A middle press is
+      // cancelled too, or it would start the browser's autoscroll.
+      seg.addEventListener('mousedown', (ev) => {
+        ev.stopPropagation();
+        if (ev.button === 1) {
+          ev.preventDefault();
+        }
+      });
       bar.appendChild(seg);
     }
     // Trim excess (e.g. if the tweet was edited to fewer images).
@@ -1012,6 +1283,7 @@
       openedAt: 0,
     };
     imageRefs.push(ref);
+    mounted.add(info.tweetId);
     ensureHashLookup(ref);
     enqueueTweetIdSearch(info.tweetId);
     return true;
@@ -1114,6 +1386,16 @@
   }
 
   /**
+   * @param {!MouseEvent} ev The tap or click that opens a tab.
+   * @return {boolean} Whether the tab opens in front: a tap or a plain left
+   *     click. A middle click, or a click with Ctrl or Command held, opens it
+   *     behind, as for a link.
+   */
+  function opensInFront(ev) {
+    return ev.button === 0 && !ev.ctrlKey && !ev.metaKey;
+  }
+
+  /**
    * Opens an upload tab and watches the tweet, so it is checked again on the
    * return to this tab.
    * @param {!Event} ev The tap.
@@ -1125,17 +1407,19 @@
     let tab = null;
     try {
       tab = GM_openInTab(url, {
-        active: ev.button === 0 && !ev.ctrlKey,
+        active: opensInFront(ev),
         setParent: true,
       });
     } catch (e) {
       console.error('[XDSU] open tab failed', e);
       window.open(url, '_blank', 'noopener');
     }
-    // Extra re-check trigger; the return to this tab (visibilitychange) is the
-    // main one.
+    // Extra re-check trigger; the return to this tab (visibilitychange, window
+    // focus, the mouse coming back) is the main one.
     if (tab) {
-      tab.onclose = () => refreshTweetStatus(tweetId);
+      tab.onclose = () => {
+        refreshTweetStatus(tweetId);
+      };
     }
   }
 
@@ -1173,6 +1457,77 @@
       pendingHashes.push(ref.imageHash);
     }
     scheduleFlush();
+  }
+
+  /**
+   * Queues the lookup of a photo grid's author unless one is running or the
+   * last one is not older than RESULT_MAX_AGE_MS. The posts of an earlier
+   * lookup stay in use while the new one runs.
+   * @param {string} user Lower-case user name.
+   */
+  function ensureAuthorLookup(user) {
+    const a = authorCache[user];
+    if (a && (a.state === 'pending' ||
+        Date.now() - a.checkedAt <= RESULT_MAX_AGE_MS)) {
+      return;
+    }
+    authorCache[user] =
+        {state: 'pending', posts: a ? a.posts : new Map(), checkedAt: 0};
+    if (!pendingAuthors.includes(user)) {
+      pendingAuthors.push(user);
+    }
+    scheduleFlush();
+  }
+
+  /**
+   * @param {string|undefined} user The author named in a photo-grid tile's
+   *     link.
+   * @return {?string} The name in lower case when the page is a page of that
+   *     author's profile (the media tab), where one author lookup answers the
+   *     whole grid. Null when the link names no author, and on any other grid
+   *     (search results): there every tile may have another author, and a
+   *     lookup per author would cost far more than the tiles' own lookups.
+   */
+  function gridAuthor(user) {
+    if (!/^\w+$/.test(user || '')) {
+      return null;
+    }
+    const name = user.toLowerCase();
+    const owner = (location.pathname.split('/')[1] || '').toLowerCase();
+    return owner === name ? name : null;
+  }
+
+  /**
+   * @param {!ImageRef} ref
+   * @return {!Array<!Post>} The posts the author lookup found for a photo-grid
+   *     tile's tweet; empty for any other ref.
+   */
+  function authorPosts(ref) {
+    const a = ref.grid && ref.user ? authorCache[ref.user] : null;
+    return (a && a.posts.get(ref.tweetId)) || [];
+  }
+
+  /**
+   * Queues the lookups a ref needs. A tweet's tile: its tweet, then its image
+   * (ensureHashLookup). A photo-grid tile waits for its author's lookup, and
+   * needs none of its own when that found a post for its tweet; what the
+   * author lookup did not find is looked up tweet by tweet, since a post may
+   * name the tweet without the author's present name.
+   * @param {!ImageRef} ref
+   */
+  function queueRefLookups(ref) {
+    if (ref.grid && ref.user) {
+      const a = authorCache[ref.user];
+      if (!a) {
+        ensureAuthorLookup(ref.user);
+        return;
+      }
+      if (a.state === 'pending' || authorPosts(ref).length) {
+        return;
+      }
+    }
+    enqueueTweetIdSearch(ref.tweetId);
+    ensureHashLookup(ref);
   }
 
   /**
@@ -1226,12 +1581,17 @@
     });
   }
 
-  // The queue stops while offline or paused (pausedUntil). flushPending runs
-  // only from the timer below, and a pause is lifted only through resumeQueue.
+  // The queue stops while offline or paused (pausedUntil): no lookup is
+  // started, and the ones in flight end. flushPending runs only from the timer
+  // below, and a pause is lifted only through resumeQueue.
+  // It sends one request at a time, except for a photo grid (lanes), where
+  // each lookup paints its result and frees its place as soon as it answers.
   let flushTimer = null;
   let flushRunning = false;
   let pausedUntil = 0;
   let failedBatches = 0;
+  // Lookups a photo grid may send at once; 1 once Danbooru refused a request.
+  let gridParallel = GRID_PARALLEL;
   const isOffline = () => navigator.onLine === false;
 
   /**
@@ -1256,9 +1616,7 @@
       }
       // During a pause, wait above stretches to the end of the pause. Keys out
       // of range wait for a scroll or a scan to bring them in.
-      const more = Date.now() < pausedUntil ?
-          pendingTweetIds.length || pendingHashes.length :
-          hasDueKeys();
+      const more = Date.now() < pausedUntil ? anyQueued() : hasDueKeys();
       if (more) {
         scheduleFlush();
       }
@@ -1266,7 +1624,8 @@
   }
 
   /**
-   * Lifts a pause and runs the queue now (on 'online', on return to the tab).
+   * Lifts a pause and runs the queue now (on 'online', on return to the tab or
+   * window).
    */
   function resumeQueue() {
     pausedUntil = 0;
@@ -1276,16 +1635,20 @@
     }
     clearTimeout(flushTimer);
     flushTimer = null;
-    if (pendingTweetIds.length || pendingHashes.length) {
+    if (anyQueued()) {
       scheduleFlush();
     }
   }
 
   const ownsTweet = (ref, k) => ref.tweetId === k;
   const ownsHash = (ref, k) => ref.imageHash === k;
+  const ownsAuthor = (ref, k) => !!ref.grid && ref.user === k;
+  /** @return {boolean} Whether any lookup is queued. */
+  const anyQueued = () => pendingAuthors.length > 0 ||
+      pendingTweetIds.length > 0 || pendingHashes.length > 0;
 
   /**
-   * @param {string} k A tweet id or media hash.
+   * @param {string} k A tweet id, media hash or author name.
    * @param {function(!ImageRef, string): boolean} owns Whether a ref belongs to
    *     the key.
    * @return {number} Distance in px from the viewport to the key's nearest
@@ -1300,11 +1663,20 @@
     }));
   }
 
+  /**
+   * @param {!Array<string>} queue
+   * @param {function(!ImageRef, string): boolean} owns
+   * @return {boolean} Whether a key of the queue is in range of the viewport.
+   */
+  function hasDue(queue, owns) {
+    return queue.some((k) => keyDistance(k, owns) <= window.innerHeight);
+  }
+
   /** @return {boolean} Whether a queued key is in range of the viewport. */
   function hasDueKeys() {
-    const due = (owns) => (k) => keyDistance(k, owns) <= window.innerHeight;
-    return pendingTweetIds.some(due(ownsTweet)) ||
-        pendingHashes.some(due(ownsHash));
+    return hasDue(pendingAuthors, ownsAuthor) ||
+        hasDue(pendingTweetIds, ownsTweet) ||
+        hasDue(pendingHashes, ownsHash);
   }
 
   /**
@@ -1331,8 +1703,67 @@
   }
 
   /**
-   * Runs the queue: tweet lookups before hash lookups. The profile check never
-   * overlaps a lookup.
+   * @return {number} How many lookups may run at once: gridParallel while a
+   *     photo-grid tile is in the page, else 1.
+   */
+  function lanes() {
+    const grid = imageRefs.some((ref) => ref.grid && ref.bar.isConnected);
+    return grid ? gridParallel : 1;
+  }
+
+  /**
+   * Starts the lookup nearest to the viewport, a tweet lookup before a hash
+   * lookup, and paints its result when it answers.
+   * @return {?Promise<void>} Null when nothing is in range.
+   */
+  function startLookup() {
+    const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
+    if (ids.length) {
+      return runTweetIdBatch(ids).then(() => {
+        imageRefs.filter((ref) => ref.bar.isConnected)
+            .forEach(ensureHashLookup);
+        applyColors();
+      });
+    }
+    const hashes = takeBatch(pendingHashes, hashCache, ownsHash);
+    return hashes.length ? runHashBatch(hashes).then(applyColors) : null;
+  }
+
+  /**
+   * Runs tweet and hash lookups, up to lanes() at once: a lookup that answers
+   * frees its place for the next one, chosen by where the viewport is then.
+   * No lookup is started while the queue is stopped or an account check or an
+   * author lookup is due (flushPending runs those alone); the ones in flight
+   * are waited for.
+   * @return {!Promise<boolean>} Whether a lookup ran.
+   */
+  async function runLookups() {
+    const running = new Set();
+    let ran = false;
+    const mayStart = () => running.size < lanes() && !isOffline() &&
+        Date.now() >= pausedUntil && !profileWanted && !profileCheck &&
+        !hasDue(pendingAuthors, ownsAuthor);
+    for (;;) {
+      while (mayStart()) {
+        const lookup = startLookup();
+        if (!lookup) {
+          break;
+        }
+        ran = true;
+        const done = lookup.finally(() => running.delete(done));
+        running.add(done);
+      }
+      if (!running.size) {
+        return ran;
+      }
+      await Promise.race(running);
+    }
+  }
+
+  /**
+   * Runs the queue: author lookups (photo grids) before tweet lookups before
+   * hash lookups, one request at a time, or up to lanes() at once for a photo
+   * grid (runLookups). The profile check never overlaps a lookup.
    * @return {!Promise<void>}
    */
   async function flushPending() {
@@ -1347,21 +1778,88 @@
         await profileCheck;
         continue;
       }
-      const ids = takeBatch(pendingTweetIds, tweetCache, ownsTweet);
-      if (ids.length) {
-        await runTweetIdBatch(ids);
+      const authors = takeBatch(pendingAuthors, authorCache, ownsAuthor);
+      if (authors.length) {
+        // One author per turn; the tiles its lookup left open then get their
+        // own lookups.
+        pendingAuthors.unshift(...authors.slice(1));
+        await runAuthorLookup(authors[0]);
         imageRefs.filter((ref) => ref.bar.isConnected)
-            .forEach(ensureHashLookup);
+            .forEach(queueRefLookups);
         applyColors();
         continue;
       }
-      const hashes = takeBatch(pendingHashes, hashCache, ownsHash);
-      if (!hashes.length) {
+      // Whatever stopped the lookups (an account check, an author) runs in the
+      // next turn; a turn that finds nothing in range ends the flush.
+      if (!await runLookups()) {
         return;
       }
-      await runHashBatch(hashes);
-      applyColors();
     }
+  }
+
+  /**
+   * Looks up every post whose source names a tweet of one author (a source:
+   * search for /<user>/status/ with a wildcard on either side, which Danbooru
+   * matches without regard to case), page by page, and files the posts by
+   * tweet id. A first lookup shows its posts page by page; a repeated one
+   * keeps the earlier posts in use until it is complete. What it finds is
+   * certain; what it does not find is not known to be
+   * missing (see queueRefLookups). On a failure the author's tiles fall back
+   * to their own lookups, and the author is tried again once the entry is
+   * stale. When the author's tiles have left the page (another profile was
+   * opened), no further page is read; the entry is left stale, so the author
+   * is looked up again on a return.
+   * @param {string} user Lower-case user name.
+   * @return {!Promise<void>}
+   */
+  async function runAuthorLookup(user) {
+    const entry = authorCache[user];
+    // An earlier lookup's posts stay in use until this one is complete.
+    const posts = entry.posts.size ? new Map() : entry.posts;
+    const tags = `status:any source:*/${user}/status/*`;
+    for (let page = 1; page <= AUTHOR_MAX_PAGES; page++) {
+      if (page > 1 && keyDistance(user, ownsAuthor) === Infinity) {
+        // checkedAt stays 0: stale.
+        entry.state = 'done';
+        return;
+      }
+      const url = `${DANBOORU_URL}posts.json?limit=${AUTHOR_PAGE_SIZE}` +
+          `&page=${page}&only=id,source,is_deleted,is_banned` +
+          `&tags=${encodeURIComponent(tags)}`;
+      const res = classifyResponse(await gmFetch(url).catch(() => null));
+      if (!res.posts) {
+        entry.state = 'error';
+        entry.checkedAt = Date.now();
+        if (res.reason === 'blocked' || res.reason === 'rateLimited') {
+          pausedUntil = Date.now() + PAUSE_MS;
+          gridParallel = 1;
+        }
+        return;
+      }
+      for (const post of res.posts) {
+        const info = parseDanbooruSource(post.source);
+        if (!info.tweetId) {
+          continue;
+        }
+        if (!posts.has(info.tweetId)) {
+          posts.set(info.tweetId, []);
+        }
+        posts.get(info.tweetId).push({
+          id: post.id,
+          photoIndex: info.photoIndex,
+          imageHash: info.imageHash,
+          isDeleted: !!post.is_deleted,
+          isBanned: !!post.is_banned,
+        });
+      }
+      applyColors();
+      if (res.posts.length < AUTHOR_PAGE_SIZE) {
+        break;
+      }
+    }
+    entry.posts = posts;
+    entry.state = 'done';
+    entry.checkedAt = Date.now();
   }
 
   /**
@@ -1470,6 +1968,11 @@
     let res = classifyResponse(await gmFetch(url).catch(() => null));
     if (res.retry) {
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      // On a photo grid another lookup may have paused the queue meanwhile.
+      if (Date.now() < pausedUntil) {
+        queue.unshift(...keys.filter((k) => !queue.includes(k)));
+        return [];
+      }
       res = classifyResponse(await gmFetch(url).catch(() => null));
     }
     const now = Date.now();
@@ -1493,6 +1996,7 @@
         if (entries[i] && cache[k] === entries[i]) {
           entries[i].posts = bucket[k];
           entries[i].state = 'done';
+          entries[i].checkedAt = now;
         }
       });
       return [];
@@ -1515,10 +2019,12 @@
     if (res.reason === 'rateLimited') {
       queue.unshift(...keys.filter((k) => !queue.includes(k)));
       pausedUntil = now + PAUSE_MS;
+      gridParallel = 1;
       return [];
     }
     setKeysError(cache, keys, entries, res.reason);
     if (res.reason === 'blocked') {
+      gridParallel = 1;
       // Everything still queued would be refused too.
       const queues =
           [[tweetCache, pendingTweetIds], [hashCache, pendingHashes]];
@@ -1540,7 +2046,8 @@
   // -------------- account check --------------
 
   // /profile.json answers 200 logged out too. Without a usable answer the last
-  // detected size (or 2) stays in use.
+  // detected size (or 2) stays in use. Instead of making its own check, a tab
+  // may take over a recent one that another tab stored (adoptStoredAccount).
   const storedBatch = GM_getValue(BATCH_STORE_KEY, null);
   const batchStored = Number.isInteger(storedBatch) && storedBatch >= 1 &&
       storedBatch <= MAX_QUERY_BATCH;
@@ -1555,8 +2062,77 @@
       'Danbooru safe mode is on – only rating:g posts are visible';
 
   /**
+   * A successful account check as stored under ACCOUNT_STORE_KEY (as JSON):
+   * the Danbooru URL it was made for, when, the batch size it gave and what it
+   * found. Nothing that identifies the account is kept.
+   * @typedef {{
+   *   host: string,
+   *   at: number,
+   *   batch: number,
+   *   anonymous: boolean,
+   *   safeMode: boolean,
+   * }} StoredAccount
+   */
+
+  /**
+   * Reads the stored account check.
+   * @return {?StoredAccount} The stored check if it is well formed, was made
+   *     for DANBOORU_URL, and is not in the future nor older than
+   *     PROFILE_MAX_AGE_MS; otherwise null.
+   */
+  function readStoredAccount() {
+    const raw = GM_getValue(ACCOUNT_STORE_KEY, null);
+    let a;
+    try {
+      a = typeof raw === 'string' ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+    if (!a || typeof a !== 'object' || Array.isArray(a)) {
+      return null;
+    }
+    const age = Date.now() - a.at;
+    const ok = a.host === DANBOORU_URL &&
+        Number.isInteger(a.at) &&
+        age >= 0 &&
+        age <= PROFILE_MAX_AGE_MS &&
+        Number.isInteger(a.batch) &&
+        a.batch >= 1 &&
+        a.batch <= MAX_QUERY_BATCH &&
+        typeof a.anonymous === 'boolean' &&
+        typeof a.safeMode === 'boolean';
+    return ok ? a : null;
+  }
+
+  /**
+   * Takes over the stored account check (at start-up and when the tab becomes
+   * visible) if it is recent, found the account logged in with safe mode off,
+   * and is newer than this tab's own check, as if this tab had made it: its age
+   * counts from when it was made and its batch size applies. A check that found
+   * anything else is not taken over, since another tab may have logged in or
+   * switched safe mode off since; so stored data never raises a toast.
+   * detectedBatch is left to the tab that made the check.
+   * @return {boolean} Whether a stored check was taken over.
+   */
+  function adoptStoredAccount() {
+    const a = readStoredAccount();
+    if (!a || a.anonymous || a.safeMode || a.at <= profileCheckedAt) {
+      return false;
+    }
+    profileCheckedAt = a.at;
+    profileAnonymous = false;
+    if (a.batch !== profileBatch) {
+      profileBatch = a.batch;
+      queryBatch = a.batch;
+      retryFailed(['limit']);
+    }
+    return true;
+  }
+
+  /**
    * Reads the account's search term limit and safe-mode setting from
-   * /profile.json and sets the batch size.
+   * /profile.json, sets the batch size and stores the result for the other tabs
+   * (ACCOUNT_STORE_KEY).
    * @return {!Promise<void>}
    */
   async function checkProfile() {
@@ -1586,6 +2162,14 @@
       GM_setValue(BATCH_STORE_KEY, batch);
       retryFailed(['limit']);
     }
+    // Replaces what any tab stored before, whatever it found.
+    GM_setValue(ACCOUNT_STORE_KEY, JSON.stringify({
+      host: DANBOORU_URL,
+      at: profileCheckedAt,
+      batch,
+      anonymous: profileAnonymous,
+      safeMode: p.enable_safe_mode === true,
+    }));
     if (profileAnonymous) {
       showToast(
           'Not logged in to Danbooru – lookups limited',
@@ -1623,7 +2207,8 @@
    * @param {!ImageRef} ref
    * @return {number} The tweet's tile count, read at judgement time because a
    *     tile that arrives late adds a segment. The viewer's own ref carries its
-   *     count (see syncPill).
+   *     count (see syncPill). A photo-grid tile's bar has one segment, so it
+   *     counts as a one-image tweet.
    */
   function photoCountOf(ref) {
     if (ref === pillRef) {
@@ -1678,6 +2263,12 @@
    */
   function resolveState(ref) {
     const tc = tweetCache[ref.tweetId];
+    // A photo-grid tile whose author lookup found a post is posted, whatever
+    // its own lookup says and whether or not it had one.
+    if (!(tc && tc.state === 'done' && tc.posts.length) &&
+        authorPosts(ref).length) {
+      return 'found';
+    }
     if (!tc || tc.state === 'pending') {
       return 'searching';
     }
@@ -1724,12 +2315,17 @@
   /**
    * @param {!ImageRef} ref
    * @return {!Array<!Post>} The posts the segment is judged on: the tweet's,
-   *     else those found by the image's media hash.
+   *     else (photo grid) those of the author lookup, else those found by the
+   *     image's media hash.
    */
   function matchedPosts(ref) {
     const tc = tweetCache[ref.tweetId];
     if (tc && tc.state === 'done' && tc.posts.length) {
       return tc.posts;
+    }
+    const byAuthor = authorPosts(ref);
+    if (byAuthor.length) {
+      return byAuthor;
     }
     const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
     if (hc && hc.state === 'done' && hc.posts.length) {
@@ -1740,7 +2336,8 @@
 
   /**
    * @param {!ImageRef} ref
-   * @return {?string} The Danbooru URL a tap on the segment opens, or null.
+   * @return {?string} The Danbooru post, or search, the ref stands for (the
+   *     viewer button opens it), or null.
    */
   function resolveMatchUrl(ref) {
     const posts = matchedPosts(ref);
@@ -1769,7 +2366,9 @@
       return 'Not on Danbooru';
     }
     if (state === 'error') {
-      return 'Lookup failed';
+      const failed = failedEntry(ref);
+      const why = failed && ERROR_TEXT[failed.reason];
+      return why ? `Lookup failed – ${why}` : 'Lookup failed';
     }
     const posts = matchedPosts(ref);
     if (state === 'foundWeak') {
@@ -1790,9 +2389,9 @@
 
   /**
    * The only writer of segment state. A segment being re-checked keeps its
-   * previous state, link and label (and pulses) until the new answer is in.
-   * Found segments are links; missing and failed ones are buttons (a tap checks
-   * again).
+   * previous state and label (and pulses) until the new answer is in. A segment
+   * only shows the state: its label is the tooltip, and a found one names the
+   * post it stands for in data-match-url (the viewer button opens it).
    */
   function applyColors() {
     for (const ref of imageRefs) {
@@ -1824,16 +2423,9 @@
       ref.bar.title = label;
       ref.bar.setAttribute('aria-label', label);
       if (matchUrl) {
-        ref.bar.href = matchUrl;
-        ref.bar.target = '_blank';
-        ref.bar.rel = 'noopener';
+        ref.bar.dataset.matchUrl = matchUrl;
       } else {
-        ref.bar.removeAttribute('href');
-      }
-      if (state === 'missing' || state === 'error') {
-        ref.bar.setAttribute('role', 'button');
-      } else {
-        ref.bar.removeAttribute('role');
+        delete ref.bar.dataset.matchUrl;
       }
       if (ref.btn) {
         const found = state === 'found';
@@ -1848,9 +2440,10 @@
     }
   }
 
-  // -------------- bar segment taps --------------
+  // -------------- clicks, failures --------------
 
-  // Why a lookup failed, for the toast shown when a failed segment is tapped.
+  // Why a lookup failed: in a failed segment's tooltip, and in the toast when
+  // the viewer button retries.
   const ERROR_TEXT = {
     network: 'Could not reach Danbooru.',
     server: 'Danbooru had a server error.',
@@ -1860,9 +2453,94 @@
   };
 
   /**
-   * Every tap on a segment stops here, so none reaches the tweet or x.com's
-   * links. A found segment opens its post, a missing one checks again, a failed
-   * one retries now, a searching one does nothing.
+   * @param {!ImageRef} ref
+   * @return {(!CacheEntry|undefined)} The failed lookup of the ref's tweet or,
+   *     failing that, of its image.
+   */
+  function failedEntry(ref) {
+    const tc = tweetCache[ref.tweetId];
+    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
+    return [tc, hc].find((e) => e && e.state === 'error');
+  }
+
+  let tipEl = null;
+  let tipTimer = null;
+
+  /** Hides the tip that a tap on a segment showed. */
+  function hideTip() {
+    if (!tipTimer) {
+      return;
+    }
+    clearTimeout(tipTimer);
+    tipTimer = null;
+    tipEl.classList.remove('xdsu-show');
+  }
+
+  /**
+   * Shows a segment's label next to it for TIP_MS: centred above the segment,
+   * or below it when there is no room above, and kept inside the viewport.
+   * @param {!Element} seg
+   */
+  function showTip(seg) {
+    const text = seg.getAttribute('aria-label');
+    if (!text) {
+      return;
+    }
+    if (!tipEl) {
+      tipEl = document.createElement('div');
+      tipEl.className = 'xdsu-tip';
+      // The segment itself carries the label for a screen reader.
+      tipEl.setAttribute('aria-hidden', 'true');
+      (document.body || document.documentElement).appendChild(tipEl);
+    }
+    tipEl.textContent = text;
+    tipEl.classList.add('xdsu-show');
+    const at = seg.getBoundingClientRect();
+    const tip = tipEl.getBoundingClientRect();
+    const room = document.documentElement.clientWidth - tip.width - TIP_GAP_PX;
+    const centred = at.left + at.width / 2 - tip.width / 2;
+    const above = at.top - tip.height - TIP_GAP_PX;
+    const left = Math.max(TIP_GAP_PX, Math.min(centred, room));
+    const top = above >= TIP_GAP_PX ? above : at.bottom + TIP_GAP_PX;
+    tipEl.style.left = `${Math.round(left)}px`;
+    tipEl.style.top = `${Math.round(top)}px`;
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(hideTip, TIP_MS);
+  }
+
+  // The tip goes when the page scrolls (it would stay behind) and when
+  // anything but a segment is touched.
+  window.addEventListener('scroll', hideTip, {capture: true, passive: true});
+  document.addEventListener('pointerdown', (ev) => {
+    const onSeg = ev.target.closest && ev.target.closest('.xdsu-bar-seg');
+    if (!onSeg) {
+      hideTip();
+    }
+  }, true);
+
+  /**
+   * @param {!Event} ev A click.
+   * @return {boolean} Whether it came from a touch screen or a pen. A browser
+   *     whose click does not name its pointer counts as one when it cannot
+   *     hover.
+   */
+  function isTap(ev) {
+    if (ev.type !== 'click') {
+      return false;
+    }
+    return ev.pointerType ? ev.pointerType !== 'mouse' :
+                            window.matchMedia('(hover: none)').matches;
+  }
+
+  /**
+   * Swallows a left or middle click or a tap on a segment, and shows the
+   * segment's label as a tip on a tap. The bar only shows the state; with a
+   * mouse its label is the tooltip. A click on it must not reach the tweet or
+   * x.com's links either. On a touch screen this matters most: were the
+   * segments to let taps through, the browser's touch adjustment would move a
+   * tap on the bar to the nearest target, the photo above or the Like button
+   * below. A right click is left to the browser. Photo-grid bars have no such
+   * listener: a tap there opens the tile.
    * @param {!Event} ev
    */
   function onSegmentClick(ev) {
@@ -1871,18 +2549,8 @@
     }
     ev.preventDefault();
     ev.stopPropagation();
-    const seg = ev.currentTarget;
-    const ref = imageRefs.find((r) => r.bar === seg);
-    if (!ref) {
-      return;
-    }
-    const state = seg.dataset.state;
-    if (state === 'found' || state === 'foundWeak') {
-      openPost(ev, ref, seg.getAttribute('href'));
-    } else if (state === 'missing') {
-      refreshTweetStatus(ref.tweetId);
-    } else if (state === 'error') {
-      retryLookup(ref);
+    if (isTap(ev)) {
+      showTip(ev.currentTarget);
     }
   }
 
@@ -1900,7 +2568,7 @@
     ref.openedAt = now;
     try {
       GM_openInTab(url, {
-        active: ev.button === 0 && !ev.ctrlKey,
+        active: opensInFront(ev),
         setParent: true,
       });
     } catch (e) {
@@ -1915,9 +2583,7 @@
    * @param {!ImageRef} ref
    */
   function retryLookup(ref) {
-    const tc = tweetCache[ref.tweetId];
-    const hc = ref.imageHash ? hashCache[ref.imageHash] : null;
-    const failed = [tc, hc].find((e) => e && e.state === 'error');
+    const failed = failedEntry(ref);
     // Already being checked again.
     if (!failed) {
       return;
@@ -2018,7 +2684,7 @@
     }
     // A lookup only the pill wanted is dropped by the next flush (see
     // takeBatch).
-    if (pendingTweetIds.length || pendingHashes.length) {
+    if (anyQueued()) {
       scheduleFlush();
     }
   }
@@ -2072,8 +2738,10 @@
     if (!pillEl.isConnected) {
       (document.body || document.documentElement).appendChild(pillEl);
     }
+    // A photo-grid tile is not mirrored: it does not know the tweet's image
+    // count, the viewer does.
     const seg = imageRefs.find(
-        (r) => r !== pillRef && r.tweetId === info.tweetId &&
+        (r) => r !== pillRef && !r.grid && r.tweetId === info.tweetId &&
             r.photoIndex === n && r.bar.isConnected);
     if (seg) {
       dropPillRef();
@@ -2100,6 +2768,7 @@
           photoCount: n,
         };
         imageRefs.push(pillRef);
+        mounted.add(info.tweetId);
       }
       // Photo count: the bar of a mounted article of the tweet, else the
       // viewer's images when image n was found among them, else n. Never less
@@ -2244,6 +2913,9 @@
    * Drops the cached result of a tweet and queries it again. The segments keep
    * showing the old result while the query runs (see applyColors).
    * @param {string} tweetId
+   * @return {boolean} Whether a lookup was queued: false when the tweet has no
+   *     segment in the page, a lookup of it is pending, or it was refreshed
+   *     less than REFRESH_DEBOUNCE_MS ago.
    */
   function refreshTweetStatus(tweetId) {
     const refs = imageRefs.filter(
@@ -2251,11 +2923,11 @@
     // Nothing on screen to update (e.g. a text-only tweet), or a lookup is
     // already running.
     if (!refs.length || isLookupPending(tweetId)) {
-      return;
+      return false;
     }
     const now = Date.now();
     if ((lastRefresh[tweetId] || 0) > now - REFRESH_DEBOUNCE_MS) {
-      return;
+      return false;
     }
     lastRefresh[tweetId] = now;
     delete tweetCache[tweetId];
@@ -2270,6 +2942,7 @@
     // New posts are searchable at once, so there is no delay before the query.
     enqueueTweetIdSearch(tweetId);
     applyColors();
+    return true;
   }
 
   /**
@@ -2288,20 +2961,68 @@
   }
 
   /**
-   * Remembers a tweet opened for upload, so it is re-checked on return.
+   * Remembers a tweet opened for upload, so it is re-checked on return. A tweet
+   * already watched starts afresh.
    * @param {string} tweetId
    */
   function watchTweet(tweetId) {
-    watch.set(tweetId, {t0: Date.now(), n0: knownPostCount(tweetId)});
-    saveWatch();
+    const t0 = Date.now();
+    const n0 = knownPostCount(tweetId);
+    watch.set(tweetId, {t0, n0, checks: 0});
+    updateStoredWatch((stored) => stored.set(tweetId, {t0, n0}));
   }
 
-  // One round of re-checks for the watched tweets. Step 0 runs when the tab
-  // becomes visible, the next steps follow on a single timer; an entry is
-  // dropped once its post count rose, after 30 minutes, or after the last step.
+  // Re-checks of the watched tweets come in passes. A return to the tab
+  // (visibilitychange, pageshow) starts a ladder: a pass at once, then one
+  // after each of RECHECK_DELAYS_MS on a single timer while the tab stays
+  // visible. A return noticed while the tab stayed visible runs a single pass
+  // (onVisibleReturn). An entry is dropped once its post count rose, after
+  // WATCH_MAX_AGE_MS, or once the passes queued WATCH_MAX_CHECKS lookups for
+  // it. The end of a ladder does not drop it, so a later return checks it
+  // again.
   let recheckTimer = null;
+  // When a return last ran a pass (to the tab, or one noticed while the tab
+  // stayed visible); the ladder's timed steps leave it alone.
+  let lastReturnPassAt = 0;
+
   /**
-   * Runs one round of re-checks for the watched tweets.
+   * Re-checks every watched tweet once and drops the entries that are done,
+   * here and in the store.
+   */
+  function recheckPass() {
+    if (!watch.size) {
+      return;
+    }
+    const now = Date.now();
+    const dropped = [];
+    for (const [id, w] of watch) {
+      let done = now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0;
+      // Only a queued lookup counts. None is queued while the tweet is not
+      // mounted, while it is being looked up, or right after a refresh.
+      if (!done && refreshTweetStatus(id)) {
+        w.checks++;
+        done = w.checks >= WATCH_MAX_CHECKS;
+      }
+      if (done) {
+        watch.delete(id);
+        dropped.push([id, w.t0]);
+      }
+    }
+    if (dropped.length) {
+      // An entry another tab stored for the same tweet since (another t0)
+      // stays.
+      updateStoredWatch((stored) => dropped.forEach(([id, t0]) => {
+        const s = stored.get(id);
+        if (s && s.t0 === t0) {
+          stored.delete(id);
+        }
+      }));
+    }
+  }
+
+  /**
+   * One step of the ladder: a pass, then the timer for the next step unless
+   * this was the last step or nothing is left to watch.
    * @param {number} step 0 when the tab becomes visible; later steps follow on
    *     the timer.
    */
@@ -2310,29 +3031,32 @@
     if (document.hidden) {
       return;
     }
-    const now = Date.now();
-    const sizeBefore = watch.size;
-    for (const [id, w] of watch) {
-      if (now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0) {
-        watch.delete(id);
-        continue;
-      }
-      refreshTweetStatus(id);
-      if (step >= RECHECK_DELAYS_MS.length) {
-        watch.delete(id);
-      }
-    }
-    if (watch.size !== sizeBefore) {
-      saveWatch();
-    }
-    if (watch.size) {
+    recheckPass();
+    if (watch.size && step < RECHECK_DELAYS_MS.length) {
       recheckTimer = setTimeout(
           () => recheckWatched(step + 1), RECHECK_DELAYS_MS[step]);
     }
   }
 
+  /**
+   * Runs one pass when the user comes back to a tab that stayed visible: the
+   * window gets the focus back, or the mouse comes back over the page. Skipped
+   * within RETURN_GAP_MS of the last return's pass. A ladder step in between
+   * does not hold it back (the post may have been made since that step), and
+   * a running ladder goes on unchanged.
+   */
+  function onVisibleReturn() {
+    const now = Date.now();
+    if (document.hidden || !watch.size ||
+        now - lastReturnPassAt < RETURN_GAP_MS) {
+      return;
+    }
+    lastReturnPassAt = now;
+    recheckPass();
+  }
+
   let lastReturnAt = 0;
-  /** Starts a round of re-checks when the user comes back to the tab. */
+  /** Starts a ladder of re-checks when the tab becomes visible again. */
   function onReturn() {
     const now = Date.now();
     // A bfcache restore fires both pageshow and visibilitychange.
@@ -2340,6 +3064,7 @@
       return;
     }
     lastReturnAt = now;
+    lastReturnPassAt = now;
     clearTimeout(recheckTimer);
     recheckWatched(0);
   }
@@ -2362,7 +3087,15 @@
     if (!likeBtn) {
       return;
     }
-    const article = likeBtn.closest('article');
+    recheckArticle(likeBtn.closest('article'));
+  }
+
+  /**
+   * Re-checks the tweet of an article (its Like button was clicked, or the
+   * Like shortcut pressed while it had the focus).
+   * @param {?Element} article
+   */
+  function recheckArticle(article) {
     if (!article) {
       return;
     }
@@ -2387,6 +3120,88 @@
   // post-like states since the testid toggles after the click.
   document.addEventListener('click', handleLikeClick, true);
 
+  /**
+   * Re-checks the focused tweet when X's Like shortcut is pressed: the L key
+   * alone, outside a text field. X then likes the tweet that has the keyboard
+   * focus (J and K move it) without a click on its Like button.
+   * @param {!KeyboardEvent} ev
+   */
+  function handleLikeKey(ev) {
+    if (!likeRecheck || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey ||
+        ev.shiftKey || (ev.key !== 'l' && ev.key !== 'L')) {
+      return;
+    }
+    const el = document.activeElement;
+    if (!el || !el.closest || el.isContentEditable ||
+        el.matches('input, textarea, select')) {
+      return;
+    }
+    recheckArticle(el.closest('article'));
+  }
+
+  document.addEventListener('keydown', handleLikeKey, true);
+
+  // -------------- long sessions --------------
+
+  /**
+   * Looks a tweet up again when it is mounted again and its result is stale:
+   * the lookup is older than RESULT_MAX_AGE_MS and a tile of it in the page
+   * shows "not posted" or "partly posted". The segments keep that state, and
+   * pulse, until the new answer is in (see refreshTweetStatus).
+   * @param {string} tweetId
+   */
+  function refreshIfStale(tweetId) {
+    const tc = tweetCache[tweetId];
+    if (!tc || tc.state !== 'done' ||
+        !(Date.now() - tc.checkedAt > RESULT_MAX_AGE_MS)) {
+      return;
+    }
+    const weak = imageRefs.some(
+        (ref) => ref.tweetId === tweetId && ref.bar.isConnected &&
+            ['missing', 'foundWeak'].includes(resolveState(ref)));
+    if (weak) {
+      refreshTweetStatus(tweetId);
+    }
+  }
+
+  let trimmedAt = 0;
+
+  /**
+   * Keeps the caches from growing without end in a tab left open for long. At
+   * most once per CACHE_TRIM_INTERVAL_MS: drops the refresh debounce stamps
+   * that have run out, and a cache past CACHE_MAX_ENTRIES loses its oldest
+   * answered entries that no tile in the page and no watched tweet uses, down
+   * to CACHE_TRIM_TO. Pending and failed entries stay: the queue (takeBatch)
+   * and retryFailed drop those whose tweet is gone.
+   */
+  function trimCaches() {
+    const now = Date.now();
+    if (now - trimmedAt < CACHE_TRIM_INTERVAL_MS) {
+      return;
+    }
+    trimmedAt = now;
+    for (const id of Object.keys(lastRefresh)) {
+      if (lastRefresh[id] <= now - REFRESH_DEBOUNCE_MS) {
+        delete lastRefresh[id];
+      }
+    }
+    const live = imageRefs.filter((ref) => ref.bar.isConnected);
+    const usedTweets =
+        new Set([...live.map((ref) => ref.tweetId), ...watch.keys()]);
+    const usedHashes = new Set(live.map((ref) => ref.imageHash));
+    [[tweetCache, usedTweets], [hashCache, usedHashes]].forEach(
+        ([cache, used]) => {
+          const keys = Object.keys(cache);
+          if (keys.length <= CACHE_MAX_ENTRIES) {
+            return;
+          }
+          keys.filter((k) => cache[k].state === 'done' && !used.has(k))
+              .sort((a, b) => cache[a].checkedAt - cache[b].checkedAt)
+              .slice(0, keys.length - CACHE_TRIM_TO)
+              .forEach((k) => delete cache[k]);
+        });
+  }
+
   // -------------- MutationObserver + polling fallback --------------
 
   let scanTimer = null;
@@ -2401,7 +3216,10 @@
     }, SCAN_DEBOUNCE_MS);
   }
 
-  /** Runs one scan: tweets, dropped lookups, retries, repaint. */
+  /**
+   * Runs one scan: tweets, dropped lookups, retries, repaint, stale results,
+   * cache upkeep.
+   */
   function tick() {
     if (document.hidden) {
       return;
@@ -2411,10 +3229,8 @@
       syncPill();
       // A lookup dropped while its tweet was off screen (see takeBatch) runs
       // again if the same segment came back before a scan saw it leave.
-      imageRefs.filter((ref) => ref.bar.isConnected).forEach((ref) => {
-        enqueueTweetIdSearch(ref.tweetId);
-        ensureHashLookup(ref);
-      });
+      imageRefs.filter((ref) => ref.bar.isConnected)
+          .forEach(queueRefLookups);
       retryFailed(null);
       // A queued key can come into range without a scroll (remount, layout
       // change).
@@ -2422,6 +3238,11 @@
         scheduleFlush();
       }
       applyColors();
+      // After the repaint, so that a tweet mounted again first shows its old
+      // result and then holds it while the new lookup runs.
+      mounted.forEach(refreshIfStale);
+      mounted.clear();
+      trimCaches();
     } catch (e) {
       console.error('[XDSU] tick error', e);
     }
@@ -2442,23 +3263,37 @@
     }, SCROLL_CHECK_MS);
   }, {capture: true, passive: true});
 
-  /** Watches the page for added nodes that are not the script's own. */
+  /**
+   * Watches the page for added elements that can change a tweet's tiles or the
+   * photo viewer.
+   */
   function startObserver() {
     if (!document.body) {
       setTimeout(startObserver, 50);
       return;
     }
     // The script's own insertions, and text it writes into its elements, need
-    // no scan.
-    const ownSelector =
-        '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
-    const own = (n) =>
-      n.nodeType === Node.ELEMENT_NODE && n.matches(ownSelector);
+    // no scan. Of the rest only elements count that are added inside a tweet
+    // (a re-render, a tile that arrives late) or that are or hold a tweet or a
+    // media image (a new tweet, the viewer). Typing in a reply box, profile
+    // cards, the side columns, and counts or times rewritten as text are left
+    // to the poll below.
+    const ownSelector = '.xdsu-bar, .xdsu-bar-seg, .xdsu-grid-bar, ' +
+        '.xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
+    const own = (n) => n.matches(ownSelector);
+    const tweetOrMedia = 'article, img[src*="pbs.twimg.com/media/"]';
+    const holds = (n) =>
+      n.matches(tweetOrMedia) || !!n.querySelector(tweetOrMedia);
+    const relevant = (mut) => {
+      const added = [...mut.addedNodes].filter(
+          (n) => n.nodeType === Node.ELEMENT_NODE && !own(n));
+      if (!added.length || mut.target.closest(ownSelector)) {
+        return false;
+      }
+      return !!mut.target.closest('article') || added.some(holds);
+    };
     const observer = new MutationObserver((mutations) => {
-      const foreign = (mut) => mut.addedNodes.length > 0 &&
-          ![...mut.addedNodes].every(own) &&
-          !mut.target.closest(ownSelector);
-      if (mutations.some(foreign)) {
+      if (mutations.some(relevant)) {
         scheduleScan();
       }
     });
@@ -2473,28 +3308,69 @@
   // that doesn't manifest as a DOM addition.
   setInterval(scheduleScan, POLL_INTERVAL_MS);
 
+  // When a return last retried failed lookups and lifted a queue pause
+  // (visibilitychange, focus).
+  let lastRetryAt = 0;
+
   // Every visibility change cancels the pending re-check; becoming visible
-  // re-scans and starts a new round of re-checks. A return to the tab also
-  // retries failed lookups at once and checks the account again when it was
-  // logged out, the last check is old, or lookups failed in a way that logging
-  // in or a Cloudflare check in another tab can fix.
+  // re-scans, starts a new ladder of re-checks and shows the toasts that waited
+  // while the tab was hidden. A return to the tab also retries failed lookups
+  // at once (always, whatever lastRetryAt says). It takes over a newer account
+  // check that another tab stored (adoptStoredAccount), then checks the account
+  // again when it is logged out, the last check (this tab's or the one it took
+  // over) is old, or lookups failed in a way that logging in or a Cloudflare
+  // check in another tab can fix. A tab that started hidden has no check yet
+  // (profileCheckedAt is 0), so here it takes over a stored one or makes its
+  // first one, before the scan queues any lookup.
   document.addEventListener('visibilitychange', () => {
     clearTimeout(recheckTimer);
     recheckTimer = null;
     if (!document.hidden) {
       const needsAccount = (e) => e.state === 'error' &&
           (e.reason === 'limit' || e.reason === 'blocked');
+      // Read before the take-over, which retries the 'limit' failures when the
+      // batch size changes; they still call for a check of this tab's own.
+      const failedForAccount = [tweetCache, hashCache].some(
+          (cache) => Object.values(cache).some(needsAccount));
+      adoptStoredAccount();
       const recheckProfile = profileAnonymous ||
           Date.now() - profileCheckedAt > PROFILE_MAX_AGE_MS ||
-          [tweetCache, hashCache].some(
-              (cache) => Object.values(cache).some(needsAccount));
+          failedForAccount;
       retryFailed(['network', 'server', 'blocked']);
       resumeQueue();
+      lastRetryAt = Date.now();
       if (recheckProfile) {
         requestProfileCheck();
       }
       scheduleScan();
       onReturn();
+      showNextToast();
+    }
+  });
+  // Returns that leave the tab visible: the window gets the focus back (a click
+  // into it, Alt+Tab), or the mouse comes back over the page (an upload posted
+  // in a window on another screen). Each runs one re-check pass, not a ladder.
+  // The focus also retries failed lookups and lifts a queue pause, as a return
+  // to the tab does (a browser check may have been passed in the other
+  // window), but at most once per RETURN_GAP_MS: focus changes are frequent,
+  // and while Danbooru refuses, each retry fails again and pauses anew. A tab
+  // switch fires both visibilitychange and focus; when the focus comes second,
+  // its retry and its pass fall within RETURN_GAP_MS, so it sends nothing.
+  window.addEventListener('focus', () => {
+    if (document.hidden) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastRetryAt >= RETURN_GAP_MS) {
+      lastRetryAt = now;
+      retryFailed(['network', 'server', 'blocked']);
+      resumeQueue();
+    }
+    onVisibleReturn();
+  });
+  document.documentElement.addEventListener('pointerenter', (ev) => {
+    if (ev.pointerType === 'mouse') {
+      onVisibleReturn();
     }
   });
   window.addEventListener('pageshow', (ev) => {
@@ -2511,7 +3387,15 @@
     }
   });
 
-  requestProfileCheck();
+  // A recent check stored by another tab (or by an earlier load of this one)
+  // takes the place of this tab's own. Without one, a tab that starts hidden
+  // (opened in the background) sends nothing until it is first shown, when the
+  // visibilitychange handler takes over a check stored meanwhile or checks. It
+  // is not marked wanted (profileWanted), or an 'online' event would send the
+  // check while it is still hidden.
+  if (!adoptStoredAccount() && !document.hidden) {
+    requestProfileCheck();
+  }
   if (new URL(DANBOORU_URL).hostname === 'safebooru.donmai.us') {
     showToast(SAFE_MODE_TOAST, {reason: 'safeMode'});
   }

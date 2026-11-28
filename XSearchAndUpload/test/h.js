@@ -1,6 +1,12 @@
 // Shared harness: Playwright Chromium with a phone viewport and touch, stub GM_* functions
 // (the request stub answers with whatever window.__responder returns), synthetic tweets.
-const {chromium} = require('playwright');
+// newPage(browser, {ctxOpts: DESKTOP}) gives a desktop browser instead (mouse, no touch).
+const playwright = require('playwright');
+// XDSU_BROWSER=firefox runs the scenarios in Firefox (npx playwright install firefox). It is
+// exported under the name the runners use, so they need no change. Firefox has no isMobile
+// contexts: a phone page there has the phone's viewport and touch, and a desktop's layout rules.
+const FIREFOX = process.env.XDSU_BROWSER === 'firefox';
+const chromium = FIREFOX ? playwright.firefox : playwright.chromium;
 const fs = require('fs');
 const path = require('path');
 const {readScript} = require('./script.js');
@@ -20,8 +26,18 @@ function loadScript(variant) {
   return readScript(variant);
 }
 
+// Context profiles for newPage's ctxOpts. PHONE is the default. The desktop ones have no touch,
+// so (pointer: fine) and (hover: hover) match.
+const PHONE = {viewport: {width: 360, height: 800}, hasTouch: true, isMobile: true};
+const DESKTOP = {viewport: {width: 1280, height: 800}, hasTouch: false, isMobile: false};
+const DESKTOP_WIDE = {viewport: {width: 1920, height: 1080}, hasTouch: false, isMobile: false};
+
 async function newPage(browser, {urlPath = '/home', store = {}, ctxOpts = {}} = {}) {
-  const ctx = await browser.newContext(Object.assign({viewport: {width: 360, height: 800}, hasTouch: true, isMobile: true}, ctxOpts));
+  const opts = Object.assign({}, PHONE, ctxOpts);
+  if (FIREFOX) {
+    delete opts.isMobile;
+  }
+  const ctx = await browser.newContext(opts);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
@@ -56,9 +72,12 @@ async function newPage(browser, {urlPath = '/home', store = {}, ctxOpts = {}} = 
       document.head.appendChild(s);
     };
     window.GM_getResourceURL = () => 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+    // __opened: the URLs. __openedOpts: {url, opts} per call in the same order, opts copied.
     window.__opened = [];
+    window.__openedOpts = [];
     window.GM_openInTab = (u, o) => {
       window.__opened.push(u);
+      window.__openedOpts.push({url: u, opts: o ? Object.assign({}, o) : null});
     };
     window.__responder = null;
     // /profile.json answers a logged-in Member by default. __profile may be an object,
@@ -170,4 +189,15 @@ async function colors(page) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = {chromium, newPage, inject, state, colors, sleep, NAMES};
+// A scenario's result, or a TIMEOUT failure after ms. The timer is cleared once the scenario
+// settles; a plain race against sleep(ms) leaves it pending and keeps the process alive that long
+// after the last scenario.
+function withTimeout(p, ms) {
+  let timer = null;
+  const timeout = new Promise((res) => {
+    timer = setTimeout(() => res({pass: false, detail: 'TIMEOUT'}), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+module.exports = {chromium, newPage, inject, state, colors, sleep, withTimeout, NAMES, PHONE, DESKTOP, DESKTOP_WIDE};

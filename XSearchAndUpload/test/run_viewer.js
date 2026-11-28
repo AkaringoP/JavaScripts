@@ -2,7 +2,7 @@
 // node run_viewer.js [variant_probe,..] [scenario,..]
 // A *_probe variant is the script with imageRefs exposed as window.__imageRefs (see script.js);
 // nothing else differs.
-const {chromium, inject, sleep} = require('./h.js');
+const {chromium, inject, sleep, withTimeout} = require('./h.js');
 const F = require('./run_markers.js');
 const fs = require('fs');
 const path = require('path');
@@ -595,7 +595,8 @@ const S = {
     const pass = during.same && during.ref.length === 1 && during.ref[0].count === 2
       && strip(during.states[0]) === strip(before[0]) && strip(after.states[0]) === strip(before[0])
       && before[0].segs.every((g) => g.state === 'foundWeak' && g.aria === '2 of 4 images posted')
-      && during.opened.length === 1 && after.refs.length === 0 && after.total === 5
+      // Clicks on the two segments open nothing (desktop task T11: segments only show the state).
+      && during.opened.length === 0 && after.refs.length === 0 && after.total === 5
       && !during.pillAttrs.includes('data-tracked') && !during.pillAttrs.includes('data-image-hash')
       && during.p.aria === 'On Danbooru' && r.errors.length === 0;
     return {pass, detail: `9861 before: ${F_ST(before[0])} | viewer 9862 open 4.5 s: pill ref same object=${during.same} ${JSON.stringify(during.ref)}`
@@ -708,7 +709,7 @@ if (require.main === module) {
         }
         const t0 = Date.now();
         try {
-          const res = await Promise.race([fn(browser, v), sleep(120000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+          const res = await withTimeout(fn(browser, v), 120000);
           console.log(`${res.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${res.detail}`);
         } catch (e) {
           console.log(`HARNESS-ERROR ${name}: ${e.stack.split('\n').slice(0, 3).join(' / ')}`);

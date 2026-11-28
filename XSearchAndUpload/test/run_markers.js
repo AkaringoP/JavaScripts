@@ -1,6 +1,6 @@
 // The observer ignoring the script's own nodes; bars and buttons restored after re-renders.
 // node run_markers.js [variant,..] [scenario,..]
-const {chromium, newPage, inject, sleep} = require('./h.js');
+const {chromium, newPage, inject, sleep, withTimeout} = require('./h.js');
 
 const variants = (process.argv[2] || 'current').split(',');
 const only = process.argv[3] ? process.argv[3].split(',') : null;
@@ -93,7 +93,8 @@ async function setup(browser, {noPoll = false, profile = null} = {}) {
         barNext: bar && bar.nextElementSibling ? (bar.nextElementSibling.dataset.g || bar.nextElementSibling.tagName) : null,
         segs: [...a.querySelectorAll('.xdsu-bar-seg')].map((s) => ({
           state: s.dataset.state,
-          href: s.getAttribute('href'),
+          // The post the segment stands for: its href before desktop task T11, data-match-url since.
+          href: s.getAttribute('href') || s.dataset.matchUrl || null,
           title: s.getAttribute('title'),
           aria: s.getAttribute('aria-label'),
           role: s.getAttribute('role'),
@@ -119,7 +120,9 @@ const ST = (s) => `${s.bar ? 'bar' : 'NOBAR'}${s.barNext ? '>' + s.barNext : ''}
   + ` btns=[${s.btns.map((b) => (b ? `${b.n}${b.cls.includes('xdsu-found') ? 'F' : ''}` : 'none')).join(',')}]`;
 
 const S = {
-  // T24b: own insertions (bar, segments, buttons, toast) cause no scan; a foreign node does.
+  // T24b: own insertions (bar, segments, buttons, toast) cause no scan; a foreign node inside a tweet
+  // does. Since desktop task T7 a foreign node outside every tweet (here a span in the timeline)
+  // causes none either; f27_observer_filter covers that rule.
   async f24_own_mutations(browser, v) {
     const r = await setup(browser, {noPoll: true});
     const {page} = r;
@@ -167,10 +170,10 @@ const S = {
       return {span: n1 - n0, div: window.__scans - n1};
     });
     const pass = a.scans === 1 && a.segs === 3 && a.btns === 3 && t.first === 0 && t.second === 0 && t.toast
-      && f.span === 1 && f.div === 1 && rr.scans === 1;
+      && f.span === 0 && f.div === 1 && rr.scans === 1;
     await r.ctx.close();
     return {pass, detail: `initial: scans=${a.scans} (bars=${a.bars} segs=${a.segs} btns=${a.btns}) | toast: +${t.first} then +${t.second}`
-      + ` | poll restoring bar+button: scans=${rr.scans} (bars=${rr.bars} btns=${rr.btns}) | foreign span: +${f.span}, foreign div in article: +${f.div}`
+      + ` | poll restoring bar+button: scans=${rr.scans} (bars=${rr.bars} btns=${rr.btns}) | foreign span outside tweets: +${f.span}, foreign div in article: +${f.div}`
       + (r.errors.length ? ' errors=' + JSON.stringify(r.errors) : '')};
   },
 
@@ -281,6 +284,110 @@ const S = {
       + (r.errors.length ? ' errors=' + JSON.stringify(r.errors) : '')};
   },
 
+  // Desktop task T7. The poll is stopped, so only the observer can start a scan. Changes outside
+  // every tweet (nodes coming and going in a side column, typing in a reply box) and text rewritten
+  // inside a tweet (a like count) start none. A tweet added in two steps (an empty cell, then the
+  // article in it), a re-render inside a tweet and a photo viewer opening each start one at once,
+  // so the bar, its restoration and the viewer button do not wait for the poll.
+  async f27_observer_filter(browser, v) {
+    const r = await setup(browser, {noPoll: true});
+    const {page} = r;
+    const until = (fn, ms) => page.waitForFunction(fn, null, {timeout: ms, polling: 20}).then(() => true, () => false);
+    await page.evaluate(() => {
+      window.__db = [{id: 61, source: 'https://twitter.com/u/status/9601/photo/1'}];
+      window.addN('9601', 1, 'OBSA');
+      document.querySelector('#t9601 .groups').insertAdjacentHTML('beforeend', '<span class="count">0</span>');
+      const side = document.createElement('aside');
+      side.innerHTML = '<div class="trends"></div><div class="reply" contenteditable="true"><div></div></div>';
+      document.body.appendChild(side);
+      // 30 changes a second for ms, of one kind; resolves with the scans they started (after 300 ms
+      // more, for a scan already scheduled).
+      window.churn = (kind, ms) => new Promise((done) => {
+        const n0 = window.__scans;
+        let i = 0;
+        const iv = setInterval(() => {
+          i++;
+          if (kind === 'side') {
+            const box = document.querySelector('aside .trends');
+            box.appendChild(document.createElement('div')).textContent = 'trend ' + i;
+            if (box.children.length > 10) {
+              box.firstElementChild.remove();
+            }
+          } else if (kind === 'typing') {
+            const line = document.querySelector('aside .reply > div');
+            const s = document.createElement('span');
+            s.textContent = 'abcdefghij'[i % 10];
+            line.appendChild(s);
+          } else {
+            document.querySelector('#t9601 .count').textContent = String(i);
+          }
+        }, 33);
+        setTimeout(() => {
+          clearInterval(iv);
+          setTimeout(() => done(window.__scans - n0), 300);
+        }, ms);
+      });
+    });
+    await inject(page, v);
+    // The first scan comes from the observer's start-up call; without a poll, nothing else rescans.
+    const ready = await until(() => !!document.querySelector('#t9601 .xdsu-bar-seg[data-state="found"]'), 3000);
+    const quiet = {};
+    for (const kind of ['side', 'typing', 'count']) {
+      quiet[kind] = await page.evaluate((kind) => window.churn(kind, 1500), kind);
+    }
+    // A new tweet: an empty cell first (nothing to scan), then the article in it.
+    const cellScans = await page.evaluate(async () => {
+      const n0 = window.__scans;
+      const cell = document.createElement('div');
+      cell.id = 'cell9602';
+      document.getElementById('root').appendChild(cell);
+      await new Promise((res) => setTimeout(res, 300));
+      return window.__scans - n0;
+    });
+    const t0 = Date.now();
+    await page.evaluate(() => {
+      const a = document.createElement('article');
+      a.setAttribute('data-testid', 'tweet');
+      a.setAttribute('tabindex', '0');
+      a.id = 't9602';
+      a.innerHTML = '<a href="/u/status/9602"><time datetime="2026-01-01">1h</time></a>'
+        + `<div class="media">${window.tileHtml('9602', {hash: 'OBSB1', link: 'photo/1'})}</div>`
+        + `<div class="groups">${window.LIKE_GROUP}</div>`;
+      document.getElementById('cell9602').appendChild(a);
+    });
+    const newBar = await until(() => !!document.querySelector('#t9602 .xdsu-bar-seg'), 3000);
+    const msNew = Date.now() - t0;
+    // A re-render: the bar is gone and an element is added in the tweet.
+    const t1 = Date.now();
+    await page.evaluate(() => {
+      document.querySelector('#t9601 .xdsu-bar').remove();
+      document.querySelector('#t9601 .groups').appendChild(document.createElement('div'));
+    });
+    const restored = await until(() => !!document.querySelector('#t9601 .xdsu-bar-seg[data-state="found"]'), 3000);
+    const msRestored = Date.now() - t1;
+    // The viewer: the URL changes and a layer with the media image is added outside the tweets.
+    const t2 = Date.now();
+    await page.evaluate(() => {
+      history.pushState({}, '', '/u/status/9601/photo/1');
+      const layer = document.createElement('div');
+      layer.setAttribute('role', 'dialog');
+      layer.innerHTML = '<img src="https://pbs.twimg.com/media/OBSA1?format=jpg&name=large">';
+      document.body.appendChild(layer);
+    });
+    const pill = await until(() => !!document.querySelector('.xdsu-pill'), 3000);
+    const msPill = Date.now() - t2;
+    const quietOk = Object.values(quiet).every((n) => n === 0) && cellScans === 0;
+    const fastOk = newBar && msNew < 1000 && restored && msRestored < 1000 && pill && msPill < 1000;
+    await r.ctx.close();
+    return {pass: ready && quietOk && fastOk,
+      detail: `ready=${ready} | scans during 1.5 s of 30 changes/s: side column ${quiet.side}, reply box ${quiet.typing},`
+        + ` like count text ${quiet.count}; empty cell added ${cellScans}${quietOk ? '' : ' <-- want 0 each'}`
+        + ` | without a poll: new tweet's bar ${newBar ? 'after ' + msNew + ' ms' : 'NOT within 3 s'},`
+        + ` re-rendered bar back ${restored ? 'after ' + msRestored + ' ms' : 'NOT within 3 s'},`
+        + ` viewer button ${pill ? 'after ' + msPill + ' ms' : 'NOT within 3 s'}${fastOk ? '' : ' <-- want each within 1 s'}`
+        + (r.errors.length ? ' errors=' + JSON.stringify(r.errors) : '')};
+  },
+
   // an article recycled to a tweet without photos keeps no bar.
   async f26_recycled_no_photos(browser, v) {
     const r = await setup(browser);
@@ -348,7 +455,7 @@ if (require.main === module) (async () => {
       }
       const t0 = Date.now();
       try {
-        const r = await Promise.race([fn(browser, v), sleep(60000).then(() => ({pass: false, detail: 'TIMEOUT'}))]);
+        const r = await withTimeout(fn(browser, v), 60000);
         console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} (${Math.round((Date.now() - t0) / 1000)} s)\n      ${r.detail}`);
       } catch (e) {
         console.log(`HARNESS-ERROR ${name}: ${e.stack}`);
