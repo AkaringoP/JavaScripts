@@ -1388,6 +1388,147 @@ const S = {
     return fin(r, {pass: ok && midOk, detail: `${rows.join(' | ')} | middle press [button:cancelled] on posted, not posted:`
       + ` ${JSON.stringify(downs)}${midOk ? '' : ' <-- want both cancelled'}`});
   },
+
+  // T10: the photo grid of a profile's media tab, as captured on x.com (2026-11-28): tiles outside
+  // every tweet, li[role=listitem] > a[role=link][href=/<user>/status/<id>/photo/1] > img, 194 px,
+  // one tile per tweet. Each tile gets a one-segment bar over its bottom edge that shows the state:
+  // any post (by the tweet, or by the image's media hash) makes it found, as the grid does not know
+  // the image count. The label names the post or the post count. A click on the segment goes
+  // through to the tile, and the script opens nothing. A tile reused for another tweet gets a new
+  // bar. The photo links of a tweet get no grid bar. The viewer opened from a tile judges on its
+  // own (here 1 post for a 2-image tweet: partly posted), not by the tile.
+  async d18_photo_grid(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      [[851, 'https://x.com/u/status/8401'], [852, 'https://pbs.twimg.com/media/GR3.jpg'], [853, 'https://x.com/u/status/8404'],
+        [854, 'https://x.com/u/status/8404'], [855, 'https://x.com/u/status/8405'], [857, 'https://x.com/u/status/8407']]
+          .forEach(([id, src]) => window.__db.push(window.post(id, src)));
+      window.gridTile = (id, hash) => `<li role="listitem"><div><a role="link" href="/u/status/${id}/photo/1"`
+        + ` style="display:block;width:194px;height:194px"><div><img src="https://pbs.twimg.com/media/${hash}?format=jpg&name=360x360"`
+        + ` style="display:block;width:194px;height:194px"></div></a></div></li>`;
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(3,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+      ul.innerHTML = [['8401', 'GR1'], ['8402', 'GR2'], ['8403', 'GR3'], ['8404', 'GR4'], ['8405', 'GR5'], ['8406', 'GR6']]
+          .map(([id, h]) => window.gridTile(id, h)).join('');
+      document.body.appendChild(ul);
+      window.gtile = (id) => document.querySelector(`#grid a[href*="/status/${id}/"]`);
+      window.gseg = (id) => window.gtile(id) && window.gtile(id).querySelector('.xdsu-grid-bar .xdsu-bar-seg');
+      window.__linkClicks = [];
+      ul.addEventListener('click', (e) => {
+        const a = e.target.closest('a');
+        if (a) {
+          window.__linkClicks.push(a.getAttribute('href'));
+          e.preventDefault();
+        }
+      });
+      // A tweet in the timeline too: its photo link is not a grid tile.
+      window.addBig('8409', 'GR9');
+    });
+    await inject(r.page, v);
+    const want = {8401: 'found', 8402: 'missing', 8403: 'found', 8404: 'found', 8405: 'found', 8406: 'missing'};
+    const ready = await waitUntil(r.page, (want) => Object.entries(want).every(([id, s]) => window.gseg(id)
+      && window.gseg(id).dataset.state === s) && window.__inflight === 0, want, 8000);
+    if (!ready) {
+      const s = await r.page.evaluate((ids) => ids.map((id) => window.gseg(id) ? window.gseg(id).dataset.state : 'no bar'), Object.keys(want));
+      return fin(r, {pass: false, detail: `grid tiles never reached ${JSON.stringify(want)}: ${JSON.stringify(s)}`});
+    }
+    const g = await r.page.evaluate((ids) => {
+      const rr = (b) => [b.left, b.top, b.right, b.bottom].map(Math.round);
+      return {
+        states: Object.fromEntries(ids.map((id) => [id, window.gseg(id) ? window.gseg(id).dataset.state : null])),
+        labels: Object.fromEntries(ids.map((id) => [id, window.gseg(id) ? window.gseg(id).title : null])),
+        bars: ids.map((id) => window.gtile(id).querySelectorAll('.xdsu-grid-bar').length),
+        tile: rr(window.gtile('8401').getBoundingClientRect()), bar: rr(window.gtile('8401').querySelector('.xdsu-grid-bar').getBoundingClientRect()),
+        segH: window.gseg('8401').getBoundingClientRect().height,
+        inTweet: document.querySelectorAll('article .xdsu-grid-bar').length, tweetBar: !!document.querySelector('#t8409 .xdsu-bar'),
+      };
+    }, Object.keys(want));
+    const geoOk = g.bar[0] === g.tile[0] + 6 && g.bar[2] === g.tile[2] - 6 && g.bar[3] === g.tile[3] - 6 && g.segH === 6;
+    const labelOk = g.labels['8401'] === 'On Danbooru: post #851' && g.labels['8404'] === 'On Danbooru: 2 posts'
+      && g.labels['8402'] === 'Not on Danbooru' && g.labels['8405'] === 'On Danbooru: post #855';
+    // A mouse click on 8402's segment: the tile's link gets it, nothing is opened.
+    const p = await centre(r.page, '#grid a[href*="/status/8402/"] .xdsu-bar-seg');
+    await r.page.mouse.click(p.x, p.y);
+    await sleep(300);
+    const click = await r.page.evaluate(() => ({links: window.__linkClicks.slice(), opened: window.__openedOpts.length}));
+    const clickOk = JSON.stringify(click.links) === '["/u/status/8402/photo/1"]' && click.opened === 0;
+    // The tile of 8406 reused for 8407 (posted). The poll (2 s) sees the changed link.
+    await r.page.evaluate(() => {
+      const a = window.gtile('8406');
+      a.setAttribute('href', '/u/status/8407/photo/1');
+      a.querySelector('img').setAttribute('src', 'https://pbs.twimg.com/media/GR7?format=jpg&name=360x360');
+    });
+    const reused = await waitUntil(r.page, () => !!window.gseg('8407') && window.gseg('8407').dataset.state === 'found'
+      && window.gtile('8407').querySelectorAll('.xdsu-grid-bar').length === 1
+      && window.gtile('8407').querySelector('.xdsu-grid-bar').dataset.tweetId === '8407', null, 5000);
+    // The viewer opened on 8405 shows two images; its button judges 1 post of 2 as partly posted.
+    await r.page.evaluate(() => {
+      history.pushState({}, '', '/u/status/8405/photo/1');
+      const layer = document.createElement('div');
+      layer.style.cssText = 'position:fixed;inset:0;z-index:1000;background:#000;overflow:hidden;white-space:nowrap';
+      layer.innerHTML = '<img src="https://pbs.twimg.com/media/GR5?format=jpg&name=large" style="width:100vw;height:100vh">'
+        + '<img src="https://pbs.twimg.com/media/GR5b?format=jpg&name=large" style="width:100vw;height:100vh">';
+      document.body.appendChild(layer);
+    });
+    const pillOk = await waitUntil(r.page, () => {
+      const pill = document.querySelector('.xdsu-pill');
+      return !!pill && pill.dataset.state === 'foundWeak' && window.gseg('8405').dataset.state === 'found';
+    }, null, 4000);
+    const pill = await r.page.evaluate(() => {
+      const el = document.querySelector('.xdsu-pill');
+      return el ? `${el.dataset.state} "${el.getAttribute('aria-label')}"` : 'none';
+    });
+    const statesOk = ready && JSON.stringify(g.states) === JSON.stringify(want) && g.bars.every((n) => n === 1);
+    const tweetOk = g.inTweet === 0 && g.tweetBar;
+    return fin(r, {pass: statesOk && geoOk && labelOk && clickOk && reused && pillOk && tweetOk,
+      detail: `states ${JSON.stringify(g.states)}${statesOk ? '' : ' <-- want ' + JSON.stringify(want)} | labels ${JSON.stringify(g.labels)}`
+        + `${labelOk ? '' : ' <-- wrong'} | tile ${g.tile} bar ${g.bar} segment ${g.segH}px${geoOk ? '' : ' <-- want 6 px in from the sides and bottom, 6 px high'}`
+        + ` | click on a segment: tile links ${JSON.stringify(click.links)}, opened ${click.opened}${clickOk ? '' : ' <-- wrong'}`
+        + ` | tile reused for 8407: ${reused ? 'one new bar, found' : 'NOT'} | viewer on 8405: button ${pill}, tile`
+        + ` ${pillOk ? 'found' : '?'}${pillOk ? '' : ' <-- want the button partly posted, the tile found'}`
+        + ` | grid bars inside tweets ${g.inTweet}, the tweet's own bar ${g.tweetBar}`});
+  },
+
+  // T10: a grid of 60 tiles (20 rows) at 1280x800 is looked up from the viewport out, as the
+  // timeline is: at the top only rows within one screen height are looked up; after a jump to the
+  // bottom, the bottom rows; the rows passed over (never within range) never.
+  async d19_grid_range(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => {
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(3,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+      let html = '';
+      for (let i = 0; i < 60; i++) {
+        html += `<li role="listitem"><a role="link" href="/u/status/${8500 + i}/photo/1" style="display:block;width:194px;height:194px">`
+          + `<img src="https://pbs.twimg.com/media/GG${i}?format=jpg&name=360x360" style="display:block;width:194px;height:194px"></a></li>`;
+      }
+      ul.innerHTML = html;
+      document.getElementById('root').replaceWith(ul);
+      window.requested = () => [...new Set(window.__reqLog.flatMap((x) => [...x.url.matchAll(/status\/(\d+)\*/g)].map((m) => Number(m[1]) - 8500)))]
+          .sort((a, b) => a - b);
+      window.rowOf = (i) => Math.floor(i / 3);
+      window.resolvedRows = (rows) => rows.every((row) => [0, 1, 2].every((c) => {
+        const s = document.querySelector(`a[href*="/status/${8500 + row * 3 + c}/"] .xdsu-bar-seg`);
+        return s && s.dataset.state !== 'searching';
+      }));
+    });
+    await inject(r.page, v);
+    const top = await waitUntil(r.page, () => window.resolvedRows([0, 1, 2, 3, 4, 5, 6, 7]) && window.__inflight === 0, null, 15000);
+    // Fixed: 1 s in which nothing further may be sent.
+    await sleep(1000);
+    const atTop = await r.page.evaluate(() => [...new Set(window.requested().map(window.rowOf))]);
+    await r.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const bottom = await waitUntil(r.page, () => window.resolvedRows([14, 15, 16, 17, 18, 19]) && window.__inflight === 0, null, 15000);
+    await sleep(1000);
+    const all = await r.page.evaluate(() => [...new Set(window.requested().map(window.rowOf))]);
+    const middle = [9, 10, 11];
+    const pass = top && bottom && atTop.every((row) => row <= 8) && middle.every((row) => !all.includes(row));
+    return fin(r, {pass, detail: `rows looked up at the top: [${atTop}]${top ? '' : ' (rows 0-7 NOT all resolved)'}`
+      + ` | after the jump to the bottom: [${all}]${bottom ? '' : ' (rows 14-19 NOT all resolved)'}`
+      + ` | rows 9-11 (passed over) looked up: ${middle.filter((row) => all.includes(row)).join(',') || 'none'}`});
+  },
 };
 
 // Injects an in-memory copy of the variant that publishes its caches as window.__tc (tweet ids),

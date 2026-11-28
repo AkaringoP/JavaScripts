@@ -207,6 +207,9 @@
   // the pill is shown.
   const PILL_URL_CHECK_MS = 150;
   const VIEWER_PATH_RE = /\/status(?:es)?\/\d+\/photo\/(\d+)\/?$/;
+  // A photo-grid tile (a profile's media tab) is such a link outside every
+  // tweet, around a media image.
+  const GRID_TILE_SELECTOR = 'a[href*="/status/"][href*="/photo/"]';
 
   // -------------- styles --------------
 
@@ -413,6 +416,24 @@
     .xdsu-pill[data-state="error"] { border: 2px dashed var(--xdsu-error); }
     .xdsu-pill[data-state="searching"] { cursor: default; }
     .xdsu-pill.xdsu-rechecking { opacity: 0.7; }
+    /* Photo grid (a profile's media tab): one segment over the bottom edge of
+       each tile, on a dark backing so that it reads over any photo. It only
+       shows the state; a click on it goes through to the tile (the viewer). */
+    .xdsu-grid-bar {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      bottom: 6px;
+      z-index: 5;
+      display: flex;
+      height: 6px;
+      padding: 3px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.6);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.35);
+      pointer-events: none;
+    }
+    .xdsu-grid-bar .xdsu-bar-seg::after { content: none; }
     /* Mouse: the viewer button darkens under the pointer like the tile's. */
     @media (hover: hover) and (pointer: fine) {
       .xdsu-pill:hover { background-color: rgba(0,0,0,0.78); }
@@ -765,9 +786,9 @@
   /**
    * One media tile of a tweet. bar is its bar segment and btn its upload
    * button; for the viewer button's own ref bar is that button, btn is null
-   * and photoCount is set. Video and GIF tiles have imageHash null. applied is
-   * the last state applyColors wrote; openedAt is when a tap last opened the
-   * post.
+   * and photoCount is set; a photo-grid tile has grid set and no btn. Video and
+   * GIF tiles have imageHash null. applied is the last state applyColors wrote;
+   * openedAt is when a tap last opened the post.
    * @typedef {{
    *   tweetId: string,
    *   imageHash: ?string,
@@ -778,6 +799,7 @@
    *   applied: ?string,
    *   openedAt: number,
    *   photoCount: (number|undefined),
+   *   grid: (boolean|undefined),
    * }} ImageRef
    */
 
@@ -847,7 +869,10 @@
 
   // -------------- DOM scan --------------
 
-  /** Processes every tweet article and drops the refs of removed segments. */
+  /**
+   * Processes every tweet article and every photo-grid tile, and drops the refs
+   * of removed segments.
+   */
   function scanTweets() {
     const articles = document.querySelectorAll(ARTICLE_SELECTOR);
     for (const article of articles) {
@@ -855,6 +880,16 @@
         processArticle(article);
       } catch (e) {
         console.error('[XDSU] article scan failed', e);
+      }
+    }
+    for (const link of document.querySelectorAll(GRID_TILE_SELECTOR)) {
+      if (link.closest('article')) {
+        continue;
+      }
+      try {
+        processGridTile(link);
+      } catch (e) {
+        console.error('[XDSU] grid tile scan failed', e);
       }
     }
     // Prune disconnected segment refs. Clear their markers too, so the same
@@ -871,6 +906,74 @@
         imageRefs.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * Gives a photo-grid tile (a profile's media tab: a link to
+   * /status/<id>/photo/<n> outside every tweet) a one-segment bar over its
+   * bottom edge and tracks it. The grid shows one tile per tweet, so the
+   * tweet's image count is unknown there: the ref counts as a one-image tweet,
+   * i.e. any post makes it found (photoCountOf). A tile reused for another
+   * photo gets a new bar; the old one's ref is pruned.
+   * @param {!Element} link
+   */
+  function processGridTile(link) {
+    const m = link.pathname.match(VIEWER_PATH_RE);
+    const info = m && parseStatusPath(link.pathname);
+    const img = link.querySelector('img[src*="pbs.twimg.com/media/"]');
+    const imageHash = img ? parseTwitterImageHash(img.src) : null;
+    // A video or GIF tile, or a photo that has not loaded yet.
+    if (!info || !imageHash) {
+      return;
+    }
+    const photoIndex = parseInt(m[1], 10);
+    let bar = link.querySelector(':scope > .xdsu-grid-bar');
+    if (bar && (bar.dataset.tweetId !== info.tweetId ||
+        bar.dataset.photo !== String(photoIndex) ||
+        bar.dataset.imageHash !== imageHash)) {
+      bar.remove();
+      bar = null;
+    }
+    if (!bar) {
+      if (window.getComputedStyle(link).position === 'static') {
+        link.style.position = 'relative';
+      }
+      bar = document.createElement('span');
+      bar.className = 'xdsu-grid-bar';
+      bar.dataset.tweetId = info.tweetId;
+      bar.dataset.photo = String(photoIndex);
+      bar.dataset.imageHash = imageHash;
+      // No click listener, unlike a tweet's segments: a click on it goes
+      // through to the tile, which opens the viewer.
+      const seg = document.createElement('span');
+      seg.className = 'xdsu-bar-seg';
+      seg.setAttribute('role', 'img');
+      seg.dataset.state = 'searching';
+      seg.title = 'Checking';
+      seg.setAttribute('aria-label', 'Checking');
+      bar.appendChild(seg);
+      link.appendChild(bar);
+    }
+    const segment = bar.firstElementChild;
+    if (segment.dataset.tracked) {
+      return;
+    }
+    segment.dataset.tracked = '1';
+    const ref = {
+      tweetId: info.tweetId,
+      imageHash,
+      photoIndex,
+      bar: segment,
+      btn: null,
+      rechecking: false,
+      applied: null,
+      openedAt: 0,
+      grid: true,
+    };
+    imageRefs.push(ref);
+    mounted.add(info.tweetId);
+    ensureHashLookup(ref);
+    enqueueTweetIdSearch(info.tweetId);
   }
 
   /**
@@ -1800,7 +1903,8 @@
    * @param {!ImageRef} ref
    * @return {number} The tweet's tile count, read at judgement time because a
    *     tile that arrives late adds a segment. The viewer's own ref carries its
-   *     count (see syncPill).
+   *     count (see syncPill). A photo-grid tile's bar has one segment, so it
+   *     counts as a one-image tweet.
    */
   function photoCountOf(ref) {
     if (ref === pillRef) {
@@ -2245,8 +2349,10 @@
     if (!pillEl.isConnected) {
       (document.body || document.documentElement).appendChild(pillEl);
     }
+    // A photo-grid tile is not mirrored: it does not know the tweet's image
+    // count, the viewer does.
     const seg = imageRefs.find(
-        (r) => r !== pillRef && r.tweetId === info.tweetId &&
+        (r) => r !== pillRef && !r.grid && r.tweetId === info.tweetId &&
             r.photoIndex === n && r.bar.isConnected);
     if (seg) {
       dropPillRef();
@@ -2751,8 +2857,8 @@
     // media image (a new tweet, the viewer). Typing in a reply box, profile
     // cards, the side columns, and counts or times rewritten as text are left
     // to the poll below.
-    const ownSelector =
-        '.xdsu-bar, .xdsu-bar-seg, .xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
+    const ownSelector = '.xdsu-bar, .xdsu-bar-seg, .xdsu-grid-bar, ' +
+        '.xdsu-upload-btn, .xdsu-toast, .xdsu-pill';
     const own = (n) => n.matches(ownSelector);
     const tweetOrMedia = 'article, img[src*="pbs.twimg.com/media/"]';
     const holds = (n) =>
