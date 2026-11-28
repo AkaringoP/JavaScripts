@@ -19,7 +19,7 @@
 // @connect      danbooru.donmai.us
 // @connect      donmai.us
 // @noframes
-// @version      2.0.0
+// @version      2.1.0
 // ==/UserScript==
 
 /* Lookups also work logged out, but then a search allows only 2 terms, so they
@@ -34,7 +34,7 @@
    * @const {string} Logged at start-up. Must mirror the @version line in the
    * header above, which is what the userscript manager reads for updates.
    */
-  const VERSION = '2.0.0';
+  const VERSION = '2.1.0';
   console.log(`[XDSU] v${VERSION} loaded`);
 
   // -------------- config --------------
