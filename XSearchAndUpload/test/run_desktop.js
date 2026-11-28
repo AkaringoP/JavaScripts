@@ -1805,6 +1805,79 @@ const S = {
         + ` tweet/hash lookups=${end.tweets}/${end.hashes} (want 8/8), most at once=${end.max} (want 4), author search alone=${end.authorAlone}`
         + `${ok ? '' : ' <-- wrong'}${res.detail}`};
   },
+  // T4 item 6, after T0 (item 6: the L key liked the tweet but nothing was re-checked): X's Like
+  // shortcut re-checks the tweet that has the keyboard focus, as a click on its Like button does.
+  // Only the bare key (also with Caps Lock on), outside text fields, and only while the
+  // "Like = re-check" setting is on. Date.now is stepped past the 1.5 s refresh debounce between
+  // the presses, so only the rule under test can hold a re-check back.
+  async d24_like_key(browser, v) {
+    const run = async (store, plan) => {
+      const r = await setup(browser, {store});
+      await r.page.evaluate(() => {
+        window.addBig('9301', 'LK1');
+        window.addBig('9302', 'LK2');
+        const box = document.createElement('textarea');
+        box.id = 'box';
+        document.getElementById('t9301').appendChild(box);
+      });
+      await inject(r.page, v);
+      const red = await waitUntil(r.page, () => window.redIdle('9301', 'LK1') && window.redIdle('9302', 'LK2'), null, 6000);
+      const count = () => r.page.evaluate(() => [window.lookups('status/9301').length, window.lookups('status/9302').length]);
+      const rows = [];
+      let ok = red;
+      for (const [label, focus, key, want] of plan) {
+        const n = await count();
+        await r.page.evaluate((focus) => {
+          window.__dnOff += 2000;
+          if (focus) {
+            document.querySelector(focus).focus();
+          } else {
+            document.activeElement.blur();
+          }
+        }, focus);
+        if (key === 'click') {
+          await r.page.evaluate(() => document.querySelector('#t9301 [data-testid="like"]').click());
+        } else {
+          await r.page.keyboard.press(key);
+        }
+        if (want) {
+          await waitUntil(r.page, (n) => window.lookups('status/9301').length > n && window.settled(), n[0], 3000);
+        } else {
+          // Fixed: 1 s for a lookup that must not come.
+          await sleep(1000);
+        }
+        const m = await count();
+        const got = [m[0] - n[0], m[1] - n[1]];
+        const good = got[0] === want && got[1] === 0;
+        ok = ok && good;
+        rows.push(`${label}: ${got[0]}${good ? '' : ` <-- want ${want}, and none for the other tweet (got ${got[1]})`}`);
+      }
+      const typed = await r.page.evaluate(() => document.getElementById('box').value);
+      const res = await fin(r, {pass: true, detail: ''});
+      return {ok: ok && res.pass, rows, typed, red, tail: res.detail};
+    };
+    const on = await run({}, [
+      ['L on the focused tweet', '#t9301', 'l', 1],
+      ['L with Caps Lock', '#t9301', 'L', 1],
+      ['focus inside the tweet (its Like button)', '#t9301 [data-testid="like"]', 'l', 1],
+      ['Ctrl+L', '#t9301', 'Control+l', 0],
+      ['Alt+L', '#t9301', 'Alt+l', 0],
+      ['Shift+L', '#t9301', 'Shift+L', 0],
+      ['K', '#t9301', 'k', 0],
+      ['L typed into a text field of the tweet', '#box', 'l', 0],
+      ['L with no tweet focused', null, 'l', 0],
+      ['a click on Like', '#t9301', 'click', 1],
+    ]);
+    const off = await run({likeRecheck: false}, [
+      ['L on the focused tweet', '#t9301', 'l', 0],
+      ['a click on Like', '#t9301', 'click', 0],
+    ]);
+    const typedOk = on.typed === 'l';
+    return {pass: on.ok && off.ok && typedOk,
+      detail: `lookups of the focused tweet per key, setting on (red before=${on.red}): ${on.rows.join(', ')}; the text field got`
+        + ` "${on.typed}"${typedOk ? '' : ' <-- want "l"'}${on.tail} | setting off (red before=${off.red}): ${off.rows.join(', ')}${off.tail}`};
+  },
+
 };
 
 // Injects an in-memory copy of the variant that publishes its caches as window.__tc (tweet ids),

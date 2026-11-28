@@ -2934,7 +2934,15 @@
     if (!likeBtn) {
       return;
     }
-    const article = likeBtn.closest('article');
+    recheckArticle(likeBtn.closest('article'));
+  }
+
+  /**
+   * Re-checks the tweet of an article (its Like button was clicked, or the
+   * Like shortcut pressed while it had the focus).
+   * @param {?Element} article
+   */
+  function recheckArticle(article) {
     if (!article) {
       return;
     }
@@ -2958,6 +2966,27 @@
   // stopPropagation on the bubble. Also catches both pre-like and
   // post-like states since the testid toggles after the click.
   document.addEventListener('click', handleLikeClick, true);
+
+  /**
+   * Re-checks the focused tweet when X's Like shortcut is pressed: the L key
+   * alone, outside a text field. X then likes the tweet that has the keyboard
+   * focus (J and K move it) without a click on its Like button.
+   * @param {!KeyboardEvent} ev
+   */
+  function handleLikeKey(ev) {
+    if (!likeRecheck || ev.repeat || ev.ctrlKey || ev.metaKey || ev.altKey ||
+        ev.shiftKey || (ev.key !== 'l' && ev.key !== 'L')) {
+      return;
+    }
+    const el = document.activeElement;
+    if (!el || !el.closest || el.isContentEditable ||
+        el.matches('input, textarea, select')) {
+      return;
+    }
+    recheckArticle(el.closest('article'));
+  }
+
+  document.addEventListener('keydown', handleLikeKey, true);
 
   // -------------- long sessions --------------
 
