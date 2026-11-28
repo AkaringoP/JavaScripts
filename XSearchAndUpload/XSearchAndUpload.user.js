@@ -219,10 +219,12 @@
   // A photo-grid tile (a profile's media tab) is such a link outside every
   // tweet, around a media image.
   const GRID_TILE_SELECTOR = 'a[href*="/status/"][href*="/photo/"]';
-  // A photo grid shows one author's tweets, so one search for every post whose
-  // source names a tweet of that author (one search term) answers most of its
-  // tiles at once. Danbooru returns at most AUTHOR_PAGE_SIZE posts per page;
-  // an author with more is read up to AUTHOR_MAX_PAGES pages.
+  // A profile's photo grid shows one author's tweets, so one search for every
+  // post whose source names a tweet of that author (one search term) answers
+  // most of its tiles at once. Danbooru returns at most AUTHOR_PAGE_SIZE posts
+  // per page; an author with more is read up to AUTHOR_MAX_PAGES pages. Any
+  // other photo grid (search results) mixes authors and gets no such search
+  // (gridAuthor).
   const AUTHOR_PAGE_SIZE = 200;
   const AUTHOR_MAX_PAGES = 5;
   // Lookups sent at once while a photo grid is in the page (one at a time
@@ -398,6 +400,8 @@
       .xdsu-toast:not(.xdsu-above-pill) {
         left: 50%;
         bottom: ${WIDE_TOAST_BOTTOM};
+        /* Or it would wrap at half the viewport, the room right of left. */
+        width: max-content;
         transform: translateX(-50%);
       }
     }
@@ -711,10 +715,11 @@
   let toastShown = false;
 
   /**
-   * Shows a short message in the bottom-left corner. A toast with a url opens
-   * it when tapped and stays 8 s; any other toast lets taps through to the page
-   * and stays 4 s. Toasts show one after another, and only while the tab is
-   * visible: one that comes while it is hidden waits for the return.
+   * Shows a short message near the bottom of the screen (see TOAST_BOTTOM and
+   * WIDE_MIN_WIDTH_PX for where). A toast with a url opens it when tapped and
+   * stays 8 s; any other toast lets taps through to the page and stays 4 s.
+   * Toasts show one after another, and only while the tab is visible: one
+   * that comes while it is hidden waits for the return.
    * @param {string} text
    * @param {{reason: (?string|undefined), url: (?string|undefined)}=} options
    *     A toast with a reason (an automatic one) shows at most once per
@@ -1019,7 +1024,7 @@
       applied: null,
       openedAt: 0,
       grid: true,
-      user: /^\w+$/.test(user || '') ? user.toLowerCase() : null,
+      user: gridAuthor(user),
     };
     imageRefs.push(ref);
     mounted.add(info.tweetId);
@@ -1449,6 +1454,24 @@
   }
 
   /**
+   * @param {string|undefined} user The author named in a photo-grid tile's
+   *     link.
+   * @return {?string} The name in lower case when the page is a page of that
+   *     author's profile (the media tab), where one author lookup answers the
+   *     whole grid. Null when the link names no author, and on any other grid
+   *     (search results): there every tile may have another author, and a
+   *     lookup per author would cost far more than the tiles' own lookups.
+   */
+  function gridAuthor(user) {
+    if (!/^\w+$/.test(user || '')) {
+      return null;
+    }
+    const name = user.toLowerCase();
+    const owner = (location.pathname.split('/')[1] || '').toLowerCase();
+    return owner === name ? name : null;
+  }
+
+  /**
    * @param {!ImageRef} ref
    * @return {!Array<!Post>} The posts the author lookup found for a photo-grid
    *     tile's tweet; empty for any other ref.
@@ -1532,8 +1555,9 @@
     });
   }
 
-  // The queue stops while offline or paused (pausedUntil). flushPending runs
-  // only from the timer below, and a pause is lifted only through resumeQueue.
+  // The queue stops while offline or paused (pausedUntil): no lookup is
+  // started, and the ones in flight end. flushPending runs only from the timer
+  // below, and a pause is lifted only through resumeQueue.
   // It sends one request at a time, except for a photo grid (lanes), where
   // each lookup paints its result and frees its place as soon as it answers.
   let flushTimer = null;
@@ -1756,7 +1780,9 @@
    * certain; what it does not find is not known to be
    * missing (see queueRefLookups). On a failure the author's tiles fall back
    * to their own lookups, and the author is tried again once the entry is
-   * stale.
+   * stale. When the author's tiles have left the page (another profile was
+   * opened), no further page is read; the entry is left stale, so the author
+   * is looked up again on a return.
    * @param {string} user Lower-case user name.
    * @return {!Promise<void>}
    */
@@ -1766,14 +1792,15 @@
     const posts = entry.posts.size ? new Map() : entry.posts;
     const tags = `status:any source:*/${user}/status/*`;
     for (let page = 1; page <= AUTHOR_MAX_PAGES; page++) {
+      if (page > 1 && keyDistance(user, ownsAuthor) === Infinity) {
+        // checkedAt stays 0: stale.
+        entry.state = 'done';
+        return;
+      }
       const url = `${DANBOORU_URL}posts.json?limit=${AUTHOR_PAGE_SIZE}` +
           `&page=${page}&only=id,source,is_deleted,is_banned` +
           `&tags=${encodeURIComponent(tags)}`;
       const res = classifyResponse(await gmFetch(url).catch(() => null));
-      // Dropped while the request ran (its tiles left the page).
-      if (authorCache[user] !== entry) {
-        return;
-      }
       if (!res.posts) {
         entry.state = 'error';
         entry.checkedAt = Date.now();
@@ -1915,6 +1942,11 @@
     let res = classifyResponse(await gmFetch(url).catch(() => null));
     if (res.retry) {
       await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      // On a photo grid another lookup may have paused the queue meanwhile.
+      if (Date.now() < pausedUntil) {
+        queue.unshift(...keys.filter((k) => !queue.includes(k)));
+        return [];
+      }
       res = classifyResponse(await gmFetch(url).catch(() => null));
     }
     const now = Date.now();

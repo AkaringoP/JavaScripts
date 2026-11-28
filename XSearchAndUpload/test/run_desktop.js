@@ -1542,6 +1542,9 @@ const S = {
     const gridPage = async (tiles, cols) => {
       const r = await setup(browser);
       await r.page.evaluate(([tiles, cols]) => {
+        // An author search is made only on that author's profile; the name's case in the URL
+        // need not match the links'.
+        history.replaceState(null, '', `/${tiles[0][0].split('/')[1].toLowerCase()}/media`);
         const ul = document.createElement('ul');
         ul.id = 'grid';
         ul.style.cssText = `display:grid;grid-template-columns:repeat(${cols},194px);gap:4px 3px;list-style:none;margin:0;padding:0`;
@@ -1683,6 +1686,7 @@ const S = {
       };
     };
     const grid = (ids) => {
+      history.replaceState(null, '', '/Par/media');
       const ul = document.createElement('ul');
       ul.id = 'grid';
       ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
@@ -1777,6 +1781,7 @@ const S = {
           authorAlone: lookups().filter((x) => isAuthor(x.url)).every((a) => !lookups().some((b) => over(a, b))),
           max: window.__maxInflight};
       };
+      history.replaceState(null, '', '/Sli/media');
       const ul = document.createElement('ul');
       ul.id = 'grid';
       ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
@@ -1951,6 +1956,8 @@ const S = {
     const hits = (a) => T0_CONTROLS.filter(([l, t, w, h]) => a.l < l + w && l < a.r && a.t < t + h && t < a.b).length;
     const rows = [];
     let ok = true;
+    // The toast's width in the first (widest-room) row; every centred one must have it.
+    let natural = null;
     for (const [width, height, touch, wide] of [[1140, 911, false, true], [1920, 1080, false, true], [500, 800, false, true],
       [499, 800, false, false], [360, 800, true, false]]) {
       const p = await place(width, height, touch);
@@ -1960,8 +1967,11 @@ const S = {
         const {cw, vh, free, abovePill} = p.g;
         const centred = Math.abs((free.l + free.r) / 2 - cw / 2) <= 1;
         const pillOk = abovePill.l === 12 && vh - abovePill.b === 116;
-        good = good && pillOk && (wide ? centred && vh - free.b === 88 : free.l === 12 && vh - free.b === 64);
-        text = `left ${free.l}, right ${free.r} of ${cw}, ${vh - free.b} px up (want ${wide ? 'centred, 88' : 'left 12, 64'});`
+        natural = natural === null ? free.r - free.l : natural;
+        const unsqueezed = !wide || free.r - free.l === natural;
+        good = good && pillOk && unsqueezed && (wide ? centred && vh - free.b === 88 : free.l === 12 && vh - free.b === 64);
+        text = `left ${free.l}, right ${free.r} of ${cw}${unsqueezed ? '' : ` (width ${free.r - free.l}, want ${natural})`},`
+          + ` ${vh - free.b} px up (want ${wide ? 'centred, 88' : 'left 12, 64'});`
           + ` above the viewer button: left ${abovePill.l}, ${vh - abovePill.b} px up (want 12, 116)`;
         if (width === 1140) {
           const touched = hits(free) + hits(abovePill);
@@ -1973,6 +1983,192 @@ const S = {
       rows.push(`${width}x${height}: ${text}${good ? '' : ' <-- wrong'}${p.tail}`);
     }
     return {pass: ok, detail: rows.join(' | ')};
+  },
+  // Final review: an author search is made only on that author's own profile. A photo grid anywhere
+  // else (search results) has another author in every tile, and a search per author, each run
+  // alone, would cost far more than the tiles' own lookups and hold those back meanwhile.
+  // A: a search page with 12 tiles of 12 authors, 3 of them posted: no author search, the tiles
+  // looked up by themselves, four at once. B: a profile's grid with one tile of another author:
+  // one author search, for the profile's author (whatever the case of the name in the URL); the
+  // other tile is looked up by itself.
+  async d26_grid_mixed(browser, v) {
+    const gridPage = async (path, tiles) => {
+      const r = await setup(browser);
+      await r.page.evaluate(([path, tiles]) => {
+        history.replaceState(null, '', path);
+        const ul = document.createElement('ul');
+        ul.id = 'grid';
+        ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+        ul.innerHTML = tiles.map(([user, id]) => `<li role="listitem"><a role="link" href="/${user}/status/${id}/photo/1"`
+          + ` style="display:block;width:194px;height:194px"><img src="https://pbs.twimg.com/media/GM${id}?format=jpg&name=360x360"`
+          + ` style="display:block;width:194px;height:194px"></a></li>`).join('');
+        document.getElementById('root').replaceWith(ul);
+        const table = window.__responder;
+        // An author search answers with every post of that author; all answers take 200 ms.
+        window.__responder = (u) => {
+          const am = u.match(/source:\*\/([^/*]+)\/status\/\*/);
+          const out = am ? {body: JSON.stringify(window.__db.filter((p) => p.source.toLowerCase().includes(`/${am[1]}/status/`)))}
+            : table(u);
+          return Object.assign(out, {delay: 200});
+        };
+        window.gstates = () => Object.fromEntries([...document.querySelectorAll('#grid a')].map((a) =>
+          [a.getAttribute('href').split('/')[3], (a.querySelector('.xdsu-bar-seg') || {dataset: {}}).dataset.state || null]));
+        window.authorReqs = () => window.__reqLog.filter((x) => /source:\*\/[^/*]+\/status\/\*/.test(x.url))
+          .map((x) => x.url.match(/source:\*\/([^/*]+)\/status\/\*/)[1]);
+        window.tweetReqs = () => window.__reqLog.filter((x) => !/source:\*\//.test(x.url) && /status\/\d+\*/.test(x.url)).length;
+      }, [path, tiles]);
+      return r;
+    };
+    const settledAll = (n) => {
+      const s = Object.values(window.gstates());
+      return s.length === n && s.every((x) => x === 'found' || x === 'missing') && window.__inflight === 0;
+    };
+
+    const tilesA = Array.from({length: 12}, (_, i) => ['Auth' + i, String(9500 + i)]);
+    const a = await gridPage('/search?q=x&f=media', tilesA);
+    await a.page.evaluate(() => [0, 5, 11].forEach((i) =>
+      window.__db.push(window.post(700 + i, `https://x.com/auth${i}/status/${9500 + i}`))));
+    await inject(a.page, v);
+    const doneA = await waitUntil(a.page, settledAll, 12, 8000);
+    const sa = await a.page.evaluate(() => ({states: window.gstates(), author: window.authorReqs(), tweets: window.tweetReqs(),
+      max: window.__maxInflight}));
+    const resA = await fin(a, {pass: true, detail: ''});
+    const greenA = Object.keys(sa.states).filter((id) => sa.states[id] === 'found').sort().join(',');
+    const okA = doneA && sa.author.length === 0 && greenA === '9500,9505,9511' && sa.tweets === 4 && sa.max === 4 && resA.pass;
+
+    const tilesB = Array.from({length: 6}, (_, i) => ['Own_1', String(9600 + i)]).concat([['Other', '9650']]);
+    const b = await gridPage('/own_1/media', tilesB);
+    await b.page.evaluate(() => {
+      window.__db.push(window.post(801, 'https://x.com/Own_1/status/9601'));
+      window.__db.push(window.post(802, 'https://x.com/other/status/9650'));
+    });
+    await inject(b.page, v);
+    const doneB = await waitUntil(b.page, settledAll, 7, 8000);
+    const sb = await b.page.evaluate(() => ({states: window.gstates(), author: window.authorReqs()}));
+    const resB = await fin(b, {pass: true, detail: ''});
+    const greenB = Object.keys(sb.states).filter((id) => sb.states[id] === 'found').sort().join(',');
+    const okB = doneB && JSON.stringify(sb.author) === '["own_1"]' && greenB === '9601,9650' && resB.pass;
+
+    return {pass: okA && okB,
+      detail: `A search page, 12 authors: resolved=${doneA}, author searches=${sa.author.length} (want 0), tweet lookups=${sa.tweets} (want 4),`
+        + ` most at once=${sa.max} (want 4), green=[${greenA}] (want 9500,9505,9511)${okA ? '' : ' <-- A wrong'}${resA.detail}`
+        + ` | B profile with another author's tile: resolved=${doneB}, author searches=${JSON.stringify(sb.author)} (want ["own_1"]),`
+        + ` green=[${greenB}] (want 9601,9650)${okB ? '' : ' <-- B wrong'}${resB.detail}`};
+  },
+
+  // Final review, two things that stop on a photo grid. A: lookups in flight when the queue is
+  // paused do not send their retry into the pause. Of the four tweet lookups sent at once, one is
+  // answered 500 (its retry is due 1.5 s later) and one 429 (the queue pauses for 60 s): nothing may
+  // be sent from the 429 until the return to the tab, and then every tile gets its answer.
+  // B: an author search reads no further page once the author's tiles have left the page. The
+  // author has 250 posts (two pages); the grid is removed while page 1 is out, so page 2 must not
+  // be asked for. Back on the grid the author is searched again, both pages.
+  async d27_grid_stops(browser, v) {
+    const grid = ([user, ids]) => {
+      history.replaceState(null, '', `/${user}/media`);
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(6,194px);gap:4px 3px;list-style:none;margin:0;padding:0';
+      ul.innerHTML = ids.map((id) => `<li role="listitem"><a role="link" href="/${user}/status/${id}/photo/1"`
+        + ` style="display:block;width:194px;height:194px"><img src="https://pbs.twimg.com/media/GN${id}?format=jpg&name=360x360"`
+        + ` style="display:block;width:194px;height:194px"></a></li>`).join('');
+      const old = document.getElementById('root') || document.getElementById('grid');
+      if (old) {
+        old.replaceWith(ul);
+      } else {
+        document.body.appendChild(ul);
+      }
+    };
+    const states = () => [...document.querySelectorAll('#grid .xdsu-bar-seg')].map((s) => s.dataset.state);
+
+    // A.
+    const idsA = Array.from({length: 24}, (_, i) => String(9700 + i));
+    const a = await setup(browser);
+    await a.page.evaluate(() => {
+      const table = window.__responder;
+      const isTweet = (u) => /status\/\d+\*/.test(u);
+      window.__bad = true;
+      window.__nTweet = 0;
+      window.__responder = (u) => {
+        if (window.__bad && isTweet(u)) {
+          window.__nTweet++;
+          if (window.__nTweet === 1) {
+            return {status: 500, body: 'oops', delay: 100};
+          }
+          if (window.__nTweet === 2) {
+            return {status: 429, body: 'slow down', delay: 300};
+          }
+        }
+        return Object.assign(table(u), {delay: 300});
+      };
+      window.lookupsAll = () => window.__reqLog.filter((x) => !x.url.includes('/profile.json'));
+    });
+    await a.page.evaluate(grid, ['Ret', idsA]);
+    await inject(a.page, v);
+    // The 429 has been answered and nothing is in flight.
+    const paused = await waitUntil(a.page, () => window.__nTweet >= 2 && window.__inflight === 0
+      && window.lookupsAll().length >= 5, null, 6000);
+    const n0 = await a.page.evaluate(() => window.lookupsAll().length);
+    // Fixed: 2.5 s, in which the retry (due 1.5 s after the 500) would be sent.
+    await sleep(2500);
+    const n1 = await a.page.evaluate(() => {
+      const n = window.lookupsAll().length;
+      window.__bad = false;
+      window.setHidden(true);
+      window.setHidden(false);
+      return n;
+    });
+    const doneA = await waitUntil(a.page, () => {
+      const s = [...document.querySelectorAll('#grid .xdsu-bar-seg')].map((x) => x.dataset.state);
+      return s.length === 24 && s.every((x) => x === 'missing') && window.__inflight === 0;
+    }, null, 30000);
+    const endA = await a.page.evaluate(states);
+    const resA = await fin(a, {pass: true, detail: ''});
+    const okA = paused && n1 === n0 && doneA && resA.pass;
+
+    // B.
+    const idsB = Array.from({length: 6}, (_, i) => String(9800 + i));
+    const b = await setup(browser);
+    await b.page.evaluate(() => {
+      for (let i = 0; i < 250; i++) {
+        window.__db.push(window.post(2000 + i, `https://x.com/big/status/${9800 + i}`));
+      }
+      const table = window.__responder;
+      window.__responder = (u) => {
+        const am = u.match(/source:\*\/([^/*]+)\/status\/\*/);
+        if (!am) {
+          return table(u);
+        }
+        const limit = Number(u.match(/limit=(\d+)/)[1]);
+        const page = Number((u.match(/[?&]page=(\d+)/) || [0, 1])[1]);
+        const all = window.__db.filter((p) => p.source.includes(`/${am[1]}/status/`));
+        return {body: JSON.stringify(all.slice((page - 1) * limit, page * limit)), delay: 800};
+      };
+      window.authorPages = () => window.__reqLog.filter((x) => /source:\*\/[^/*]+\/status\/\*/.test(x.url))
+        .map((x) => Number((x.url.match(/[?&]page=(\d+)/) || [0, 1])[1]));
+    });
+    await b.page.evaluate(grid, ['Big', idsB]);
+    await inject(b.page, v);
+    const sent = await waitUntil(b.page, () => window.authorPages().length === 1, null, 4000);
+    // Page 1 is out (it takes 800 ms): the grid goes.
+    await b.page.evaluate(() => document.getElementById('grid').remove());
+    // Fixed: 2.5 s, in which page 1 is answered and page 2 would be asked for and answered.
+    await sleep(2500);
+    const gone = await b.page.evaluate(() => window.authorPages());
+    await b.page.evaluate(grid, ['Big', idsB]);
+    const back = await waitUntil(b.page, () => {
+      const s = [...document.querySelectorAll('#grid .xdsu-bar-seg')].map((x) => x.dataset.state);
+      return s.length === 6 && s.every((x) => x === 'found') && window.authorPages().length >= 3 && window.__inflight === 0;
+    }, null, 10000);
+    const endB = await b.page.evaluate(() => window.authorPages());
+    const resB = await fin(b, {pass: true, detail: ''});
+    const okB = sent && JSON.stringify(gone) === '[1]' && back && JSON.stringify(endB) === '[1,1,2]' && resB.pass;
+
+    return {pass: okA && okB,
+      detail: `A a 500 and a 429 among four lookups: paused=${paused}, lookups sent during the pause=${n1 - n0} (want 0),`
+        + ` all 24 resolved after the return=${doneA} (${JSON.stringify([...new Set(endA)])})${okA ? '' : ' <-- A wrong'}${resA.detail}`
+        + ` | B grid removed during page 1: author pages asked for=${JSON.stringify(gone)} (want [1]); back on the grid: green=${back},`
+        + ` pages=${JSON.stringify(endB)} (want [1,1,2])${okB ? '' : ' <-- B wrong'}${resB.detail}`};
   },
 };
 
