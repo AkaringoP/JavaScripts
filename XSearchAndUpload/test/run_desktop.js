@@ -2170,6 +2170,68 @@ const S = {
         + ` | B grid removed during page 1: author pages asked for=${JSON.stringify(gone)} (want [1]); back on the grid: green=${back},`
         + ` pages=${JSON.stringify(endB)} (want [1,1,2])${okB ? '' : ' <-- B wrong'}${resB.detail}`};
   },
+  // A tap on a tweet's segment shows its label as a tip (run_bar.js, e17_taps_pass). Not so a mouse
+  // click, which has the tooltip, and not a tap on a photo-grid bar: that bar takes no taps, the
+  // tile under it opens.
+  async d28_tip_only_taps(browser, v) {
+    const tipShown = () => {
+      const t = document.querySelector('.xdsu-tip');
+      return !!t && t.classList.contains('xdsu-show') && getComputedStyle(t).display !== 'none';
+    };
+    // A: a desktop page, real mouse clicks on a segment.
+    const a = await setup(browser);
+    await a.page.evaluate(() => {
+      window.__db.push(window.post(871, 'https://x.com/u/status/9901/photo/1'));
+      window.addBig('9901', 'TP1');
+    });
+    await inject(a.page, v);
+    const green = await waitUntil(a.page, () => !!window.seg('9901') && window.seg('9901').dataset.state === 'found', null, 5000);
+    const p = await centre(a.page, '#t9901 .xdsu-bar-seg');
+    await a.page.mouse.click(p.x, p.y);
+    await sleep(300);
+    const afterMouse = await a.page.evaluate(tipShown);
+    const resA = await fin(a, {pass: true, detail: ''});
+    const okA = green && !afterMouse && resA.pass;
+
+    // B: a phone page with a photo grid, a real tap on a tile's bar.
+    const b = await setup(browser, {ctxOpts: PHONE});
+    await b.page.evaluate(() => {
+      document.head.insertAdjacentHTML('beforeend', '<meta name="viewport" content="width=device-width,initial-scale=1">');
+      history.replaceState(null, '', '/Tip/media');
+      const ul = document.createElement('ul');
+      ul.id = 'grid';
+      ul.style.cssText = 'display:grid;grid-template-columns:repeat(3,110px);gap:4px;list-style:none;margin:0;padding:0';
+      ul.innerHTML = ['9911', '9912', '9913'].map((id) => `<li role="listitem"><a role="link" href="/Tip/status/${id}/photo/1"`
+        + ` style="display:block;width:110px;height:110px"><img src="https://pbs.twimg.com/media/GT${id}?format=jpg&name=360x360"`
+        + ` style="display:block;width:110px;height:110px"></a></li>`).join('');
+      document.getElementById('root').replaceWith(ul);
+      window.__tileClicks = [];
+      ul.addEventListener('click', (e) => {
+        const link = e.target.closest('a');
+        if (link) {
+          window.__tileClicks.push(link.getAttribute('href'));
+          e.preventDefault();
+        }
+      });
+    });
+    await inject(b.page, v);
+    const bars = await waitUntil(b.page, () => {
+      const s = [...document.querySelectorAll('#grid .xdsu-bar-seg')];
+      return s.length === 3 && s.every((x) => x.dataset.state === 'missing');
+    }, null, 6000);
+    const q = bars ? await centre(b.page, '#grid a[href*="/9912/"] .xdsu-bar-seg') : {x: 5, y: 5};
+    await b.page.touchscreen.tap(q.x, q.y);
+    await sleep(400);
+    const sb = await b.page.evaluate(() => ({clicks: window.__tileClicks.slice()}));
+    const afterTap = await b.page.evaluate(tipShown);
+    const resB = await fin(b, {pass: true, detail: ''});
+    const okB = bars && !afterTap && JSON.stringify(sb.clicks) === '["/Tip/status/9912/photo/1"]' && resB.pass;
+
+    return {pass: okA && okB,
+      detail: `A mouse click on a posted segment: tip shown=${afterMouse} (want false), segment green=${green}${okA ? '' : ' <-- A wrong'}${resA.detail}`
+        + ` | B tap on a grid bar: bars=${bars}, tip shown=${afterTap} (want false), tile clicks=${JSON.stringify(sb.clicks)}`
+        + ` (want the tile)${okB ? '' : ' <-- B wrong'}${resB.detail}`};
+  },
 };
 
 // Injects an in-memory copy of the variant that publishes its caches as window.__tc (tweet ids),

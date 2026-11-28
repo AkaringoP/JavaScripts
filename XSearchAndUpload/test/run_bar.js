@@ -259,6 +259,20 @@ const S = {
       window.add({id: '9301', hashes: ['SR1']});
     });
     await sleep(1200);
+    // The tip a tap shows: the segment's label, inside the viewport, next to the segment and
+    // clear of it.
+    const tipState = (id) => {
+      const t = document.querySelector('.xdsu-tip');
+      const seg = document.querySelector(`#t${id} .xdsu-bar-seg`);
+      if (!t || !seg) {
+        return {shown: false};
+      }
+      const a = t.getBoundingClientRect();
+      const b = seg.getBoundingClientRect();
+      return {shown: t.classList.contains('xdsu-show') && getComputedStyle(t).display !== 'none', text: t.textContent,
+        label: seg.getAttribute('aria-label'), inside: a.left >= 0 && a.right <= document.documentElement.clientWidth && a.top >= 0,
+        clear: a.bottom <= b.top || a.top >= b.bottom, near: Math.min(Math.abs(b.top - a.bottom), Math.abs(a.top - b.bottom)) <= 12};
+    };
     const rows = [];
     let ok = true;
     for (const [id, want] of [['9401', 'found'], ['9101', 'missing'], ['9201', 'error'], ['9301', 'searching']]) {
@@ -268,18 +282,32 @@ const S = {
       });
       await tapSeg(r.page, id);
       await sleep(200);
+      const tip = await r.page.evaluate(tipState, id);
       await tapSeg(r.page, id);
       await sleep(600);
       const s = await r.page.evaluate(() => ({n: window.__lookups.length, t: window.__toasts.length,
         clicks: window.__clicks.slice(), opened: window.__opened.length, win: window.__winOpen.length}));
       const state = await r.page.evaluate((id) => window.segAttrs(id).state, id);
       const clicks = s.clicks.slice(a.c);
+      const tipOk = tip.shown && !!tip.label && tip.text === tip.label && tip.inside && tip.clear && tip.near;
       const good = state === want && s.n === a.n && s.t === a.t && s.opened === 0 && s.win === 0
-        && clicks.length === 0;
+        && clicks.length === 0 && tipOk;
       ok = ok && good;
-      rows.push(`${id} ${state}: lookups +${s.n - a.n}, toasts +${s.t - a.t}, opened ${s.opened}, x.com clicks ${JSON.stringify(clicks)}${good ? '' : ' <-- wrong'}`);
+      rows.push(`${id} ${state}: lookups +${s.n - a.n}, toasts +${s.t - a.t}, opened ${s.opened}, x.com clicks ${JSON.stringify(clicks)},`
+        + ` tip ${tip.shown ? JSON.stringify(tip.text) : 'not shown'}${tipOk ? '' : ` <-- tip wrong ${JSON.stringify(tip)}`}${good ? '' : ' <-- wrong'}`);
     }
-    return fin(r, ok && r.popups.length === 0, `${rows.join(' | ')} | popups=${r.popups.length}`);
+    // The tip leaves by itself after 2.5 s, and at once when the page scrolls.
+    await sleep(3000);
+    const left = !(await r.page.evaluate(tipState, '9301')).shown;
+    await tapSeg(r.page, '9301');
+    await sleep(200);
+    const back = (await r.page.evaluate(tipState, '9301')).shown;
+    await r.page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+    await sleep(100);
+    const scrolled = !(await r.page.evaluate(tipState, '9301')).shown;
+    const tipEnds = left && back && scrolled;
+    return fin(r, ok && tipEnds && r.popups.length === 0, `${rows.join(' | ')} | tip gone after 3 s=${left}, shown again by a tap=${back},`
+      + ` gone on a scroll=${scrolled}${tipEnds ? '' : ' <-- wrong'} | popups=${r.popups.length}`);
   },
 
   // A failed segment names the reason in its label (the tooltip with a mouse): a refused search, a
@@ -598,7 +626,7 @@ const S = {
       && out.default.alerts.length === 1
       && ['Solid green', 'Green stripes', 'Red outline', 'Blue dashes', 'Thin grey line'].every((t) => legend.includes(t))
       // The bar does nothing when tapped (desktop task T11).
-      && !/\btap\b/i.test(legend);
+      && /tap or point at a segment/.test(legend);
     return {pass, detail: `menus=${JSON.stringify(out.default.names)} safebooru menus=${JSON.stringify(out.safe.names)} legend=${JSON.stringify(legend)}`};
   },
 

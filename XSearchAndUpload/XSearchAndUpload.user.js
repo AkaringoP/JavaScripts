@@ -120,7 +120,7 @@
 
   GM_registerMenuCommand('XDSU legend', () => {
     alert([
-      'Bar under each image (with a mouse, point at it for details):',
+      'Bar under each image (tap or point at a segment for details):',
       'Solid green: on Danbooru',
       'Green stripes: the tweet is only partly on Danbooru',
       'Red outline: not on Danbooru',
@@ -204,6 +204,11 @@
   // harm, the centred place is above the bottom navigation too.)
   const WIDE_MIN_WIDTH_PX = 500;
   const WIDE_TOAST_BOTTOM = '88px';
+  // How long the tip stays that a tap on a segment shows (the segment's label,
+  // which a mouse gets as the tooltip), and its distance from the bar and from
+  // the viewport's edges.
+  const TIP_MS = 2500;
+  const TIP_GAP_PX = 8;
   // The photo viewer's pill sits in the same corner; while it is shown the
   // toast moves up to toastBottom (pill bottom + 44px pill + 8px gap), at
   // every width.
@@ -405,6 +410,27 @@
         transform: translateX(-50%);
       }
     }
+    /* What a tap on a segment shows, where a mouse gets the tooltip. Placed by
+       showTip. */
+    .xdsu-tip {
+      position: fixed;
+      left: 0;
+      top: 0;
+      display: none;
+      width: max-content;
+      max-width: calc(100vw - 16px);
+      box-sizing: border-box;
+      padding: 6px 10px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      border-radius: 6px;
+      background: rgba(15, 20, 25, 0.92);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+      color: white;
+      font: 13px/1.35 system-ui, sans-serif;
+      z-index: 2147483000;
+      pointer-events: none;
+    }
+    .xdsu-tip.xdsu-show { display: block; }
     /* Photo viewer: an icon button like the tile's. Border style and colour
        follow the bar (solid found, dashed partly posted, red missing, blue
        dashes failed, grey dots checking); title and aria-label name the state.
@@ -2437,13 +2463,84 @@
     return [tc, hc].find((e) => e && e.state === 'error');
   }
 
+  let tipEl = null;
+  let tipTimer = null;
+
+  /** Hides the tip that a tap on a segment showed. */
+  function hideTip() {
+    if (!tipTimer) {
+      return;
+    }
+    clearTimeout(tipTimer);
+    tipTimer = null;
+    tipEl.classList.remove('xdsu-show');
+  }
+
   /**
-   * Swallows a left or middle click or a tap on a segment. The bar only shows
-   * the state, with its label as the tooltip; a click on it must not reach the
-   * tweet or x.com's links either. On a touch screen this matters most: were
-   * the segments to let taps through, the browser's touch adjustment would
-   * move a tap on the bar to the nearest target, the photo above or the Like
-   * button below. A right click is left to the browser.
+   * Shows a segment's label next to it for TIP_MS: centred above the segment,
+   * or below it when there is no room above, and kept inside the viewport.
+   * @param {!Element} seg
+   */
+  function showTip(seg) {
+    const text = seg.getAttribute('aria-label');
+    if (!text) {
+      return;
+    }
+    if (!tipEl) {
+      tipEl = document.createElement('div');
+      tipEl.className = 'xdsu-tip';
+      // The segment itself carries the label for a screen reader.
+      tipEl.setAttribute('aria-hidden', 'true');
+      (document.body || document.documentElement).appendChild(tipEl);
+    }
+    tipEl.textContent = text;
+    tipEl.classList.add('xdsu-show');
+    const at = seg.getBoundingClientRect();
+    const tip = tipEl.getBoundingClientRect();
+    const room = document.documentElement.clientWidth - tip.width - TIP_GAP_PX;
+    const centred = at.left + at.width / 2 - tip.width / 2;
+    const above = at.top - tip.height - TIP_GAP_PX;
+    const left = Math.max(TIP_GAP_PX, Math.min(centred, room));
+    const top = above >= TIP_GAP_PX ? above : at.bottom + TIP_GAP_PX;
+    tipEl.style.left = `${Math.round(left)}px`;
+    tipEl.style.top = `${Math.round(top)}px`;
+    clearTimeout(tipTimer);
+    tipTimer = setTimeout(hideTip, TIP_MS);
+  }
+
+  // The tip goes when the page scrolls (it would stay behind) and when
+  // anything but a segment is touched.
+  window.addEventListener('scroll', hideTip, {capture: true, passive: true});
+  document.addEventListener('pointerdown', (ev) => {
+    const onSeg = ev.target.closest && ev.target.closest('.xdsu-bar-seg');
+    if (!onSeg) {
+      hideTip();
+    }
+  }, true);
+
+  /**
+   * @param {!Event} ev A click.
+   * @return {boolean} Whether it came from a touch screen or a pen. A browser
+   *     whose click does not name its pointer counts as one when it cannot
+   *     hover.
+   */
+  function isTap(ev) {
+    if (ev.type !== 'click') {
+      return false;
+    }
+    return ev.pointerType ? ev.pointerType !== 'mouse' :
+                            window.matchMedia('(hover: none)').matches;
+  }
+
+  /**
+   * Swallows a left or middle click or a tap on a segment, and shows the
+   * segment's label as a tip on a tap. The bar only shows the state; with a
+   * mouse its label is the tooltip. A click on it must not reach the tweet or
+   * x.com's links either. On a touch screen this matters most: were the
+   * segments to let taps through, the browser's touch adjustment would move a
+   * tap on the bar to the nearest target, the photo above or the Like button
+   * below. A right click is left to the browser. Photo-grid bars have no such
+   * listener: a tap there opens the tile.
    * @param {!Event} ev
    */
   function onSegmentClick(ev) {
@@ -2452,6 +2549,9 @@
     }
     ev.preventDefault();
     ev.stopPropagation();
+    if (isTap(ev)) {
+      showTip(ev.currentTarget);
+    }
   }
 
   /**
