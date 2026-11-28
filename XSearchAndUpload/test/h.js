@@ -1,7 +1,12 @@
 // Shared harness: Playwright Chromium with a phone viewport and touch, stub GM_* functions
 // (the request stub answers with whatever window.__responder returns), synthetic tweets.
 // newPage(browser, {ctxOpts: DESKTOP}) gives a desktop browser instead (mouse, no touch).
-const {chromium} = require('playwright');
+const playwright = require('playwright');
+// XDSU_BROWSER=firefox runs the scenarios in Firefox (npx playwright install firefox). It is
+// exported under the name the runners use, so they need no change. Firefox has no isMobile
+// contexts: a phone page there has the phone's viewport and touch, and a desktop's layout rules.
+const FIREFOX = process.env.XDSU_BROWSER === 'firefox';
+const chromium = FIREFOX ? playwright.firefox : playwright.chromium;
 const fs = require('fs');
 const path = require('path');
 const {readScript} = require('./script.js');
@@ -28,7 +33,11 @@ const DESKTOP = {viewport: {width: 1280, height: 800}, hasTouch: false, isMobile
 const DESKTOP_WIDE = {viewport: {width: 1920, height: 1080}, hasTouch: false, isMobile: false};
 
 async function newPage(browser, {urlPath = '/home', store = {}, ctxOpts = {}} = {}) {
-  const ctx = await browser.newContext(Object.assign({}, PHONE, ctxOpts));
+  const opts = Object.assign({}, PHONE, ctxOpts);
+  if (FIREFOX) {
+    delete opts.isMobile;
+  }
+  const ctx = await browser.newContext(opts);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));

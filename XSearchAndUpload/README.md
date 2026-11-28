@@ -22,7 +22,7 @@ The bar sits between the images and the reply / repost / like row. Each state ha
 | Blue dashes | The lookup failed |
 | Thin grey line, pulsing | Checking, or waiting until the tweet is near the screen |
 
-The bar only shows the state: tapping or clicking it does nothing. With a mouse, point at a segment for details (how many posts, or why a lookup failed). Opening the post, uploading and retrying are done with the button on the image and with the button in the photo viewer (below).
+The bar only shows the state; it opens nothing. For details (how many posts, or why a lookup failed), tap a segment on a phone, which shows them next to it for a moment, or point at it with a mouse. Opening the post, uploading and retrying are done with the button on the image and with the button in the photo viewer (below).
 
 The script finds posts by their **source**: a tweet counts as posted when a Danbooru post names that tweet (or that image file) as its source. Two consequences:
 
@@ -33,7 +33,7 @@ A tweet shown as *not on Danbooru* or *partly posted* is looked up again when it
 
 ### On a profile's Media tab
 
-Each photo in the grid gets one bar along its bottom edge. It is green as soon as any post exists for that tweet (there are no stripes here), red when there is none, and grey until that is known. The script first asks Danbooru once for everything posted from that author, which turns the posted photos green together; the rest are then checked from where you are in the grid, four requests at a time. Video and GIF tiles get no bar. Open a photo for the exact, per-image answer and the upload button.
+Each photo in the grid gets one bar along its bottom edge. It is green as soon as any post exists for that tweet (there are no stripes here), red when there is none, and grey until that is known. The script first asks Danbooru once for everything posted from that author, which turns the posted photos green together; the rest are then checked from where you are in the grid, four requests at a time. Video and GIF tiles get no bar. A tap or click on a bar here opens the photo, like the rest of its tile. Open a photo for the exact, per-image answer and the upload button.
 
 ## The upload button
 
@@ -110,7 +110,7 @@ Single file, no build step: `XSearchAndUpload.user.js`. The sections in the file
 - **The viewport decides.** `takeBatch()` takes keys whose segment is within one screen height of the viewport, nearest first. Farther keys stay queued without a request; keys with no connected segment are dropped from queue and cache. "In the DOM" does not mean "on screen": X keeps many tweets mounted.
 - **Cache writes are guarded.** `runBatch()` captures the entry objects before it awaits and writes only into entries that are still the same object. A refresh may delete an entry while its request is in flight.
 - **A retry keeps the entry object** (`retryEntry()`), so `tries` and `at` survive and the guard above passes.
-- **Segments are `<span role="img">` elements from creation** and are never replaced; only their state, label and `data-match-url` change. Refs point at the element, so swapping it would orphan the ref. A segment swallows clicks and taps (they would otherwise land on the photo or the Like button) and does nothing with them.
+- **Segments are `<span role="img">` elements from creation** and are never replaced; only their state, label and `data-match-url` change. Refs point at the element, so swapping it would orphan the ref. A segment swallows clicks and taps (they would otherwise land on the photo or the Like button); a tap shows its label as a tip (`showTip()`), a mouse click does nothing. A photo-grid bar takes no clicks at all: they go to the tile.
 - **Markers are not trusted blindly.** An article is skipped as done only while its bar is in place before the Like row, has one segment per tile, and every tile still has its button.
 - **A tweet is identified by its own permalink**, never a quoted tweet's (`div[role="link"]`), and the page URL is a fallback only for the focal tweet of a detail page.
 - **The per-image upload URL is built only from known facts**: the media hash, a `jpg`/`png` format read from the image URL, and a tweet URL that names the user. Danbooru downloads exactly the format it is given, so guessing uploads a converted file.
@@ -148,6 +148,7 @@ Checked against the Danbooru source in November 2026.
 | `ERROR_BACKOFF_MS`, `PAUSE_MS` | Retry back-off and the length of a queue pause |
 | `TOAST_BOTTOM`, `PILL_POS` | Position of the toast and of the viewer button on a phone; tune these on a real phone |
 | `WIDE_MIN_WIDTH_PX`, `WIDE_TOAST_BOTTOM` | Viewport width from which the toast is centred, and its height there |
+| `TIP_MS`, `TIP_GAP_PX` | How long the tip of a tapped segment stays, and its distance from the bar |
 | `SMALL_TILE_PX` | Tiles lower than this keep the 32px upload button |
 
 Stored with `GM_setValue`, and so shared by every X tab:
@@ -176,7 +177,7 @@ It needs Playwright with Chromium (`npm i -g playwright && npx playwright instal
 | `run_lookup.js` | Response handling, retries, account limits and the shared account check, queue order, toasts |
 | `run_scroll.js` | The viewport-first queue, with tweets that stay mounted while the page scrolls |
 | `run_matching.js` | Judging by post count, labels, photo numbers |
-| `run_bar.js` | The display-only bar, state shapes and contrast, menu commands |
+| `run_bar.js` | The display-only bar and the tip a tap shows, state shapes and contrast, menu commands |
 | `run_markers.js` | The observer, bars and buttons restored after re-renders |
 | `run_viewer.js` | The photo viewer button |
 | `run_desktop.js` | Desktop pages: mouse clicks and modifiers, hover and focus, returns by focus and mouse, hidden tabs, long sessions, the photo grid and its lookups, the `L` key, the toast's place. A grid scenario that expects an author lookup must set the page path to that author's profile |
@@ -230,7 +231,7 @@ All of the above was released together as **2.0.0**.
 
 - In the photo viewer, *on Danbooru* and *not on Danbooru* differ only by border colour, as do *partly posted* and *lookup failed*. The bar does not have this problem.
 - When the tweet is not mounted underneath the viewer, the image for a per-image upload is taken from what is on screen, and the whole tweet is opened when that is uncertain. This was checked against the desktop viewer's markup in Chrome; the phone's was not captured.
-- On a desktop the script was tried in Chrome only, not in Firefox.
+- On a desktop the script was tried by hand in Chrome only. The desktop scenarios also pass in Playwright's Firefox (`XDSU_BROWSER=firefox node run_desktop.js`) except `d16_hover_focus`: on the synthetic page the Tab key does not move on from the upload button there, with 2.0.0 as well. Whether that happens on the real site in Firefox was not checked.
 - 500px, the width from which the toast is centred, is taken to be where X drops its bottom navigation; it was not measured.
 - The `L` shortcut is not handled inside the photo viewer, where no tweet has the focus.
 - Only a profile's photo grid was seen on the real site. Whether X's other photo grids (the media tab of a search) use the same markup was not checked; where they do, they get bars too, looked up tile by tile.
