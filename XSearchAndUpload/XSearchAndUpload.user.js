@@ -176,10 +176,11 @@
   // Delays between the re-checks that follow a return to the tab.
   const RECHECK_DELAYS_MS = [5000, 15000, 40000];
   // A return noticed while the tab stayed visible (window focus, the mouse
-  // entering the page) re-checks only if no re-check ran for this long. A focus
-  // likewise retries failed lookups and lifts a queue pause only if no return
-  // did so for this long. Focus changes and the mouse crossing the window edge
-  // are frequent on a desktop.
+  // entering the page) re-checks only if no return of any kind did so for this
+  // long; the timed re-checks that follow a return to the tab do not count. A
+  // focus likewise retries failed lookups and lifts a queue pause only if no
+  // return did so for this long. Focus changes and the mouse crossing the
+  // window edge are frequent on a desktop.
   const RETURN_GAP_MS = 15000;
   // A lookup that found no post for a tweet, or fewer posts than it has images,
   // is repeated when the tweet is mounted again this long after it was made
@@ -2833,7 +2834,9 @@
   // it. The end of a ladder does not drop it, so a later return checks it
   // again.
   let recheckTimer = null;
-  let lastPassAt = 0;
+  // When a return last ran a pass (to the tab, or one noticed while the tab
+  // stayed visible); the ladder's timed steps leave it alone.
+  let lastReturnPassAt = 0;
 
   /**
    * Re-checks every watched tweet once and drops the entries that are done,
@@ -2844,7 +2847,6 @@
       return;
     }
     const now = Date.now();
-    lastPassAt = now;
     const dropped = [];
     for (const [id, w] of watch) {
       let done = now - w.t0 > WATCH_MAX_AGE_MS || knownPostCount(id) > w.n0;
@@ -2892,14 +2894,17 @@
   /**
    * Runs one pass when the user comes back to a tab that stayed visible: the
    * window gets the focus back, or the mouse comes back over the page. Skipped
-   * within RETURN_GAP_MS of the last pass of any kind; a running ladder goes on
-   * unchanged.
+   * within RETURN_GAP_MS of the last return's pass. A ladder step in between
+   * does not hold it back (the post may have been made since that step), and
+   * a running ladder goes on unchanged.
    */
   function onVisibleReturn() {
+    const now = Date.now();
     if (document.hidden || !watch.size ||
-        Date.now() - lastPassAt < RETURN_GAP_MS) {
+        now - lastReturnPassAt < RETURN_GAP_MS) {
       return;
     }
+    lastReturnPassAt = now;
     recheckPass();
   }
 
@@ -2912,6 +2917,7 @@
       return;
     }
     lastReturnAt = now;
+    lastReturnPassAt = now;
     clearTimeout(recheckTimer);
     recheckWatched(0);
   }

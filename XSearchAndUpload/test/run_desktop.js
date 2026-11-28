@@ -1805,6 +1805,41 @@ const S = {
         + ` tweet/hash lookups=${end.tweets}/${end.hashes} (want 8/8), most at once=${end.max} (want 4), author search alone=${end.authorAlone}`
         + `${ok ? '' : ' <-- wrong'}${res.detail}`};
   },
+  // After T0 (item 5, the mouse coming back changed nothing): the gap between returns is counted
+  // from the last return, not from a timed step of the ladder. The upload tab is dragged out to a
+  // window of its own (X visible again: a pass at once, the next 5 s later); 12 s after that step
+  // the post is there and the mouse comes back over the page. That return must re-check at once.
+  // Counted from the step, as before, it was dropped, and so was every return in the first 35 s.
+  async d23_return_after_step(browser, v) {
+    const r = await setup(browser);
+    await r.page.evaluate(() => window.addBig('9201', 'RS1'));
+    await inject(r.page, v);
+    const red = await waitUntil(r.page, () => window.redIdle('9201', 'RS1'), null, 5000);
+    await r.page.evaluate(() => {
+      window.upload('9201');
+      window.setHidden(true);
+    });
+    await sleep(500);
+    const n0 = await r.page.evaluate(() => window.lookups('status/9201').length);
+    await r.page.evaluate(() => window.setHidden(false));
+    // In real time: the pass at the return and the ladder's 5 s step.
+    const step = await waitUntil(r.page, (n) => window.lookups('status/9201').length >= n + 2 && window.settled(), n0, 9000);
+    // Date.now is stepped 12 s on (17 s after the return, 12 s after the step) rather than waited.
+    const n1 = await r.page.evaluate(() => {
+      window.__dnOff += 12000;
+      window.__db.push(window.post(631, 'https://x.com/u/status/9201/photo/1'));
+      return window.lookups('status/9201').length;
+    });
+    const t0 = Date.now();
+    await r.page.evaluate(() => window.enter('mouse'));
+    const sent = await waitUntil(r.page, (n) => window.lookups('status/9201').length > n, n1, 3000);
+    const msSent = Date.now() - t0;
+    const green = sent && await waitUntil(r.page, () => window.seg('9201').dataset.state === 'found' && window.settled(), null, 3000);
+    return fin(r, {pass: red && step && n1 === n0 + 2 && sent && green,
+      detail: `red before=${red} | return to the tab and its 5 s step: ${n1 - n0} lookups (want 2) | mouse back 12 s after the step:`
+        + ` lookup ${sent ? 'after ' + msSent + ' ms' : 'NOT sent within 3 s'}, ${green ? 'green' : 'not green'}`});
+  },
+
   // T4 item 6, after T0 (item 6: the L key liked the tweet but nothing was re-checked): X's Like
   // shortcut re-checks the tweet that has the keyboard focus, as a click on its Like button does.
   // Only the bare key (also with Caps Lock on), outside text fields, and only while the
